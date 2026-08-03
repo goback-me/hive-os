@@ -1,0 +1,30 @@
+# This is the SERVICE BLOCK to merge into your existing VPS docker-compose
+# setup (the one that already has Traefik + `root_default` network) — do
+# NOT run this standalone; it assumes the shared Traefik + Postgres you
+# already have running for Ad Performance OS / Gingin.
+#
+# Copy the `hive-os` service below into your VPS's main docker-compose.yml
+# under /root/automation/, alongside your other services.
+
+services:
+  hive-os:
+    build:
+      context: ./hive-os          # path to this repo on the VPS
+      dockerfile: Dockerfile
+    container_name: hive_os
+    restart: unless-stopped
+    env_file:
+      - ./hive-os/.env            # production .env, NOT committed to git
+    networks:
+      - root_default               # shared external network already on the VPS
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.hive-os.rule=Host(`portal.hivesocial.agency`)"
+      - "traefik.http.routers.hive-os.entrypoints=web,websecure"
+      - "traefik.http.routers.hive-os.tls=true"
+      - "traefik.http.routers.hive-os.tls.certresolver=mytlschallenge"
+      - "traefik.http.services.hive-os.loadbalancer.server.port=3000"
+
+networks:
+  root_default:
+    external: true
