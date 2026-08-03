@@ -1,42 +1,67 @@
 #!/bin/bash
-# One-command deploy for Hive OS on the VPS.
+# The one command to deploy Hive OS.
 #
 # Usage:
 #   cd /root/tools/hive-os
 #   ./deploy.sh
 #
-# What it does, in order:
-#   1. Pulls the latest code
-#   2. Builds and starts postgres + app (self-contained, own network)
-#   3. Waits for postgres to be healthy
-#   4. Runs prisma migrate deploy
-#   5. Runs the seed script (safe to re-run — upserts, won't duplicate)
-#
-# Requires .env.prod and .env.compose (see below) to already exist —
-# this script does not create them for you.
+# First run: if .env doesn't exist, this creates it from .env.example
+# and STOPS with instructions — it will not try to run with placeholder
+# values. Edit .env, then run ./deploy.sh again.
 
 set -e
+cd "$(dirname "$0")"
 
+# ── Step 0: make sure .env actually exists and is filled in ──────────
+if [ ! -f .env ]; then
+  echo "No .env file found — creating one from .env.example."
+  cp .env.example .env
+  echo ""
+  echo "STOP: edit .env now and set a real POSTGRES_PASSWORD and matching"
+  echo "DATABASE_URL, then run ./deploy.sh again."
+  echo ""
+  echo "  nano .env"
+  echo ""
+  exit 1
+fi
+
+if grep -q "change-this-password" .env; then
+  echo "STOP: .env still has the placeholder password. Edit .env and set"
+  echo "a real password in BOTH POSTGRES_PASSWORD and DATABASE_URL (they"
+  echo "must match), then run ./deploy.sh again."
+  echo ""
+  echo "  nano .env"
+  echo ""
+  exit 1
+fi
+
+# ── Step 1: pull latest code ──────────────────────────────────────────
 echo "→ Pulling latest code..."
 git pull
 
+# ── Step 2: build and start (postgres + app, self-contained) ─────────
 echo "→ Building and starting containers..."
-docker compose -f docker-compose.prod.yml --env-file .env.compose up -d --build
+docker compose build --no-cache app
+docker compose up -d
 
+# ── Step 3: wait for postgres to actually be healthy ──────────────────
 echo "→ Waiting for Postgres to be healthy..."
 until docker inspect --format='{{.State.Health.Status}}' hive_os_postgres 2>/dev/null | grep -q healthy; do
   echo "  ...still waiting"
   sleep 2
 done
 
+# ── Step 4: migrate + seed ─────────────────────────────────────────────
 echo "→ Running database migrations..."
-docker compose -f docker-compose.prod.yml --env-file .env.compose exec -T app npx prisma migrate deploy
+docker compose exec -T app npx prisma migrate deploy
 echo "  ...migrations applied"
 
 echo "→ Seeding base clients (safe to re-run)..."
-docker compose -f docker-compose.prod.yml --env-file .env.compose exec -T app npm run db:seed
+docker compose exec -T app npm run db:seed
 echo "  ...seed complete"
 
-echo "→ Deploy finished successfully."
-echo "→ Check status with:"
-echo "    docker compose -f docker-compose.prod.yml logs -f app"
+echo ""
+echo "→ Deploy finished. Check logs with:"
+echo "    docker compose logs -f app"
+echo ""
+echo "→ Visit: https://portal.hivesocial.agency"

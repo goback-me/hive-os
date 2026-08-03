@@ -3,6 +3,12 @@ import "./globals.css";
 import Sidebar from "@/components/Sidebar";
 import AppHeader from "@/components/AppHeader";
 
+// Every page renders AppHeader, which queries Prisma. DATABASE_URL only
+// exists at runtime (via .env.prod inside the container), not during the
+// Docker build step — so nothing here can be statically pre-rendered at
+// build time. This forces every route to render dynamically, per-request.
+export const dynamic = "force-dynamic";
+
 export const metadata = {
   title: "Hive OS",
   description: "HiveSocial agency command center",
