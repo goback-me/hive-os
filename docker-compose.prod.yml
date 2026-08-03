@@ -1,39 +1,47 @@
-# This is the SERVICE BLOCK to merge into your existing VPS docker-compose
-# setup (the one that already has Traefik + `root_default` network) — do
-# NOT run this standalone; it assumes the shared Traefik network you
-# already have running for Ad Performance OS / Gingin.
+# Fully self-contained — lives entirely in this folder, doesn't touch
+# your main /root/docker-compose.yml at all. The only thing it shares
+# with your existing stack is the external `root_default` network, so
+# Traefik (already running as part of your main stack) can see and
+# route to this container. Everything else — Postgres, volumes, the
+# app itself — is isolated to this project.
 #
-# Copy both services below into your VPS's main docker-compose.yml
-# under /root/automation/ or /root/tools/, alongside your other services.
+# This is named docker-compose.prod.yml (not docker-compose.yml) so it
+# never collides with your local Windows dev compose file of the same
+# repo. Always run it with -f, or use deploy.sh which does that for you.
 
 services:
-  hive-os-postgres:
+  postgres:
     image: postgres:16-alpine
     container_name: hive_os_postgres
     restart: unless-stopped
     environment:
       POSTGRES_USER: hive
-      POSTGRES_PASSWORD: CHANGE_ME_TO_A_REAL_PASSWORD
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: hive_os
     volumes:
-      - hive_os_pg_data:/var/lib/postgresql/data
+      - pg_data:/var/lib/postgresql/data
     networks:
-      - root_default
-    # No `ports:` mapping — this stays internal to the Docker network,
-    # only reachable by other containers on root_default, not the public internet.
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hive -d hive_os"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
-  hive-os:
+  app:
     build:
-      context: ./hive-os          # path to this repo on the VPS
+      context: .
       dockerfile: Dockerfile
     container_name: hive_os
     restart: unless-stopped
     depends_on:
-      - hive-os-postgres
+      postgres:
+        condition: service_healthy
     env_file:
-      - ./hive-os/.env            # production .env, NOT committed to git
+      - .env.prod
     networks:
-      - root_default               # shared external network already on the VPS
+      - internal
+      - root_default
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.hive-os.rule=Host(`portal.hivesocial.agency`)"
@@ -43,8 +51,9 @@ services:
       - "traefik.http.services.hive-os.loadbalancer.server.port=3000"
 
 volumes:
-  hive_os_pg_data:
+  pg_data:
 
 networks:
+  internal:
   root_default:
     external: true
