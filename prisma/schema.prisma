@@ -1,0 +1,230 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+  CLIENT
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  OVERDUE
+}
+
+enum PaymentType {
+  DEPOSIT
+  SECOND_PAYMENT
+  FULL_PAYMENT
+  RETAINER
+}
+
+enum ContractStatus {
+  ACTIVE
+  EXPIRING
+  EXPIRED
+  CANCELLED
+}
+
+// ── Users (admin/team + client logins) ──────────────────────────────
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  role         UserRole
+  name         String
+  title        String?  // display role shown in Settings, e.g. "Strategist" — separate from auth `role`
+  clientId     String?  // set if role = CLIENT, scopes them to one client
+  client       Client?  @relation(fields: [clientId], references: [id])
+  createdAt    DateTime @default(now())
+}
+
+// ── Core client record ───────────────────────────────────────────────
+model Client {
+  id              String    @id @default(cuid())
+  name            String
+  slug            String    @unique // e.g. "revvy", "gingin", "joat"
+  logoUrl         String?
+  isActive        Boolean   @default(true)
+
+  // integration refs — filled in once each client's accounts are connected
+  metaAdAccountId String?   // "act_XXXXXXXXX"
+  clickupListId   String?   // ClickUp list to embed for this client's tasks
+  swarmProjectId  String?   // Swarm project/link to embed
+  claritySlug     String?   // Microsoft Clarity project slug (joat_funnel, revvy, etc.)
+  stripeCustomerId String?  // for payment sync
+
+  users           User[]
+  payments        Payment[]
+  contracts       Contract[]
+  contactLogs     ContactLog[]
+  adSpendDaily    AdSpendDaily[]
+  revenueMonthly  RevenueMonthly[]
+  leads           Lead[]
+  needsActionItems NeedsActionItem[]
+  tasks           Task[]
+  generatedReports GeneratedReport[]
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+
+// ── Payments / invoicing (drives "overdue" cards) ───────────────────
+model Payment {
+  id          String        @id @default(cuid())
+  clientId    String
+  client      Client        @relation(fields: [clientId], references: [id])
+  type        PaymentType
+  label       String        // "Deposit", "Second Payment", free text override
+  amountDue   Decimal       @db.Decimal(10, 2)
+  dueDate     DateTime
+  status      PaymentStatus @default(PENDING)
+  paidDate    DateTime?
+  amountPaid  Decimal?      @db.Decimal(10, 2)
+  stripeInvoiceId String?   // set if synced via Stripe webhook
+  createdAt   DateTime      @default(now())
+
+  @@index([status, dueDate])
+}
+
+// ── Contracts / renewals (drives "renewal" cards) ───────────────────
+model Contract {
+  id          String         @id @default(cuid())
+  clientId    String
+  client      Client         @relation(fields: [clientId], references: [id])
+  startDate   DateTime
+  endDate     DateTime
+  status      ContractStatus @default(ACTIVE)
+  monthlyValue Decimal       @db.Decimal(10, 2)
+  autoRenew   Boolean        @default(false)
+  createdAt   DateTime       @default(now())
+
+  @@index([status, endDate])
+}
+
+// ── Contact / call log (drives "no call in 10+ days" cards) ─────────
+model ContactLog {
+  id        String   @id @default(cuid())
+  clientId  String
+  client    Client   @relation(fields: [clientId], references: [id])
+  contactedAt DateTime
+  method    String   // "call", "email", "meeting"
+  notes     String?
+  loggedBy  String   // user id or name
+  createdAt DateTime @default(now())
+
+  @@index([clientId, contactedAt])
+}
+
+// ── Ad spend, synced daily from Meta Marketing API ──────────────────
+model AdSpendDaily {
+  id        String   @id @default(cuid())
+  clientId  String
+  client    Client   @relation(fields: [clientId], references: [id])
+  date      DateTime
+  spend     Decimal  @db.Decimal(10, 2)
+  impressions Int    @default(0)
+  clicks    Int      @default(0)
+  source    String   @default("meta") // "meta" | "google" later
+
+  @@unique([clientId, date, source])
+  @@index([clientId, date])
+}
+
+// ── Revenue, synced from Stripe or manual entry ─────────────────────
+model RevenueMonthly {
+  id        String   @id @default(cuid())
+  clientId  String
+  client    Client   @relation(fields: [clientId], references: [id])
+  month     DateTime // first-of-month marker
+  amount    Decimal  @db.Decimal(10, 2)
+  source    String   @default("manual") // "stripe" | "manual"
+
+  @@unique([clientId, month])
+}
+
+// ── Leads (from tracker / Google Sheets / CRM), for pipeline + ROAS ──
+model Lead {
+  id        String   @id @default(cuid())
+  clientId  String
+  client    Client   @relation(fields: [clientId], references: [id])
+  source    String?  // utm_source
+  campaign  String?  // utm_campaign
+  status    String   @default("new") // new, contacted, qualified, won, lost
+  value     Decimal? @db.Decimal(10, 2)
+  createdAt DateTime @default(now())
+
+  @@index([clientId, createdAt])
+}
+
+enum TaskStatus {
+  TODO
+  DONE
+}
+
+// ── Simple Kanban tasks (done / not done only — no priority, no recurring) ──
+model Task {
+  id        String     @id @default(cuid())
+  clientId  String
+  client    Client     @relation(fields: [clientId], references: [id])
+  title     String
+  status    TaskStatus @default(TODO)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  @@index([clientId, status])
+}
+
+
+enum ReferralStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+// ── Referral submissions (Referrals page) ────────────────────────────
+model Referral {
+  id           String         @id @default(cuid())
+  referrerName String
+  businessName String
+  email        String
+  notes        String?
+  status       ReferralStatus @default(PENDING)
+  payoutAmount Decimal?       @db.Decimal(10, 2)
+  createdAt    DateTime       @default(now())
+
+  @@index([status, createdAt])
+}
+
+// ── Log of generated reports (Reports page export history) ───────────
+model GeneratedReport {
+  id         String   @id @default(cuid())
+  clientId   String?
+  client     Client?  @relation(fields: [clientId], references: [id])
+  rangeLabel String
+  format     String   @default("csv")
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+model NeedsActionItem {
+  id          String   @id @default(cuid())
+  clientId    String
+  client      Client   @relation(fields: [clientId], references: [id])
+  type        String   // "overdue_payment" | "contract_expired" | "renewal_upcoming" | "no_contact"
+  severity    String   // "danger" | "warning" | "success" | "muted"
+  title       String
+  description String
+  amount      Decimal? @db.Decimal(10, 2)
+  daysDelta   Int?     // +days until, or -days overdue
+  computedAt  DateTime @default(now())
+
+  @@index([computedAt])
+}
