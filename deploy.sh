@@ -41,7 +41,7 @@ git pull
 
 # ── Step 2: build and start (postgres + app, self-contained) ─────────
 echo "→ Building and starting containers..."
-docker compose build --no-cache app
+docker compose build --no-cache --progress=plain app
 docker compose up -d
 
 # ── Step 3: wait for postgres to actually be healthy ──────────────────
