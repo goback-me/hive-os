@@ -1,0 +1,18 @@
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: hive_portal_pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: hive
+      POSTGRES_PASSWORD: hive
+      POSTGRES_DB: hive_portal
+    ports:
+      - "5434:5432"
+    volumes:
+      - hive_portal_pg_data:/var/lib/postgresql/data
+
+volumes:
+  hive_portal_pg_data:

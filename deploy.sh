@@ -30,10 +30,13 @@ until docker inspect --format='{{.State.Health.Status}}' hive_os_postgres 2>/dev
 done
 
 echo "→ Running database migrations..."
-docker compose -f docker-compose.prod.yml exec -T app npx prisma migrate deploy
+docker compose -f docker-compose.prod.yml --env-file .env.compose exec -T app npx prisma migrate deploy
+echo "  ...migrations applied"
 
 echo "→ Seeding base clients (safe to re-run)..."
-docker compose -f docker-compose.prod.yml exec -T app npm run db:seed
+docker compose -f docker-compose.prod.yml --env-file .env.compose exec -T app npm run db:seed
+echo "  ...seed complete"
 
-echo "→ Done. Check status with:"
+echo "→ Deploy finished successfully."
+echo "→ Check status with:"
 echo "    docker compose -f docker-compose.prod.yml logs -f app"

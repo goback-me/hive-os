@@ -1,123 +1,73 @@
-# Deploying Hive OS to portal.hivesocial.agency
+# Deploying Hive OS — fully isolated, one-command
 
-## 1. DNS — do this first, it can take a while to propagate
+This project is entirely self-contained on the VPS. It does **not**
+touch your main `/root/docker-compose.yml` or your existing Postgres.
+The only connection to your existing stack is the shared `root_default`
+network, so Traefik (already running as part of your main stack) can
+see and route to this container.
 
-In your DNS provider (wherever hivesocial.agency's DNS lives — Cloudflare,
-Namecheap, etc.):
-
-Add an **A record**:
-- Name: `portal`
-- Value: your VPS IP (`151.106.120.202`, per your existing setup)
-- Proxy/CDN: if using Cloudflare, keep it **DNS-only (gray cloud)** while
-  Traefik issues the SSL cert, or make sure Cloudflare's SSL mode is
-  "Full" not "Flexible" — Flexible breaks Traefik's own cert challenge.
-
-Give it 5–15 minutes to propagate before moving on.
-
-## 2. Decide: shared Postgres or a new one?
-
-You already have a Postgres instance running for Ad Performance OS. Two
-options:
-
-**Option A — reuse it (recommended, simpler):**
-Just point `DATABASE_URL` at a *new database* on that same Postgres
-container:
-```
-DATABASE_URL="postgresql://user:pass@postgres-host:5432/hive_os"
-```
-Create the new DB once: `psql -U user -c "CREATE DATABASE hive_os;"`
-
-**Option B — separate Postgres container:**
-Only worth it if you want full isolation. Adds another container to
-manage for no real benefit at this scale.
-
-## 3. Push code from Windows, pull on the VPS
-
-Same rule as Gingin — commits and pushes only happen from your local
-machine, never the VPS:
-
-```powershell
-# on Windows, in hive_os folder
-git add .
-git commit -m "Hive OS v3 — ready for deploy"
-git push
-```
+## One-time setup
 
 ```bash
-# on the VPS
-cd /root/automation
-git clone <your-repo-url> hive-os   # first time only
+cd /root/tools
+git clone <your-repo-url> hive-os
 cd hive-os
-git pull                             # subsequent deploys
+
+cp .env.compose.example .env.compose
+cp .env.prod.example .env.prod
+nano .env.compose     # set a real POSTGRES_PASSWORD
+nano .env.prod         # set the SAME password in DATABASE_URL, plus any API keys you have
 ```
 
-## 4. Create the production `.env` on the VPS
+Both passwords must match exactly — `.env.compose` sets what Postgres
+is created with, `.env.prod` is what the app uses to connect to it.
 
-This file is never committed — create it directly on the server:
+Make sure DNS is pointed first: an A record for `portal` → your VPS IP,
+same as any other subdomain on this server.
+
+## Deploy — the one command
 
 ```bash
-cd /root/automation/hive-os
-nano .env
+cd /root/tools/hive-os
+./deploy.sh
 ```
 
-```
-DATABASE_URL="postgresql://user:pass@postgres-host:5432/hive_os"
-META_APP_ID=
-META_APP_SECRET=
-META_ACCESS_TOKEN=
-STRIPE_SECRET_KEY=
-STRIPE_WEBHOOK_SECRET=
-CLICKUP_API_TOKEN=
-CLICKUP_TEAM_ID=
-NEXTAUTH_SECRET=
-NEXTAUTH_URL="https://portal.hivesocial.agency"
+This pulls the latest code, builds and starts Postgres + the app (both
+isolated to this project), waits for Postgres to be healthy, runs
+migrations, and seeds your 5 real clients — all in one shot.
+
+## Every future deploy
+
+Same one command, every time you ship a change:
+```bash
+cd /root/tools/hive-os
+./deploy.sh
 ```
 
-Leave third-party keys blank for now if you haven't got them yet — the
-app runs fine without them, those integrations just show "not connected".
-
-## 5. Run the database migration against the live VPS Postgres
+## Verify
 
 ```bash
-cd /root/automation/hive-os
-npx prisma migrate deploy
-npm run db:seed          # seeds Revvy, Gingin, JOAT, Loop99, Pink Loan
+docker compose -f docker-compose.prod.yml logs -f app
 ```
 
-Do **not** run `npm run test:client` on production — that's local demo
-data only.
+Visit `https://portal.hivesocial.agency`.
 
-## 6. Merge the service block into your VPS's docker-compose
-
-Copy the contents of `docker-compose.prod.yml` (the `hive-os` service)
-into your existing VPS docker-compose file that already runs Traefik and
-your other services. Then:
+## Add the test client (optional, for verification only)
 
 ```bash
-cd /root/automation
-docker compose up -d --build hive-os
+docker compose -f docker-compose.prod.yml exec -T app npm run test:client
 ```
 
-## 7. Verify
-
+Remove it once you're satisfied everything works:
 ```bash
-docker compose logs -f hive-os
+docker compose -f docker-compose.prod.yml exec -T app npx tsx scripts/remove-test-client.ts
 ```
 
-Watch for `Ready` in the logs, then visit `https://portal.hivesocial.agency`.
-First load may take a few extra seconds while Traefik finishes the TLS
-cert handshake.
+## What's isolated vs. shared
 
-## 8. Future deploys
-
-Same three-step loop every time you ship an update:
-```bash
-# Windows: commit + push
-# VPS:
-cd /root/automation/hive-os
-git pull
-docker compose up -d --build hive-os
-```
-
-If a new Prisma migration was added, run `npx prisma migrate deploy`
-again before rebuilding the container.
+| | This project |
+|---|---|
+| Postgres | Own container (`hive_os_postgres`), own volume — completely separate from any other DB on the VPS |
+| Docker network | Own internal network for app↔postgres, PLUS the existing `root_default` (external) only so Traefik can route to it |
+| Compose file | `docker-compose.prod.yml`, lives inside this repo — never merged into your main compose file |
+| Traefik | Reused (already running in your main stack) — this is the one intentional shared piece, since you only want one reverse proxy on the whole server |

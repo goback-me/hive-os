@@ -121,14 +121,12 @@ export async function inviteMember(formData: FormData) {
   revalidatePath("/settings");
 }
 
-export async function updateReferralStatus(
-  id: string,
-  status: "PENDING" | "APPROVED" | "REJECTED",
-  payoutAmount?: number
-) {
-  await prisma.referral.update({
-    where: { id },
-    data: { status, ...(payoutAmount ? { payoutAmount } : {}) },
-  });
+export async function approveReferral(id: string) {
+  await prisma.referral.update({ where: { id }, data: { status: "APPROVED" } });
+  revalidatePath("/referrals");
+}
+
+export async function rejectReferral(id: string) {
+  await prisma.referral.update({ where: { id }, data: { status: "REJECTED" } });
   revalidatePath("/referrals");
 }

@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { createReferral, updateReferralStatus } from "@/lib/actions";
+import { createReferral, approveReferral, rejectReferral } from "@/lib/actions";
 
 const STATUS_STYLE: Record<string, string> = {
   PENDING: "bg-surface-container-highest text-on-surface-variant",
@@ -72,12 +72,12 @@ export default async function ReferralsPage() {
                     <td className="px-lg py-md text-right">
                       {r.status === "PENDING" ? (
                         <div className="flex gap-xs justify-end">
-                          <form action={updateReferralStatus.bind(null, r.id, "APPROVED")}>
+                          <form action={approveReferral.bind(null, r.id)}>
                             <button className="px-2 py-1 text-[11px] font-bold rounded bg-secondary-container text-on-secondary-container hover:opacity-80">
                               Approve
                             </button>
                           </form>
-                          <form action={updateReferralStatus.bind(null, r.id, "REJECTED")}>
+                          <form action={rejectReferral.bind(null, r.id)}>
                             <button className="px-2 py-1 text-[11px] font-bold rounded bg-error-container text-on-error-container hover:opacity-80">
                               Reject
                             </button>
