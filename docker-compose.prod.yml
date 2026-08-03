@@ -1,18 +1,35 @@
 # This is the SERVICE BLOCK to merge into your existing VPS docker-compose
 # setup (the one that already has Traefik + `root_default` network) — do
-# NOT run this standalone; it assumes the shared Traefik + Postgres you
+# NOT run this standalone; it assumes the shared Traefik network you
 # already have running for Ad Performance OS / Gingin.
 #
-# Copy the `hive-os` service below into your VPS's main docker-compose.yml
-# under /root/automation/, alongside your other services.
+# Copy both services below into your VPS's main docker-compose.yml
+# under /root/automation/ or /root/tools/, alongside your other services.
 
 services:
+  hive-os-postgres:
+    image: postgres:16-alpine
+    container_name: hive_os_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: hive
+      POSTGRES_PASSWORD: CHANGE_ME_TO_A_REAL_PASSWORD
+      POSTGRES_DB: hive_os
+    volumes:
+      - hive_os_pg_data:/var/lib/postgresql/data
+    networks:
+      - root_default
+    # No `ports:` mapping — this stays internal to the Docker network,
+    # only reachable by other containers on root_default, not the public internet.
+
   hive-os:
     build:
       context: ./hive-os          # path to this repo on the VPS
       dockerfile: Dockerfile
     container_name: hive_os
     restart: unless-stopped
+    depends_on:
+      - hive-os-postgres
     env_file:
       - ./hive-os/.env            # production .env, NOT committed to git
     networks:
@@ -24,6 +41,9 @@ services:
       - "traefik.http.routers.hive-os.tls=true"
       - "traefik.http.routers.hive-os.tls.certresolver=mytlschallenge"
       - "traefik.http.services.hive-os.loadbalancer.server.port=3000"
+
+volumes:
+  hive_os_pg_data:
 
 networks:
   root_default:
