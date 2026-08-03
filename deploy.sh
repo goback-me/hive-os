@@ -41,7 +41,7 @@ git pull
 
 # ── Step 2: build and start (postgres + app, self-contained) ─────────
 echo "→ Building and starting containers..."
-docker compose build --no-cache --progress=plain app
+docker compose --progress=plain build --no-cache app
 docker compose up -d
 
 # ── Step 3: wait for postgres to actually be healthy ──────────────────
@@ -51,10 +51,15 @@ until docker inspect --format='{{.State.Health.Status}}' hive_os_postgres 2>/dev
   sleep 2
 done
 
-# ── Step 4: migrate + seed ─────────────────────────────────────────────
-echo "→ Running database migrations..."
-docker compose exec -T app npx prisma migrate deploy
-echo "  ...migrations applied"
+# ── Step 4: sync schema + seed ─────────────────────────────────────────
+# Using `db push` rather than `migrate deploy` — no migration history
+# files exist yet (would need a local Postgres to generate them via
+# `prisma migrate dev`). db push syncs the schema directly, which is
+# fine pre-launch. Switch to proper migrations once this is live with
+# real client data you don't want to risk with schema drift.
+echo "→ Syncing database schema..."
+docker compose exec -T app npx prisma db push
+echo "  ...schema synced"
 
 echo "→ Seeding base clients (safe to re-run)..."
 docker compose exec -T app npm run db:seed
