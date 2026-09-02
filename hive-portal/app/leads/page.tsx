@@ -6,8 +6,10 @@ import LeadsSheetPanel from "@/components/LeadsSheetPanel";
 export default async function LeadsPage({
   searchParams,
 }: {
-  searchParams: { client?: string; error?: string };
+  searchParams: Promise<{ client?: string; error?: string }>;
 }) {
+  const params = await searchParams;
+
   const [clients, googleConnection] = await Promise.all([
     prisma.client.findMany({
       where: { isActive: true },
@@ -26,7 +28,7 @@ export default async function LeadsPage({
     );
   }
 
-  const activeSlug = searchParams.client ?? clients[0].slug;
+  const activeSlug = params.client ?? clients[0].slug;
   const activeClient = clients.find((c) => c.slug === activeSlug) ?? clients[0];
 
   const sheet = await prisma.clientSheet.findUnique({ where: { clientId: activeClient.id } });
@@ -43,9 +45,9 @@ export default async function LeadsPage({
         <ClientFilter clients={clients} activeSlug={activeClient.slug} />
       </div>
 
-      {searchParams.error && (
+      {params.error && (
         <div className="mb-lg p-md bg-red-50 border border-red-200 rounded-lg text-body-sm text-red-700">
-          Couldn't connect: {searchParams.error}
+          Couldn't connect: {params.error}
         </div>
       )}
 

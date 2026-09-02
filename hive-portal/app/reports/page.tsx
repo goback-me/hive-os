@@ -3,8 +3,9 @@ import { getAgencyDailySpend, getLeadSourceBreakdown, getReportSummary } from "@
 
 const SOURCE_COLORS = ["#4a2874", "#f8b144", "#feb649", "#7c7481"];
 
-export default async function ReportsPage({ searchParams }: { searchParams: { clientId?: string } }) {
-  const clientId = searchParams.clientId || undefined;
+export default async function ReportsPage({ searchParams }: { searchParams: Promise<{ clientId?: string }> }) {
+  const params = await searchParams;
+  const clientId = params.clientId || undefined;
 
   const [clients, summary, sourceBreakdown, dailySpend, recentReports] = await Promise.all([
     prisma.client.findMany({ select: { id: true, name: true }, orderBy: { name: "asc" } }),
