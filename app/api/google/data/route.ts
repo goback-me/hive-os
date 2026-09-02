@@ -42,14 +42,21 @@ export async function GET(req: NextRequest) {
     const rows = liveRows.map((r) => visibleIndexes.map((i) => r[i]));
 
     let statusValues: string[] | null = null;
+    let statusCounts: Record<string, number> | null = null;
     if (statusColumn) {
       const colIdx = headers.indexOf(statusColumn);
       if (colIdx !== -1) {
-        statusValues = Array.from(new Set(rows.map((r) => r[colIdx]).filter(Boolean))).sort();
+        statusCounts = {};
+        for (const r of rows) {
+          const v = r[colIdx];
+          if (!v) continue;
+          statusCounts[v] = (statusCounts[v] ?? 0) + 1;
+        }
+        statusValues = Object.keys(statusCounts).sort();
       }
     }
 
-    return NextResponse.json({ headers, rows, statusColumn, statusValues });
+    return NextResponse.json({ headers, rows, statusColumn, statusValues, statusCounts, totalRows: rows.length });
   } catch (err: any) {
     console.error("Fetch sheet data failed:", err);
     return NextResponse.json({ error: err.message ?? "failed" }, { status: 500 });

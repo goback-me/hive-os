@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getClientDailySpend, getLeadFunnel } from "@/lib/dashboard-data";
+import { getMetaInsights } from "@/lib/meta-ads";
 import { toSparklinePath } from "@/lib/sparkline";
 import Kanban from "@/components/Kanban";
 import MetaAdsCard from "@/components/MetaAdsCard";
@@ -11,20 +12,28 @@ export default async function ClientDetailPage({ params }: { params: Promise<{ s
   const client = await prisma.client.findUnique({ where: { slug } });
   if (!client) notFound();
 
+  const metaConnected = Boolean(client.metaAdAccountId && client.metaAccessToken);
+
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
 
-  const [spendAgg, revenue, leadCount, tasks, dailySpend, funnel] = await Promise.all([
+  const [spendAgg, revenue, leadCount, tasks, dailySpend, funnel, metaInsights] = await Promise.all([
     prisma.adSpendDaily.aggregate({ _sum: { spend: true }, where: { clientId: client.id, date: { gte: monthStart } } }),
     prisma.revenueMonthly.findFirst({ where: { clientId: client.id, month: monthStart } }),
     prisma.lead.count({ where: { clientId: client.id, createdAt: { gte: monthStart } } }),
     prisma.task.findMany({ where: { clientId: client.id }, orderBy: { createdAt: "asc" } }),
     getClientDailySpend(client.id, 10),
     getLeadFunnel(client.id),
+    metaConnected
+      ? getMetaInsights(client.metaAdAccountId!, client.metaAccessToken!).catch(() => null)
+      : Promise.resolve(null),
   ]);
 
-  const totalSpend = Number(spendAgg._sum.spend ?? 0);
-  const totalRevenue = Number(revenue?.amount ?? 0);
+  // Meta, when connected, is live ground truth for spend/revenue — falls
+  // back to the manually-entered DB tables when there's no connection yet,
+  // or if the Meta call fails for some reason (expired token, API hiccup).
+  const totalSpend = metaInsights ? metaInsights.spend : Number(spendAgg._sum.spend ?? 0);
+  const totalRevenue = metaInsights?.revenue != null ? metaInsights.revenue : Number(revenue?.amount ?? 0);
   const roas = totalSpend > 0 ? totalRevenue / totalSpend : 0;
   const maxFunnel = Math.max(...funnel.map((f) => f.count), 1);
 
@@ -42,8 +51,8 @@ export default async function ClientDetailPage({ params }: { params: Promise<{ s
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-gutter mb-xl">
-        <MetricCard label="Ad spend" value={`$${totalSpend.toLocaleString()}`} suffix="/mo" spark={dailySpend} color="#4a2874" />
-        <MetricCard label="Revenue" value={`$${totalRevenue.toLocaleString()}`} suffix="/mo" spark={[totalRevenue * 0.7, totalRevenue * 0.85, totalRevenue]} color="#f8b144" />
+        <MetricCard label="Ad spend" value={`$${totalSpend.toLocaleString()}`} suffix={metaConnected ? "/30d · Meta" : "/mo"} spark={dailySpend} color="#4a2874" />
+        <MetricCard label="Revenue" value={`$${totalRevenue.toLocaleString()}`} suffix={metaConnected && metaInsights?.revenue != null ? "/30d · Meta" : "/mo"} spark={[totalRevenue * 0.7, totalRevenue * 0.85, totalRevenue]} color="#f8b144" />
         <MetricCard label="ROAS" value={`${roas.toFixed(2)}x`} spark={[roas * 0.7, roas * 0.9, roas]} color="#4a2874" />
         <MetricCard label="Total leads" value={String(leadCount)} spark={[leadCount * 0.8, leadCount * 0.95, leadCount]} color="#4a2874" />
       </div>

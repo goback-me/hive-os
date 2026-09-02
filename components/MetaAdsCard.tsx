@@ -150,7 +150,7 @@ export default function MetaAdsCard({
           )}
 
           <div className="flex gap-sm">
-            <button onClick={loadInsights} className="px-md py-2 border border-outline-variant rounded-lg font-label-sm hover:bg-surface-container">
+            <button onClick={() => window.location.reload()} className="px-md py-2 border border-outline-variant rounded-lg font-label-sm hover:bg-surface-container">
               Refresh
             </button>
             <button onClick={() => setShowForm(true)} className="px-md py-2 border border-outline-variant rounded-lg font-label-sm hover:bg-surface-container">

@@ -3,15 +3,20 @@ import { prisma } from "@/lib/prisma";
 import { encryptToken } from "@/lib/crypto";
 import { exchangeCodeForTokens, getGoogleUserEmail } from "@/lib/google-sheets";
 
+// Build redirects from the known public URL, not the incoming request's
+// Host header — behind Traefik that header isn't always what you'd expect,
+// and a wrong Host here means users get bounced to "localhost:3000".
+const APP_URL = process.env.NEXTAUTH_URL || "http://localhost:3000";
+
 export async function GET(req: NextRequest) {
   const code = req.nextUrl.searchParams.get("code");
   const error = req.nextUrl.searchParams.get("error");
 
   if (error) {
-    return NextResponse.redirect(new URL(`/leads?error=${encodeURIComponent(error)}`, req.url));
+    return NextResponse.redirect(new URL(`/leads?error=${encodeURIComponent(error)}`, APP_URL));
   }
   if (!code) {
-    return NextResponse.redirect(new URL(`/leads?error=missing_code`, req.url));
+    return NextResponse.redirect(new URL(`/leads?error=missing_code`, APP_URL));
   }
 
   try {
@@ -29,9 +34,9 @@ export async function GET(req: NextRequest) {
       },
     });
 
-    return NextResponse.redirect(new URL(`/leads`, req.url));
+    return NextResponse.redirect(new URL(`/leads`, APP_URL));
   } catch (err: any) {
     console.error("Google OAuth callback failed:", err);
-    return NextResponse.redirect(new URL(`/leads?error=${encodeURIComponent(err.message ?? "oauth_failed")}`, req.url));
+    return NextResponse.redirect(new URL(`/leads?error=${encodeURIComponent(err.message ?? "oauth_failed")}`, APP_URL));
   }
 }

@@ -40,6 +40,7 @@ export default function LeadsSheetPanel({
   const [headers, setHeaders] = useState<string[]>([]);
   const [rows, setRows] = useState<string[][]>([]);
   const [statusValues, setStatusValues] = useState<string[]>([]);
+  const [statusCounts, setStatusCounts] = useState<Record<string, number>>({});
   const [statusFilter, setStatusFilter] = useState<string>("__all__");
 
   const [loadingData, setLoadingData] = useState(false);
@@ -69,6 +70,7 @@ export default function LeadsSheetPanel({
         setHeaders(data.headers);
         setRows(data.rows);
         setStatusValues(data.statusValues ?? []);
+        setStatusCounts(data.statusCounts ?? {});
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoadingData(false));
@@ -250,10 +252,10 @@ export default function LeadsSheetPanel({
               onChange={(e) => setStatusFilter(e.target.value)}
               className="px-md py-2 border border-outline-variant rounded-lg font-label-sm bg-white"
             >
-              <option value="__all__">All statuses</option>
+              <option value="__all__">All statuses ({rows.length})</option>
               {statusValues.map((v) => (
                 <option key={v} value={v}>
-                  {v}
+                  {v} ({statusCounts[v] ?? 0})
                 </option>
               ))}
             </select>
@@ -306,6 +308,24 @@ export default function LeadsSheetPanel({
               Save
             </button>
           </div>
+        </div>
+      )}
+
+      {statusColumn && statusValues.length > 0 && (
+        <div className="flex flex-wrap gap-sm mb-md">
+          {statusValues.map((v) => (
+            <button
+              key={v}
+              onClick={() => setStatusFilter(statusFilter === v ? "__all__" : v)}
+              className={`px-sm py-1 rounded-full text-label-sm border ${
+                statusFilter === v
+                  ? "bg-primary text-white border-primary"
+                  : "bg-surface-container text-on-surface border-outline-variant/50 hover:bg-primary-container/10"
+              }`}
+            >
+              {v} · {statusCounts[v] ?? 0}
+            </button>
+          ))}
         </div>
       )}
 
