@@ -42,6 +42,7 @@ services:
       - root_default
     labels:
       - "traefik.enable=true"
+      - "traefik.docker.network=root_default"
       - "traefik.http.routers.hive-os.rule=Host(`portal.hivesocial.agency`)"
       - "traefik.http.routers.hive-os.entrypoints=web,websecure"
       - "traefik.http.routers.hive-os.tls=true"
