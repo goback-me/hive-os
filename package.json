@@ -14,19 +14,19 @@
   },
   "dependencies": {
     "@prisma/client": "^5.20.0",
-    "next": "14.2.5",
+    "next": "^16.3.4",
     "react": "^18",
     "react-dom": "^18"
   },
   "devDependencies": {
-    "prisma": "^5.20.0",
-    "tsx": "^4.16.0",
-    "typescript": "^5",
+    "@tailwindcss/postcss": "^4.0.0",
     "@types/node": "^20",
     "@types/react": "^18",
     "@types/react-dom": "^18",
+    "postcss": "^8.4.41",
+    "prisma": "^5.20.0",
     "tailwindcss": "^4.0.0",
-    "@tailwindcss/postcss": "^4.0.0",
-    "postcss": "^8.4.41"
+    "tsx": "^4.16.0",
+    "typescript": "^5"
   }
 }

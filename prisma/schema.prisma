@@ -70,9 +70,41 @@ model Client {
   needsActionItems NeedsActionItem[]
   tasks           Task[]
   generatedReports GeneratedReport[]
+  clientSheet     ClientSheet?
 
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
+}
+
+// ── The one Google account used to read every client's lead sheet ───
+// Singleton table — only ever one row, created/replaced on connect.
+model GoogleAccountConnection {
+  id           String   @id @default(cuid())
+  accessToken  String   // encrypted at rest (see lib/crypto.ts)
+  refreshToken String   // encrypted at rest
+  expiresAt    DateTime
+  googleEmail  String?  // shown in the UI so you know which account is connected
+  connectedAt  DateTime @default(now())
+}
+
+// ── Which spreadsheet/tab/columns are assigned to each client ───────
+// Sticks until you change it — no token here, just points at a sheet
+// and is read using the single GoogleAccountConnection above.
+model ClientSheet {
+  id              String   @id @default(cuid())
+  clientId        String   @unique
+  client          Client   @relation(fields: [clientId], references: [id])
+
+  spreadsheetId   String
+  spreadsheetName String?  // display name, cached from Drive
+  sheetName       String   // selected tab within the spreadsheet
+
+  allColumns      String[] // full header row, cached from last fetch — for the picker UI only
+  visibleColumns  String[] // subset of allColumns to actually show/return (empty = show all)
+  statusColumn    String?  // which column (must be visible) drives the status filter dropdown
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 }
 
 // ── Payments / invoicing (drives "overdue" cards) ───────────────────
