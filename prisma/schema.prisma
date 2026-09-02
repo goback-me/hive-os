@@ -54,9 +54,9 @@ model Client {
   isActive        Boolean   @default(true)
 
   // integration refs — filled in once each client's accounts are connected
-  metaAdAccountId String?   // "act_XXXXXXXXX"
+  metaAdAccountId String?   // "act_XXXXXXXXX" — not secret, safe to store plain
+  metaAccessToken String?   // encrypted at rest (see lib/crypto.ts) — pasted in from the client detail page
   clickupListId   String?   // ClickUp list to embed for this client's tasks
-  swarmProjectId  String?   // Swarm project/link to embed
   claritySlug     String?   // Microsoft Clarity project slug (joat_funnel, revvy, etc.)
   stripeCustomerId String?  // for payment sync
 

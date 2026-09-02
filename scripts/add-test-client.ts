@@ -35,7 +35,6 @@ async function main() {
       isActive: true,
       metaAdAccountId: "act_TESTACCOUNT123",
       clickupListId: "test-clickup-list",
-      swarmProjectId: "test-swarm-project",
       claritySlug: "test_client_funnel",
     },
   });

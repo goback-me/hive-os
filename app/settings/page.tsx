@@ -3,14 +3,13 @@ import { inviteMember } from "@/lib/actions";
 import InviteMemberModal from "./InviteMemberModal";
 
 export default async function SettingsPage() {
-  const [members, totalClients, clickupConnected, swarmConnected] = await Promise.all([
+  const [members, totalClients, clickupConnected, metaConnected] = await Promise.all([
     prisma.user.findMany({ orderBy: { createdAt: "asc" } }),
     prisma.client.count(),
     prisma.client.count({ where: { clickupListId: { not: null } } }),
-    prisma.client.count({ where: { swarmProjectId: { not: null } } }),
+    prisma.client.count({ where: { metaAccessToken: { not: null } } }),
   ]);
 
-  const metaConnected = Boolean(process.env.META_ACCESS_TOKEN);
   const stripeConnected = Boolean(process.env.STRIPE_SECRET_KEY);
 
   return (
@@ -77,7 +76,14 @@ export default async function SettingsPage() {
               Integrations
             </h3>
             <div className="space-y-md">
-              <IntegrationRow color="#0668E1" icon="ads_click" name="Meta Ads" desc="Campaign syncing" connected={metaConnected} />
+              <IntegrationRow
+                color="#0668E1"
+                icon="ads_click"
+                name="Meta Ads"
+                desc={`${metaConnected} of ${totalClients} clients connected`}
+                connected={metaConnected > 0}
+                perClient
+              />
               <IntegrationRow color="#635BFF" icon="payments" name="Stripe" desc="Revenue reports" connected={stripeConnected} />
               <IntegrationRow
                 color="#7B68EE"
@@ -85,14 +91,6 @@ export default async function SettingsPage() {
                 name="ClickUp"
                 desc={`${clickupConnected} of ${totalClients} clients connected`}
                 connected={clickupConnected > 0}
-                perClient
-              />
-              <IntegrationRow
-                color="#FFB951"
-                icon="hive"
-                name="Swarm"
-                desc={`${swarmConnected} of ${totalClients} clients connected`}
-                connected={swarmConnected > 0}
                 perClient
               />
             </div>

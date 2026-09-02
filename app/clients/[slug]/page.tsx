@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { getClientDailySpend, getLeadFunnel } from "@/lib/dashboard-data";
 import { toSparklinePath } from "@/lib/sparkline";
 import Kanban from "@/components/Kanban";
+import MetaAdsCard from "@/components/MetaAdsCard";
 import { toggleTask, createTask } from "@/lib/actions";
 
 export default async function ClientDetailPage({ params }: { params: Promise<{ slug: string }> }) {
@@ -84,31 +85,11 @@ export default async function ClientDetailPage({ params }: { params: Promise<{ s
         </div>
 
         <div className="col-span-12 lg:col-span-4 space-y-gutter">
-          <div className="custom-card p-lg">
-            <div className="flex justify-between items-center mb-md">
-              <h4 className="font-headline-sm text-primary">Ad review</h4>
-              {client.swarmProjectId ? (
-                <span className="px-2 py-1 bg-green-100 text-green-700 text-[10px] font-bold rounded uppercase">Connected</span>
-              ) : (
-                <span className="px-2 py-1 bg-surface-container text-on-surface-variant text-[10px] font-bold rounded uppercase">Not connected</span>
-              )}
-            </div>
-            {client.swarmProjectId ? (
-              <div className="p-md border border-outline-variant rounded-xl">
-                <p className="text-body-sm font-bold">Swarm project</p>
-                <p className="text-label-sm text-on-surface-variant">{client.swarmProjectId}</p>
-              </div>
-            ) : (
-              <div className="p-lg flex flex-col items-center justify-center text-center gap-md min-h-[140px] border-2 border-dashed border-outline rounded-xl">
-                <div className="w-12 h-12 rounded-full bg-surface-container-high flex items-center justify-center text-outline">
-                  <span className="material-symbols-outlined">ads_click</span>
-                </div>
-                <p className="text-[12px] text-on-surface-variant max-w-[200px]">
-                  Connect a Swarm project on this client to review ad creative here.
-                </p>
-              </div>
-            )}
-          </div>
+          <MetaAdsCard
+            clientId={client.id}
+            connected={Boolean(client.metaAdAccountId && client.metaAccessToken)}
+            adAccountId={client.metaAdAccountId}
+          />
         </div>
       </div>
     </div>
