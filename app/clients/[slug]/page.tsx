@@ -5,8 +5,9 @@ import { toSparklinePath } from "@/lib/sparkline";
 import Kanban from "@/components/Kanban";
 import { toggleTask, createTask } from "@/lib/actions";
 
-export default async function ClientDetailPage({ params }: { params: { slug: string } }) {
-  const client = await prisma.client.findUnique({ where: { slug: params.slug } });
+export default async function ClientDetailPage({ params }: { params: Promise<{ slug: string }> }) {
+  const { slug } = await params;
+  const client = await prisma.client.findUnique({ where: { slug } });
   if (!client) notFound();
 
   const now = new Date();
