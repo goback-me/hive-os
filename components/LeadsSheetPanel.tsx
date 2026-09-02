@@ -173,7 +173,7 @@ export default function LeadsSheetPanel({
   // ── Step 1: pick a spreadsheet ────────────────────────────────────────
   if (step === "picking-sheet") {
     return (
-      <div className="custom-card p-lg max-w-lg mx-auto">
+      <div className="custom-card p-lg max-w-[32rem] mx-auto">
         <h4 className="font-headline-sm text-primary mb-md">Pick a spreadsheet for this client</h4>
 
         {!files && (
@@ -211,7 +211,7 @@ export default function LeadsSheetPanel({
   // ── Step 2: pick a tab within the spreadsheet ─────────────────────────
   if (step === "picking-tab") {
     return (
-      <div className="custom-card p-lg max-w-lg mx-auto">
+      <div className="custom-card p-lg max-w-[32rem] mx-auto">
         <h4 className="font-headline-sm text-primary mb-md">Pick a tab in "{pickedFile?.name}"</h4>
         {error && <p className="text-body-sm text-red-600 mb-md">{error}</p>}
         <div className="flex flex-wrap gap-sm">

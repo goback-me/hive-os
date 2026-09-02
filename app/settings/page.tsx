@@ -13,7 +13,7 @@ export default async function SettingsPage() {
   const stripeConnected = Boolean(process.env.STRIPE_SECRET_KEY);
 
   return (
-    <div className="p-margin-desktop max-w-6xl mx-auto space-y-xl">
+    <div className="p-margin-desktop max-w-[72rem] mx-auto space-y-xl">
       <div className="flex items-center justify-between">
         <div>
           <h2 className="font-headline-lg text-headline-lg text-primary">Agency settings</h2>
