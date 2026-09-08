@@ -4,7 +4,7 @@ import "./globals.css";
 
 export const metadata = {
   title: "Hive OS",
-  description: "Client command center for coaching businesses",
+  description: "Hive Social's client portal — leads, ad performance, revenue, and referrals in one place",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

@@ -16,7 +16,7 @@ export default function LoginPage() {
         />
         <div className="relative">
           <div className="w-11 h-11 rounded-2xl flex items-center justify-center text-white font-bold text-lg" style={{ background: "rgba(255,255,255,0.15)" }}>
-            C
+            H
           </div>
         </div>
         <div className="relative">
@@ -24,8 +24,8 @@ export default function LoginPage() {
             Hive OS
           </h1>
           <p className="text-lg max-w-md" style={{ color: "rgba(255,255,255,0.85)" }}>
-            The client command center for coaching businesses — clients, revenue,
-            playbooks, and referrals, all in one place.
+            Hive Social's internal client portal — leads, ad performance, revenue,
+            and referrals, all in one place.
           </p>
         </div>
         <div className="relative text-sm" style={{ color: "rgba(255,255,255,0.6)" }}>
