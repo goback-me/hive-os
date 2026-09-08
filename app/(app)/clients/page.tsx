@@ -1,16 +1,10 @@
-import Link from "next/link";
 import { prisma } from "@/lib/prisma";
-import { createClient } from "@/lib/actions";
+import { createClient, bulkUpdateClientStatus } from "@/lib/actions";
 import { requireCoach } from "@/lib/auth";
 import AddClientModal from "./AddClientModal";
+import ClientsGrid from "./ClientsGrid";
 
 export const dynamic = "force-dynamic";
-
-const STATUS_STYLE: Record<string, { dot: string; bg: string; color: string; label: string }> = {
-  ACTIVE: { dot: "var(--primary)", bg: "var(--primary-tint)", color: "var(--primary)", label: "Active" },
-  ONBOARDING: { dot: "var(--text-secondary)", bg: "var(--surface-hover)", color: "var(--text-secondary)", label: "Onboarding" },
-  CHURNED: { dot: "var(--danger)", bg: "var(--danger-tint)", color: "var(--danger)", label: "Churned" },
-};
 
 export default async function ClientsPage() {
   await requireCoach(); // client logins are redirected to their own client page, never this list
@@ -28,9 +22,9 @@ export default async function ClientsPage() {
 
   const revenueByClient = await Promise.all(
     clients.map((c) =>
-      prisma.payment.aggregate({
-        _sum: { amountDue: true },
-        where: { clientId: c.id, status: "PAID", paidDate: { gte: monthStart } },
+      prisma.revenueMonthly.aggregate({
+        _sum: { amount: true },
+        where: { clientId: c.id, month: monthStart },
       })
     )
   );
@@ -44,59 +38,21 @@ export default async function ClientsPage() {
             All clients across {programs.map((p) => p.name).join(", ")}.
           </p>
         </div>
-        <div className="flex gap-3">
-          <button
-            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold"
-            style={{ border: "1px solid var(--border-strong)", color: "var(--text-secondary)" }}
-          >
-            <span className="material-symbols-outlined text-[18px]">check_box_outline_blank</span>
-            Bulk Edit
-          </button>
-          <AddClientModal action={createClient} programs={programs} />
-        </div>
+        <AddClientModal action={createClient} />
       </div>
 
-      <div className="grid grid-cols-3 gap-4">
-        {clients.map((client, i) => {
-          const s = STATUS_STYLE[client.status] ?? STATUS_STYLE.ONBOARDING;
-          const revenue = Number(revenueByClient[i]._sum.amountDue ?? 0);
-          return (
-            <Link key={client.id} href={`/clients/${client.slug}`} className="card rounded-xl p-4 block relative">
-              <span
-                className="absolute top-4 right-4 w-2.5 h-2.5 rounded-full"
-                style={{ background: s.dot }}
-              />
-              <div className="flex items-start gap-3 mb-4">
-                <div
-                  className="w-11 h-11 rounded-full flex items-center justify-center text-sm font-bold shrink-0"
-                  style={{ background: "var(--primary-tint)", color: "var(--primary)" }}
-                >
-                  {client.name.slice(0, 1).toUpperCase()}
-                </div>
-                <div className="min-w-0">
-                  <p className="font-semibold text-sm" style={{ color: "var(--text-primary)" }}>{client.name}</p>
-                  <p className="text-xs truncate" style={{ color: "var(--text-secondary)" }}>
-                    {client.description || "\u00A0"}
-                  </p>
-                </div>
-              </div>
-              <div className="flex justify-between items-end">
-                <div>
-                  <p className="text-[10px]" style={{ color: "var(--text-muted)" }}>Revenue this month</p>
-                  <p className="font-bold text-sm" style={{ color: "var(--text-primary)" }}>
-                    ${revenue.toLocaleString()}
-                  </p>
-                </div>
-                <div className="text-right">
-                  <p className="text-[10px] font-bold" style={{ color: s.color }}>{s.label}</p>
-                  <p className="text-[10px]" style={{ color: "var(--text-muted)" }}>{client.program?.name ?? "—"}</p>
-                </div>
-              </div>
-            </Link>
-          );
-        })}
-        {clients.length === 0 && <p style={{ color: "var(--text-secondary)" }}>No clients yet.</p>}
-      </div>
+      <ClientsGrid
+        clients={clients.map((client, i) => ({
+          id: client.id,
+          slug: client.slug,
+          name: client.name,
+          description: client.description,
+          status: client.status,
+          programName: client.program?.name ?? null,
+          revenue: Number(revenueByClient[i]._sum.amount ?? 0),
+        }))}
+        onBulkUpdateStatus={bulkUpdateClientStatus}
+      />
     </div>
   );
 }

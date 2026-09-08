@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { saveIntegrationSettings, createOnboardingStepTemplate, createModule, createLesson } from "@/lib/actions";
+import { saveIntegrationSettings, createOnboardingStepTemplate, createModule, createLesson, createClient } from "@/lib/actions";
 import { requireCoach } from "@/lib/auth";
 import UsersPanel from "./UsersPanel";
 
@@ -32,7 +32,7 @@ export default async function SettingsPage() {
         <p style={{ color: "var(--text-secondary)" }}>Connections and templates used across every client.</p>
       </div>
 
-      <UsersPanel users={userRows} clients={clients} />
+      <UsersPanel users={userRows} clients={clients} onCreateClient={createClient} />
 
       <section className="card rounded-2xl p-6">
         <h3 className="font-heading font-bold text-lg mb-1" style={{ color: "var(--text-primary)" }}>Integrations</h3>

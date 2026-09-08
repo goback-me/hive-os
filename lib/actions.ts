@@ -2,7 +2,6 @@
 
 import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
-import { redirect } from "next/navigation";
 import { requireCoach, requireClientAccess } from "@/lib/auth";
 import { getClerkAdminClient } from "@/lib/clerk-admin";
 import { syncLeadsFromSheet } from "@/lib/lead-sync";
@@ -50,6 +49,21 @@ export async function createReferralLink(formData: FormData) {
 
   await prisma.referralLink.create({ data: { label, code } });
   revalidatePath("/referrals");
+}
+
+// Every client gets their own unique referral link, auto-created the first
+// time it's needed (at client creation, or lazily for a client that existed
+// before this feature) — @unique on ReferralLink.clientId means calling
+// this twice for the same client is safe and returns the existing one.
+export async function getOrCreateClientReferralLink(clientId: string, clientLabel: string) {
+  const existing = await prisma.referralLink.findUnique({ where: { clientId } });
+  if (existing) return existing;
+
+  let code = randomCode();
+  while (await prisma.referralLink.findUnique({ where: { code } })) {
+    code = randomCode();
+  }
+  return prisma.referralLink.create({ data: { clientId, label: `${clientLabel} referrals`, code } });
 }
 
 // Public submission — used by the /refer/[code] page, no auth required
@@ -175,6 +189,20 @@ export async function updateLeadStatus(leadId: string, status: string, value?: n
   revalidatePath(`/clients`);
 }
 
+// A coach or the lead's own client can leave a follow-up note — same
+// access rule as ProgressNote, just scoped to one lead instead of the client.
+export async function addLeadNote(leadId: string, formData: FormData) {
+  const lead = await prisma.lead.findUnique({ where: { id: leadId }, select: { clientId: true } });
+  if (!lead) throw new Error("Lead not found");
+  const user = await requireClientAccess(lead.clientId);
+
+  const note = String(formData.get("note") || "").trim();
+  if (!note) throw new Error("Note can't be empty");
+
+  await prisma.leadNote.create({ data: { leadId, note, createdBy: user.name } });
+  revalidatePath(`/clients`);
+}
+
 // ── Gameplan (Drive embed) ───────────────────────────────────────────────
 export async function saveGameplanLink(clientId: string, formData: FormData) {
   await requireClientAccess(clientId);
@@ -241,32 +269,60 @@ export async function createLesson(formData: FormData) {
   revalidatePath("/clients");
 }
 
-export async function createClient(formData: FormData) {
+export type CreateClientState = { error: string } | { slug: string } | null;
+
+// Returns a result object instead of throwing/redirecting — lets the modal
+// (AddClientModal, used both on /clients and in Settings) show a real error
+// message via useFormState instead of the request just failing silently.
+export async function createClient(_prev: CreateClientState, formData: FormData): Promise<CreateClientState> {
   await requireCoach();
   const name = String(formData.get("name") || "").trim();
   const description = String(formData.get("description") || "").trim();
-  const programId = String(formData.get("programId") || "") || null;
+  const scope = String(formData.get("scope") || "").trim();
+  const driveLink = String(formData.get("driveLink") || "").trim();
   const status = String(formData.get("status") || "ONBOARDING") as "ACTIVE" | "ONBOARDING" | "CHURNED";
 
-  if (!name) throw new Error("Client name is required");
+  if (!name) return { error: "Client name is required" };
+  if (driveLink && !/^https:\/\/(?:drive|docs)\.google\.com\//.test(driveLink)) {
+    return { error: "That doesn't look like a Google Drive/Docs/Sheets/Slides link — leave it blank to skip for now." };
+  }
 
-  let slug = slugify(name);
-  const existing = await prisma.client.findUnique({ where: { slug } });
-  if (existing) slug = `${slug}-${Date.now().toString(36)}`;
+  try {
+    let slug = slugify(name);
+    const existingSlug = await prisma.client.findUnique({ where: { slug } });
+    if (existingSlug) slug = `${slug}-${Date.now().toString(36)}`;
 
-  const client = await prisma.client.create({
-    data: {
-      name,
-      slug,
-      description: description || null,
-      programId,
-      status,
-      isActive: status !== "CHURNED",
-    },
+    const client = await prisma.client.create({
+      data: {
+        name,
+        slug,
+        description: description || null,
+        scope: scope || null,
+        gameplanFigmaLink: driveLink || null,
+        status,
+        isActive: status !== "CHURNED",
+      },
+    });
+    await getOrCreateClientReferralLink(client.id, client.name);
+
+    revalidatePath("/clients");
+    revalidatePath("/settings");
+    return { slug: client.slug };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Failed to create the client" };
+  }
+}
+
+// Coach-only, applies the same status to every selected client in one go —
+// the "Bulk Edit" action on the /clients grid.
+export async function bulkUpdateClientStatus(clientIds: string[], status: string) {
+  await requireCoach();
+  if (clientIds.length === 0) return;
+  await prisma.client.updateMany({
+    where: { id: { in: clientIds } },
+    data: { status: status as never, isActive: status !== "CHURNED" },
   });
-
   revalidatePath("/clients");
-  redirect(`/clients/${client.slug}`);
 }
 
 // ── Users / logins (coach-only) ──────────────────────────────────────────

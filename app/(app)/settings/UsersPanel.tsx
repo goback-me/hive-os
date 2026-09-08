@@ -3,6 +3,8 @@
 import { useFormState } from "react-dom";
 import { useState } from "react";
 import { createUser, deleteUser } from "@/lib/actions";
+import type { CreateClientState } from "@/lib/actions";
+import AddClientModal from "../clients/AddClientModal";
 
 type UserRow = {
   id: string;
@@ -25,17 +27,28 @@ async function createUserAction(_prev: CreateUserState, formData: FormData): Pro
   }
 }
 
-export default function UsersPanel({ users, clients }: { users: UserRow[]; clients: ClientOption[] }) {
+export default function UsersPanel({
+  users,
+  clients,
+  onCreateClient,
+}: {
+  users: UserRow[];
+  clients: ClientOption[];
+  onCreateClient: (prev: CreateClientState, formData: FormData) => Promise<CreateClientState>;
+}) {
   const [state, formAction] = useFormState(createUserAction, null);
   const [role, setRole] = useState<"CLIENT" | "COACH">("CLIENT");
 
   return (
     <section className="card rounded-2xl p-6">
-      <h3 className="font-heading font-bold text-lg mb-1" style={{ color: "var(--text-primary)" }}>
-        Users & logins
-      </h3>
+      <div className="flex items-start justify-between gap-3 mb-1">
+        <h3 className="font-heading font-bold text-lg" style={{ color: "var(--text-primary)" }}>
+          Users & logins
+        </h3>
+        <AddClientModal action={onCreateClient} />
+      </div>
       <p className="text-sm mb-4" style={{ color: "var(--text-secondary)" }}>
-        Coaches see every client. Client logins only ever see their own data.
+        Coaches see every client. Client logins only ever see their own data. Need a new client first? Use "Add Client" above.
       </p>
 
       <div className="space-y-2 mb-5">

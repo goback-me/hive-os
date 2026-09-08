@@ -1,19 +1,31 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useFormState } from "react-dom";
+import { useRouter } from "next/navigation";
 import { createPortal } from "react-dom";
+import type { CreateClientState } from "@/lib/actions";
 
 export default function AddClientModal({
   action,
-  programs,
 }: {
-  action: (formData: FormData) => Promise<void>;
-  programs: { id: string; name: string }[];
+  action: (prev: CreateClientState, formData: FormData) => Promise<CreateClientState>;
 }) {
   const [open, setOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
+  const [state, formAction] = useFormState(action, null);
+  const router = useRouter();
 
   useEffect(() => setMounted(true), []);
+
+  useEffect(() => {
+    if (state && "slug" in state) {
+      setOpen(false);
+      router.push(`/clients/${state.slug}`);
+    }
+  }, [state, router]);
+
+  const inputStyle = { width: "100%", background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" } as const;
 
   return (
     <>
@@ -43,47 +55,32 @@ export default function AddClientModal({
                 <span className="material-symbols-outlined">close</span>
               </button>
             </div>
-            <form action={action} className="p-5 space-y-4">
+            <form action={formAction} className="p-5 space-y-4">
+              {state && "error" in state && (
+                <div className="px-3 py-2.5 rounded-lg text-sm" style={{ background: "var(--danger-tint)", color: "var(--danger)" }}>
+                  {state.error}
+                </div>
+              )}
               <div>
-                <label className="text-xs font-semibold block mb-1" style={{ color: "var(--text-secondary)" }}>Client name</label>
-                <input
-                  name="name"
-                  required
-                  style={{ width: "100%", background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
-                  className="px-3 py-2 rounded-lg outline-none"
-                  placeholder="e.g. Sarah Chen"
-                />
+                <label className="text-xs font-semibold block mb-1" style={{ color: "var(--text-secondary)" }}>Client name *</label>
+                <input name="name" required style={inputStyle} className="px-3 py-2 rounded-lg outline-none" placeholder="e.g. Sarah Chen" />
               </div>
               <div>
                 <label className="text-xs font-semibold block mb-1" style={{ color: "var(--text-secondary)" }}>Description</label>
-                <input
-                  name="description"
-                  style={{ width: "100%", background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
-                  className="px-3 py-2 rounded-lg outline-none"
-                  placeholder="e.g. Tattoo artist marketing consulting"
-                />
+                <input name="description" style={inputStyle} className="px-3 py-2 rounded-lg outline-none" placeholder="e.g. Tattoo artist marketing consulting" />
               </div>
               <div>
-                <label className="text-xs font-semibold block mb-1" style={{ color: "var(--text-secondary)" }}>Program</label>
-                <select
-                  name="programId"
-                  style={{ width: "100%", background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
-                  className="px-3 py-2 rounded-lg outline-none"
-                >
-                  <option value="">No program</option>
-                  {programs.map((p) => (
-                    <option key={p.id} value={p.id}>{p.name}</option>
-                  ))}
-                </select>
+                <label className="text-xs font-semibold block mb-1" style={{ color: "var(--text-secondary)" }}>Scope</label>
+                <input name="scope" style={inputStyle} className="px-3 py-2 rounded-lg outline-none" placeholder="e.g. Paid ads management" />
+              </div>
+              <div>
+                <label className="text-xs font-semibold block mb-1" style={{ color: "var(--text-secondary)" }}>Google Drive link (optional)</label>
+                <input name="driveLink" style={inputStyle} className="px-3 py-2 rounded-lg outline-none" placeholder="https://drive.google.com/drive/folders/..." />
+                <p className="text-[11px] mt-1" style={{ color: "var(--text-muted)" }}>Sets up their Gameplan folder now — you can always add or change it later.</p>
               </div>
               <div>
                 <label className="text-xs font-semibold block mb-1" style={{ color: "var(--text-secondary)" }}>Status</label>
-                <select
-                  name="status"
-                  defaultValue="ONBOARDING"
-                  style={{ width: "100%", background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
-                  className="px-3 py-2 rounded-lg outline-none"
-                >
+                <select name="status" defaultValue="ONBOARDING" style={inputStyle} className="px-3 py-2 rounded-lg outline-none">
                   <option value="ONBOARDING">Onboarding</option>
                   <option value="ACTIVE">Active</option>
                   <option value="CHURNED">Churned</option>

@@ -38,6 +38,17 @@ html.fonts-loaded .material-symbols-outlined {
   --danger-tint: #fee2e2;
   --border: #D2D2D7;
   --border-strong: #B8B8BD;
+
+  /* A rotating palette for values we can't pick a color for ahead of time —
+     e.g. whatever a client's own sheet uses for a status column (LIVE
+     TRANSFER, Self booked, ...). Assigned deterministically by hashing the
+     string, see tagColor() in LeadsPanel.tsx. */
+  --tag-amber-bg: #FEF3C7; --tag-amber-fg: #92400E;
+  --tag-purple-bg: #EDE9FE; --tag-purple-fg: #6D28D9;
+  --tag-teal-bg: #CCFBF1; --tag-teal-fg: #0F766E;
+  --tag-pink-bg: #FCE7F3; --tag-pink-fg: #BE185D;
+  --tag-indigo-bg: #E0E7FF; --tag-indigo-fg: #4338CA;
+  --tag-green-bg: #D1FAE5; --tag-green-fg: #047857;
 }
 
 .dark {
@@ -55,6 +66,13 @@ html.fonts-loaded .material-symbols-outlined {
   --danger-tint: #3a1414;
   --border: #2C2C2E;
   --border-strong: #38383A;
+
+  --tag-amber-bg: #451a03; --tag-amber-fg: #FBBF24;
+  --tag-purple-bg: #2e1065; --tag-purple-fg: #C4B5FD;
+  --tag-teal-bg: #042f2e; --tag-teal-fg: #5EEAD4;
+  --tag-pink-bg: #500724; --tag-pink-fg: #F9A8D4;
+  --tag-indigo-bg: #1e1b4b; --tag-indigo-fg: #A5B4FC;
+  --tag-green-bg: #052e16; --tag-green-fg: #6EE7B7;
 }
 
 @theme {

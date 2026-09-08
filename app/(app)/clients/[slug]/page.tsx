@@ -10,11 +10,14 @@ import {
   createProgressNote,
   syncClientLeads,
   updateLeadStatus,
+  addLeadNote,
+  getOrCreateClientReferralLink,
 } from "@/lib/actions";
 import { requireClientAccess } from "@/lib/auth";
 import { checkAndGrantAwards } from "@/lib/awards";
 import { LEAD_STATUS_LABELS, LEAD_STATUS_STYLE } from "@/lib/lead-status";
 import { getClientCampaignFunnel } from "@/lib/lead-sync";
+import { getMetaAllCampaigns } from "@/lib/meta-ads";
 import LeadsPanel from "@/components/LeadsPanel";
 import ClientTabsShell from "@/components/ClientTabsShell";
 import OnboardingChecklist from "@/components/OnboardingChecklist";
@@ -22,6 +25,8 @@ import GameplanPanel from "@/components/GameplanPanel";
 import PlaybooksPanel from "@/components/PlaybooksPanel";
 import AdsPanel from "@/components/AdsPanel";
 import AwardsPanel from "@/components/AwardsPanel";
+import ProgressNotesPanel from "@/components/ProgressNotesPanel";
+import ClientReferralPanel from "@/components/ClientReferralPanel";
 import MetaAdsCard from "@/components/MetaAdsCard";
 
 // Forces this page to render fresh on every single request — no static
@@ -63,8 +68,8 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
     progressNotes,
     clientSheet,
   ] = await Promise.all([
-    prisma.payment.aggregate({ _sum: { amountDue: true }, where: { clientId: client.id, status: "PAID", paidDate: { gte: monthStart } } }),
-    prisma.payment.aggregate({ _sum: { amountDue: true }, where: { clientId: client.id, status: "PAID" } }),
+    prisma.revenueMonthly.aggregate({ _sum: { amount: true }, where: { clientId: client.id, month: monthStart } }),
+    prisma.revenueMonthly.aggregate({ _sum: { amount: true }, where: { clientId: client.id } }),
     prisma.onboardingStepTemplate.findMany({ orderBy: { order: "asc" } }),
     prisma.clientOnboardingStep.findMany({ where: { clientId: client.id } }),
     prisma.module.findMany({ orderBy: { order: "asc" }, include: { lessons: { orderBy: { order: "asc" } } } }),
@@ -79,8 +84,22 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
 
   const campaignFunnel = await getClientCampaignFunnel(client.id);
 
-  const revThisMonth = Number(revenueThisMonth._sum.amountDue ?? 0);
-  const lifetimeRevenue = Number(lifetimeRevenueAgg._sum.amountDue ?? 0);
+  // Lazily provisions a referral link for clients that existed before this
+  // feature — new clients already get one at creation (see createClient).
+  const referralLink = await getOrCreateClientReferralLink(client.id, client.name);
+  const referrals = await prisma.referral.findMany({ where: { referralLinkId: referralLink.id }, orderBy: { createdAt: "desc" } });
+
+  // Once Meta's connected, its live campaign list (active + paused/ended,
+  // all-time spend) replaces the old manually-typed AdCampaign rows on the
+  // Ads tab — one source of truth instead of two numbers that never agree.
+  // Falls back to the manual rows if the call fails (e.g. an expired token).
+  const metaCampaigns =
+    client.metaAdAccountId && client.metaAccessToken
+      ? await getMetaAllCampaigns(client.metaAdAccountId, client.metaAccessToken).catch(() => null)
+      : null;
+
+  const revThisMonth = Number(revenueThisMonth._sum.amount ?? 0);
+  const lifetimeRevenue = Number(lifetimeRevenueAgg._sum.amount ?? 0);
   const totalSpend = campaigns.reduce((s, c) => s + Number(c.spend), 0);
   const profit = revThisMonth - totalSpend;
 
@@ -135,40 +154,11 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
             )}
           </div>
 
-          <div className="card rounded-2xl p-5">
-            <p className="text-sm font-semibold mb-4" style={{ color: "var(--text-primary)" }}>Progress Notes</p>
-            {progressNotes.length === 0 ? (
-              <p className="text-sm mb-4" style={{ color: "var(--text-secondary)" }}>No notes yet — add one after a session.</p>
-            ) : (
-              <div className="space-y-4 mb-4">
-                {progressNotes.map((n) => (
-                  <div key={n.id} className="flex gap-3">
-                    <span className="icon-chip w-8 h-8 shrink-0" style={{ background: "var(--primary-tint)" }}>
-                      <span className="material-symbols-outlined text-[16px]" style={{ color: "var(--primary)" }}>edit_note</span>
-                    </span>
-                    <div className="min-w-0">
-                      <p className="text-sm" style={{ color: "var(--text-primary)" }}>{n.note}</p>
-                      <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
-                        {n.createdBy} · {n.createdAt.toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-                      </p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-            <form action={createProgressNote.bind(null, client.id)} className="flex gap-2 pt-3" style={{ borderTop: "1px solid var(--border)" }}>
-              <input
-                name="note"
-                required
-                placeholder="Add a note…"
-                style={{ flex: 1, background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
-                className="px-3 py-2 rounded-lg outline-none text-sm"
-              />
-              <button type="submit" className="px-4 py-2 rounded-lg text-sm font-bold" style={{ background: "var(--primary)", color: "#fff" }}>
-                Add
-              </button>
-            </form>
-          </div>
+          <ProgressNotesPanel
+            clientId={client.id}
+            initialNotes={progressNotes.map((n) => ({ id: n.id, note: n.note, createdBy: n.createdBy, createdAt: n.createdAt.toISOString() }))}
+            onAddNote={createProgressNote}
+          />
         </div>
 
         {/* Side column — who they are + how close to the next milestone */}
@@ -177,6 +167,7 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
             <p className="text-sm font-semibold mb-4" style={{ color: "var(--text-primary)" }}>Client Details</p>
             <dl className="space-y-3 text-sm">
               <DetailRow icon="mail" label="Email" value={client.email ?? "—"} />
+              {client.scope && <DetailRow icon="task_alt" label="Scope" value={client.scope} />}
               <DetailRow icon="school" label="Program" value={client.program?.name ?? "—"} />
               <DetailRow icon="calendar_today" label="Joined" value={client.joinedAt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })} />
             </dl>
@@ -249,17 +240,22 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
   const adsContent = (
     <div className="space-y-6">
       <AdsPanel
-        campaigns={campaigns.map((c) => ({
-          id: c.id,
-          name: c.name,
-          status: c.status,
-          spend: Number(c.spend),
-          impressions: c.impressions,
-          profileVisits: c.profileVisits,
-          engagement: c.engagement,
-          saves: c.saves,
-          syncedAt: c.syncedAt?.toISOString() ?? null,
-        }))}
+        source={metaCampaigns ? "meta" : "manual"}
+        campaigns={
+          metaCampaigns
+            ? metaCampaigns.map((c) => ({ id: c.id, name: c.name, status: c.status, spend: c.spend, impressions: c.impressions, clicks: c.clicks }))
+            : campaigns.map((c) => ({
+                id: c.id,
+                name: c.name,
+                status: c.status,
+                spend: Number(c.spend),
+                impressions: c.impressions,
+                profileVisits: c.profileVisits,
+                engagement: c.engagement,
+                saves: c.saves,
+                syncedAt: c.syncedAt?.toISOString() ?? null,
+              }))
+        }
       />
       {/* Hive OS — Meta Marketing API connection for this client, merged in
           alongside Coach OS's own manually-tracked AdCampaign rows above. */}
@@ -267,11 +263,20 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
     </div>
   );
 
+  const earnedAtByTierId = new Map(clientAwards.map((a) => [a.awardTierId, a.earnedAt.toISOString()]));
   const awardsContent = (
     <AwardsPanel
       tiers={awardTiers.map((t) => ({ id: t.id, name: t.name, subtitle: t.subtitle, thresholdRevenue: t.thresholdRevenue ? Number(t.thresholdRevenue) : null }))}
       earnedTierIds={clientAwards.map((a) => a.awardTierId)}
+      earnedAtByTierId={Object.fromEntries(earnedAtByTierId)}
       lifetimeRevenue={lifetimeRevenue}
+    />
+  );
+
+  const referralsContent = (
+    <ClientReferralPanel
+      code={referralLink.code}
+      referrals={referrals.map((r) => ({ id: r.id, name: r.name, stage: r.stage, createdAt: r.createdAt.toISOString() }))}
     />
   );
 
@@ -283,6 +288,7 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
       funnel={campaignFunnel}
       onSync={syncClientLeads}
       onUpdateStatus={updateLeadStatus}
+      onAddNote={addLeadNote}
     />
   );
 
@@ -320,6 +326,7 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
           { key: "playbooks", label: "Playbooks", content: playbooksContent },
           { key: "ads", label: "Ads", content: adsContent },
           { key: "awards", label: "Awards", content: awardsContent },
+          { key: "referrals", label: "Referrals", content: referralsContent },
         ]}
       />
     </div>

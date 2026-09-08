@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import Link from "next/link";
 
 type Referral = {
   id: string;
@@ -9,6 +10,8 @@ type Referral = {
   note: string | null;
   stage: string;
   createdAt: string;
+  clientName: string | null;
+  clientSlug: string | null;
 };
 
 const STAGES: { key: string; label: string; color: string }[] = [
@@ -92,7 +95,18 @@ export default function ReferralBoard({
                   style={{ opacity: dragId === r.id ? 0.4 : 1 }}
                 >
                   <p className="font-semibold text-sm" style={{ color: "var(--text-primary)" }}>{r.name}</p>
-                  {r.source && <p className="text-xs" style={{ color: "var(--text-secondary)" }}>{r.source}</p>}
+                  {r.clientName && r.clientSlug && (
+                    <Link
+                      href={`/clients/${r.clientSlug}`}
+                      onClick={(e) => e.stopPropagation()}
+                      className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full mt-1"
+                      style={{ background: "var(--primary-tint)", color: "var(--primary)" }}
+                    >
+                      <span className="material-symbols-outlined text-[11px]">share</span>
+                      via {r.clientName}
+                    </Link>
+                  )}
+                  {r.source && <p className="text-xs mt-1" style={{ color: "var(--text-secondary)" }}>{r.source}</p>}
                   {r.note && (
                     <p className="text-xs mt-1 flex items-start gap-1" style={{ color: "var(--text-muted)" }}>
                       <span className="material-symbols-outlined text-[13px] mt-[1px]">group</span>

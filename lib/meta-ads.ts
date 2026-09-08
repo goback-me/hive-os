@@ -105,3 +105,38 @@ export async function getMetaCampaignInsights(
     clicks: Number(row.clicks ?? 0),
   }));
 }
+
+export type MetaCampaign = { id: string; name: string; status: string; spend: number; impressions: number; clicks: number };
+
+// Every campaign that's ever existed in the account — active, paused, or
+// archived — with its lifetime spend, so the Ads tab can show campaigns
+// beyond whatever's active right now and a lead's `campaign` text can be
+// matched against something that still exists in the list. Insights only
+// cover campaigns with at least some historical spend/activity; a brand new
+// campaign with nothing spent yet just shows $0 rather than being dropped.
+export async function getMetaAllCampaigns(adAccountId: string, encryptedAccessToken: string): Promise<MetaCampaign[]> {
+  const accessToken = decryptToken(encryptedAccessToken);
+
+  const [campaignsRes, insights] = await Promise.all([
+    fetch(
+      `https://graph.facebook.com/v21.0/${adAccountId}/campaigns?fields=id,name,effective_status&limit=500&access_token=${encodeURIComponent(accessToken)}`,
+      { cache: "no-store" }
+    ).then((r) => r.json()),
+    getMetaCampaignInsights(adAccountId, encryptedAccessToken), // no dateRange => date_preset=maximum (full account history)
+  ]);
+  if (campaignsRes.error) throw new Error(campaignsRes.error.message ?? "Meta API request failed");
+
+  const insightsByCampaignId = new Map(insights.map((i) => [i.campaignId, i]));
+
+  return (campaignsRes.data ?? []).map((c: any) => {
+    const insight = insightsByCampaignId.get(c.id);
+    return {
+      id: c.id,
+      name: c.name,
+      status: c.effective_status ?? "UNKNOWN",
+      spend: insight?.spend ?? 0,
+      impressions: insight?.impressions ?? 0,
+      clicks: insight?.clicks ?? 0,
+    };
+  });
+}

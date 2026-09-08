@@ -11,8 +11,14 @@ export default async function ReferralsPage() {
   await requireCoach(); // agency-wide referral pipeline, not client-visible
 
   const [referrals, links] = await Promise.all([
-    prisma.referral.findMany({ orderBy: { createdAt: "desc" } }),
-    prisma.referralLink.findMany({ orderBy: { createdAt: "desc" } }),
+    prisma.referral.findMany({
+      orderBy: { createdAt: "desc" },
+      include: { referralLink: { include: { client: { select: { name: true, slug: true } } } } },
+    }),
+    // The board's "create a link" form is for agency-generic links only —
+    // a client's own referral link is auto-provisioned (see
+    // getOrCreateClientReferralLink) and managed from their own tab instead.
+    prisma.referralLink.findMany({ where: { clientId: null }, orderBy: { createdAt: "desc" } }),
   ]);
 
   const referralData = referrals.map((r) => ({
@@ -22,6 +28,8 @@ export default async function ReferralsPage() {
     note: r.note,
     stage: r.stage,
     createdAt: r.createdAt.toISOString(),
+    clientName: r.referralLink?.client?.name ?? null,
+    clientSlug: r.referralLink?.client?.slug ?? null,
   }));
 
   return (

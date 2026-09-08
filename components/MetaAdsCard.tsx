@@ -1,16 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
-
-type Insights = {
-  spend: number;
-  impressions: number;
-  clicks: number;
-  cpm: number;
-  ctr: number;
-  conversions: number;
-  costPerConversion: number | null;
-};
+import { useState } from "react";
 
 export default function MetaAdsCard({
   clientId,
@@ -26,27 +16,6 @@ export default function MetaAdsCard({
   const [inputToken, setInputToken] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  const [insights, setInsights] = useState<Insights | null>(null);
-  const [loading, setLoading] = useState(false);
-
-  function loadInsights() {
-    setLoading(true);
-    setError(null);
-    fetch(`/api/meta/insights?clientId=${clientId}`)
-      .then((r) => r.json())
-      .then((data) => {
-        if (data.error) throw new Error(data.error);
-        setInsights(data);
-      })
-      .catch((e) => setError(e.message))
-      .finally(() => setLoading(false));
-  }
-
-  useEffect(() => {
-    if (connected && !showForm) loadInsights();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connected, showForm]);
 
   function save() {
     if (!inputAccountId || !inputToken) return;
@@ -149,20 +118,18 @@ export default function MetaAdsCard({
 
       {connected && !showForm && (
         <div>
-          <p className="text-xs mb-3" style={{ color: "var(--text-secondary)" }}>{adAccountId} · last 30 days</p>
-
-          {loading && <p className="text-sm" style={{ color: "var(--text-secondary)" }}>Loading…</p>}
-
-          {insights && !loading && (
-            <div className="grid grid-cols-2 gap-3 mb-3">
-              <Metric label="Spend" value={`$${insights.spend.toLocaleString()}`} />
-              <Metric label="Conversions" value={String(insights.conversions)} />
-              <Metric label="Cost / conversion" value={insights.costPerConversion ? `$${insights.costPerConversion.toFixed(2)}` : "—"} />
-              <Metric label="CTR" value={`${insights.ctr.toFixed(2)}%`} />
-              <Metric label="Impressions" value={insights.impressions.toLocaleString()} />
-              <Metric label="Clicks" value={insights.clicks.toLocaleString()} />
+          <div className="flex items-center gap-3 p-3 rounded-xl mb-4" style={{ background: "var(--surface-hover)" }}>
+            <span className="icon-chip w-10 h-10 shrink-0" style={{ background: "var(--primary-tint)" }}>
+              <span className="material-symbols-outlined text-[20px]" style={{ color: "var(--primary)" }}>campaign</span>
+            </span>
+            <div className="min-w-0">
+              <p className="text-sm font-semibold truncate" style={{ color: "var(--text-primary)" }}>{adAccountId}</p>
+              <p className="text-xs flex items-center gap-1.5" style={{ color: "var(--text-secondary)" }}>
+                <span className="w-1.5 h-1.5 rounded-full" style={{ background: "var(--primary)" }} />
+                Live — full campaign breakdown is on the Ads tab above
+              </p>
             </div>
-          )}
+          </div>
 
           <div className="flex gap-2">
             <button
@@ -189,15 +156,6 @@ export default function MetaAdsCard({
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <p className="text-xs" style={{ color: "var(--text-secondary)" }}>{label}</p>
-      <p className="font-heading font-bold text-lg" style={{ color: "var(--text-primary)" }}>{value}</p>
     </div>
   );
 }

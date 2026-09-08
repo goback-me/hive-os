@@ -249,6 +249,13 @@ model Lead {
   status    LeadStatus @default(NEW_LEAD)
   value     Decimal?   @db.Decimal(10, 2)
 
+  // The literal, unmapped status text straight from the sheet's status
+  // column (e.g. "LIVE TRANSFER", "Self booked") — kept separately from
+  // `status` (our fixed 6-stage pipeline) so leads are filterable by
+  // whatever the sheet actually says even before (or without) a client
+  // configuring the statusMapping on ClientSheet.
+  sheetStatus String?
+
   // Stable identity across repeated syncs (normalized email/phone/name) —
   // no DB-level unique constraint; matched via findFirst in lib/lead-sync.ts.
   externalKey         String?
@@ -268,13 +275,31 @@ model Lead {
 
   createdAt DateTime @default(now())
   activity  LeadActivity[]
+  notes     LeadNote[]
 
   @@index([clientId, createdAt])
   @@index([clientId, externalKey])
 }
 
-// Audit trail for manual status changes only (sync-assigned status on first
-// ingest isn't logged here — that's routine ingestion, not an "activity").
+// Free-text follow-up notes on an individual lead — separate from
+// ProgressNote (which is per-client, for the coaching relationship overall).
+// A coach or the lead's own client can add one; shown in the lead detail
+// popup alongside its status history.
+model LeadNote {
+  id        String   @id @default(cuid())
+  leadId    String
+  lead      Lead     @relation(fields: [leadId], references: [id])
+  note      String
+  createdBy String
+  createdAt DateTime @default(now())
+
+  @@index([leadId, createdAt])
+}
+
+// Full status-change history: manual edits (lib/actions.ts) AND a sheet
+// re-sync moving an existing, non-manually-owned lead to a new stage
+// (lib/lead-sync.ts). The one thing NOT logged here is a brand-new lead's
+// very first status on creation — that's routine ingestion, not a "change".
 // Powers the "Activity" list in a lead's expanded detail row.
 model LeadActivity {
   id         String     @id @default(cuid())
@@ -377,6 +402,11 @@ model ReferralLink {
   id        String     @id @default(cuid())
   code      String     @unique
   label     String
+  // Set for a client's own unique referral link (auto-created — see
+  // getOrCreateClientReferralLink in lib/actions.ts); null for the
+  // agency-generic links the coach creates for their own bio/DMs.
+  clientId  String?    @unique
+  client    Client?    @relation(fields: [clientId], references: [id])
   createdAt DateTime   @default(now())
   referrals Referral[]
 }
@@ -412,6 +442,7 @@ model Client {
   status      ClientStatus @default(ONBOARDING)
   goals       String?
   description String?
+  scope       String? // free-text scope of engagement, e.g. "Paid ads management" — replaces the fixed Program picker on the create-client form
   programId   String?
   program     Program?     @relation(fields: [programId], references: [id])
   joinedAt    DateTime     @default(now())
@@ -443,6 +474,7 @@ model Client {
   revenueMonthly   RevenueMonthly[]
   leads            Lead[]
   clientSheet      ClientSheet?
+  referralLink     ReferralLink?
 }
 
 model Session {

@@ -31,6 +31,12 @@ function parseMoney(v: string | undefined): number | null {
   return Number.isFinite(n) && n !== 0 ? n : null;
 }
 
+function parseDate(v: string | undefined): Date | null {
+  if (!v) return null;
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
 export type SyncSummary = { total: number; created: number; updated: number };
 
 // Pulls the client's assigned sheet (read-only, always) and upserts each row
@@ -55,6 +61,7 @@ export async function syncLeadsFromSheet(clientId: string): Promise<SyncSummary>
   const adsetIdx = findColumn(headers, ["adset", "ad set"]);
   const revenueIdx = findColumn(headers, ["revenue generated", "revenue"]);
   const quoteIdx = findColumn(headers, ["quote value", "quote"]);
+  const dateOptInIdx = findColumn(headers, ["date opt in", "opt in"]);
 
   let created = 0;
   let updated = 0;
@@ -68,16 +75,25 @@ export async function syncLeadsFromSheet(clientId: string): Promise<SyncSummary>
     if (!identitySource?.trim()) continue;
     const externalKey = normalizeIdentity(`${email}|${phone}|${name}`);
 
-    const rawStatus = statusColIdx !== -1 ? row[statusColIdx] : "";
+    const rawStatus = statusColIdx !== -1 ? row[statusColIdx] ?? "" : "";
     const mappedStatus: LeadStatusValue = LEAD_STATUSES.includes(statusMapping[rawStatus] as LeadStatusValue)
       ? (statusMapping[rawStatus] as LeadStatusValue)
       : "NEW_LEAD";
 
-    const value = parseMoney(revenueIdx !== -1 ? row[revenueIdx] : undefined) ?? parseMoney(quoteIdx !== -1 ? row[quoteIdx] : undefined);
+    // Quote Value takes priority — Revenue Generated is only a fallback for
+    // once the deal actually closes and a quote was never logged.
+    const value = parseMoney(quoteIdx !== -1 ? row[quoteIdx] : undefined) ?? parseMoney(revenueIdx !== -1 ? row[revenueIdx] : undefined);
+
+    // The real-world date this lead came in — NOT when our app happened to
+    // sync it. Without this, a bulk first-time sync of months-old leads
+    // would stamp every single one with today's date, silently corrupting
+    // month-attribution, the activity timeline, and time-to-convert. Only
+    // set when the sheet actually has a parseable value — never invent one.
+    const dateOptIn = parseDate(dateOptInIdx !== -1 ? row[dateOptInIdx] : undefined);
 
     // Everything else — every header not otherwise mapped — goes into `raw`
     // for display only, keyed by its actual header text.
-    const mappedIdx = new Set([nameIdx, phoneIdx, emailIdx, sourceIdx, campaignIdx, adsetIdx, revenueIdx, quoteIdx, statusColIdx]);
+    const mappedIdx = new Set([nameIdx, phoneIdx, emailIdx, sourceIdx, campaignIdx, adsetIdx, revenueIdx, quoteIdx, statusColIdx, dateOptInIdx]);
     const raw: Record<string, string> = {};
     headers.forEach((h, i) => {
       if (!mappedIdx.has(i) && h) raw[h] = row[i] ?? "";
@@ -92,6 +108,8 @@ export async function syncLeadsFromSheet(clientId: string): Promise<SyncSummary>
       source: sourceIdx !== -1 ? row[sourceIdx] || null : null,
       campaign: campaignIdx !== -1 ? row[campaignIdx] || null : null,
       adset: adsetIdx !== -1 ? row[adsetIdx] || null : null,
+      ...(dateOptIn ? { createdAt: dateOptIn } : {}),
+      sheetStatus: rawStatus.trim() || null,
       value,
       raw,
       lastSyncedAt: new Date(),
@@ -101,6 +119,7 @@ export async function syncLeadsFromSheet(clientId: string): Promise<SyncSummary>
       // Respect a manual override — only apply the sheet's status (and the
       // stage timestamps that come with it) if nobody has manually touched
       // this lead's status yet.
+      const statusChanging = !existing.statusManuallySetAt && mappedStatus !== existing.status;
       const statusPatch = existing.statusManuallySetAt
         ? {}
         : { status: mappedStatus, ...stageTimestampPatch(existing, mappedStatus) };
@@ -108,6 +127,20 @@ export async function syncLeadsFromSheet(clientId: string): Promise<SyncSummary>
         where: { id: existing.id },
         data: { ...baseData, ...statusPatch },
       });
+      // A re-sync moving an existing lead to a new stage IS a real status
+      // transition worth a history entry — only the very first status a
+      // lead gets on creation (below) is routine ingestion, not a "change".
+      if (statusChanging) {
+        await prisma.leadActivity.create({
+          data: {
+            leadId: existing.id,
+            fromStatus: existing.status,
+            toStatus: mappedStatus,
+            value,
+            changedBy: "Sheet sync",
+          },
+        });
+      }
       updated++;
     } else {
       const emptyStages = { chaseUpAt: null, contactedAt: null, closedAt: null };
@@ -126,10 +159,43 @@ export type CampaignFunnelRow = {
   total: number;
   contacted: number; // CLIENT_CONTACTED or later (WON/LOST/DISQUALIFIED all imply contact happened)
   won: number;
-  lostOrDisqualified: number;
+  lost: number;
+  disqualified: number;
+  lostOrDisqualified: number; // won + lost convenience total, kept for the existing "Lost/DQ" stat
+  closedTotal: number; // won + lost + disqualified — the denominator for the rates below
+  winRate: number | null; // % of CLOSED leads that were won (null when nothing's closed yet)
+  lossRate: number | null;
+  disqualifiedRate: number | null;
+  avgDaysToConvert: number | null; // avg calendar days from createdAt to closedAt, WON leads only
   spend: number | null;
   spendSource: "meta" | "manual" | null;
 };
+
+function campaignKey(campaign: string | null) {
+  return campaign?.trim() || "Unattributed";
+}
+
+// Average days from lead creation to WON, grouped by campaign — a separate
+// raw-SQL aggregate (like getClientLeadTimeSeries's bucketCounts below)
+// since Prisma's groupBy can't average a computed date difference.
+async function getCampaignAvgDaysToConvert(
+  clientId: string,
+  dateRange?: { from?: Date; to?: Date }
+): Promise<Map<string, number>> {
+  const fromClause = dateRange?.from ? Prisma.sql`AND "createdAt" >= ${dateRange.from}` : Prisma.empty;
+  const toClause = dateRange?.to ? Prisma.sql`AND "createdAt" < ${dateRange.to}` : Prisma.empty;
+
+  const rows = await prisma.$queryRaw<{ campaign: string; avg_days: number | null }[]>`
+    SELECT COALESCE(NULLIF(TRIM(campaign), ''), 'Unattributed') AS campaign,
+           AVG(EXTRACT(EPOCH FROM ("closedAt" - "createdAt")) / 86400) AS avg_days
+    FROM "Lead"
+    WHERE "clientId" = ${clientId} AND status = 'WON' AND "closedAt" IS NOT NULL
+      ${fromClause}
+      ${toClause}
+    GROUP BY 1
+  `;
+  return new Map(rows.filter((r) => r.avg_days != null).map((r) => [r.campaign, Number(r.avg_days)]));
+}
 
 // Groups this client's synced leads by campaign and joins in spend — Meta's
 // live per-campaign breakdown if connected, else the matching AdCampaign row
@@ -150,10 +216,11 @@ export async function getClientCampaignFunnel(
       ? { ...(dateRange.from ? { gte: dateRange.from } : {}), ...(dateRange.to ? { lt: dateRange.to } : {}) }
       : undefined;
 
-  const [grouped, client, adCampaigns] = await Promise.all([
+  const [grouped, client, adCampaigns, avgDaysByCampaign] = await Promise.all([
     prisma.lead.groupBy({ by: ["campaign", "status"], where: { clientId, ...(createdAt ? { createdAt } : {}) }, _count: true }),
     prisma.client.findUnique({ where: { id: clientId } }),
     prisma.adCampaign.findMany({ where: { clientId } }),
+    getCampaignAvgDaysToConvert(clientId, dateRange),
   ]);
 
   let metaSpendByName: Map<string, number> | null = null;
@@ -168,23 +235,31 @@ export async function getClientCampaignFunnel(
 
   const manualSpendByName = new Map(adCampaigns.map((c) => [c.name.toLowerCase().trim(), Number(c.spend)]));
 
-  const byCampaign = new Map<string, { campaign: string; total: number; contacted: number; won: number; lostOrDisqualified: number }>();
+  const byCampaign = new Map<string, { campaign: string; total: number; contacted: number; won: number; lost: number; disqualified: number }>();
   for (const g of grouped) {
-    const key = g.campaign?.trim() || "Unattributed";
-    if (!byCampaign.has(key)) byCampaign.set(key, { campaign: key, total: 0, contacted: 0, won: 0, lostOrDisqualified: 0 });
+    const key = campaignKey(g.campaign);
+    if (!byCampaign.has(key)) byCampaign.set(key, { campaign: key, total: 0, contacted: 0, won: 0, lost: 0, disqualified: 0 });
     const row = byCampaign.get(key)!;
     row.total += g._count;
     if (g.status !== "NEW_LEAD" && g.status !== "CHASE_UP") row.contacted += g._count;
     if (g.status === "WON") row.won += g._count;
-    if (g.status === "LOST" || g.status === "DISQUALIFIED") row.lostOrDisqualified += g._count;
+    if (g.status === "LOST") row.lost += g._count;
+    if (g.status === "DISQUALIFIED") row.disqualified += g._count;
   }
 
   return Array.from(byCampaign.values()).map((row) => {
     const key = row.campaign.toLowerCase().trim();
     const metaSpend = metaSpendByName?.get(key);
     const manualSpend = manualSpendByName.get(key);
+    const closedTotal = row.won + row.lost + row.disqualified;
     return {
       ...row,
+      lostOrDisqualified: row.lost + row.disqualified,
+      closedTotal,
+      winRate: closedTotal > 0 ? (row.won / closedTotal) * 100 : null,
+      lossRate: closedTotal > 0 ? (row.lost / closedTotal) * 100 : null,
+      disqualifiedRate: closedTotal > 0 ? (row.disqualified / closedTotal) * 100 : null,
+      avgDaysToConvert: avgDaysByCampaign.get(row.campaign) ?? null,
       spend: metaSpend ?? manualSpend ?? null,
       spendSource: metaSpend !== undefined ? "meta" : manualSpend !== undefined ? "manual" : null,
     };

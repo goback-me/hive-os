@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { LEAD_STATUSES, LEAD_STATUS_LABELS, LEAD_STATUS_STYLE, type LeadStatusValue } from "@/lib/lead-status";
 import type { SyncSummary, CampaignFunnelRow } from "@/lib/lead-sync";
@@ -16,8 +16,10 @@ type LeadRow = {
   source: string | null;
   campaign: string | null;
   status: LeadStatusValue;
+  sheetStatus: string | null;
   value: number | null;
   raw: Record<string, string> | null;
+  createdAt: string;
   lastSyncedAt: string | null;
 };
 
@@ -30,7 +32,45 @@ type ActivityRow = {
   changedAt: string;
 };
 
+type NoteRow = {
+  id: string;
+  note: string;
+  createdBy: string;
+  createdAt: string;
+};
+
+type JourneyEntry =
+  | { kind: "created"; at: string }
+  | { kind: "note"; id: string; at: string; note: string; by: string }
+  | { kind: "status"; id: string; at: string; from: LeadStatusValue; to: LeadStatusValue; value: number | null; by: string };
+
 const PAGE_SIZE = 25;
+
+function displayCampaignName(name: string) {
+  const trimmed = name.trim();
+  return !trimmed || trimmed === "-" ? "Unattributed" : trimmed;
+}
+
+// A deterministic color for a value we can't know ahead of time (whatever a
+// client's own sheet uses for its status column) — same string always gets
+// the same color, picked from a small palette defined in globals.css.
+const TAG_COLORS = ["amber", "purple", "teal", "pink", "indigo", "green"] as const;
+function tagColor(value: string) {
+  let hash = 0;
+  for (let i = 0; i < value.length; i++) hash = (hash * 31 + value.charCodeAt(i)) | 0;
+  const name = TAG_COLORS[Math.abs(hash) % TAG_COLORS.length];
+  return { bg: `var(--tag-${name}-bg)`, fg: `var(--tag-${name}-fg)` };
+}
+
+function SheetStatusBadge({ value }: { value: string | null }) {
+  if (!value) return <span className="text-xs" style={{ color: "var(--text-muted)" }}>—</span>;
+  const { bg, fg } = tagColor(value);
+  return (
+    <span className="px-2 py-1 rounded-full text-xs font-bold whitespace-nowrap" style={{ background: bg, color: fg }}>
+      {value}
+    </span>
+  );
+}
 
 export default function LeadsPanel({
   clientId,
@@ -39,6 +79,7 @@ export default function LeadsPanel({
   funnel: initialFunnel,
   onSync,
   onUpdateStatus,
+  onAddNote,
 }: {
   clientId: string;
   viewerRole: "COACH" | "CLIENT";
@@ -46,8 +87,11 @@ export default function LeadsPanel({
   funnel: CampaignFunnelRow[];
   onSync: (clientId: string) => Promise<SyncSummary>;
   onUpdateStatus: (leadId: string, status: string, value?: number) => Promise<void>;
+  onAddNote: (leadId: string, formData: FormData) => Promise<void>;
 }) {
   const isCoach = viewerRole === "COACH";
+
+  const [activeSubTab, setActiveSubTab] = useState<"leads" | "campaigns">("leads");
 
   const [dateRange, setDateRange] = useState<DateRangePreset>("maximum");
   const [funnel, setFunnel] = useState(initialFunnel);
@@ -57,33 +101,87 @@ export default function LeadsPanel({
 
   const [leads, setLeads] = useState<LeadRow[]>([]);
   const [total, setTotal] = useState(0);
+  const [statusCounts, setStatusCounts] = useState<Record<LeadStatusValue, number>>(
+    () => Object.fromEntries(LEAD_STATUSES.map((s) => [s, 0])) as Record<LeadStatusValue, number>
+  );
   const [page, setPage] = useState(1);
   const [statusFilter, setStatusFilter] = useState<LeadStatusValue | "">("");
+  const [sheetStatusFilter, setSheetStatusFilter] = useState<string | null>(null);
+  const [sheetStatusCounts, setSheetStatusCounts] = useState<Record<string, number>>({});
+  const [campaignFilter, setCampaignFilter] = useState<string | null>(null);
   const [loadingLeads, setLoadingLeads] = useState(false);
 
   const [syncing, setSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  const [detailLeadId, setDetailLeadId] = useState<string | null>(null);
   const [activityByLead, setActivityByLead] = useState<Record<string, ActivityRow[]>>({});
   const [loadingActivity, setLoadingActivity] = useState<string | null>(null);
+  const [notesByLead, setNotesByLead] = useState<Record<string, NoteRow[]>>({});
+  const [loadingNotes, setLoadingNotes] = useState<string | null>(null);
+  const [noteDraft, setNoteDraft] = useState("");
+  const [savingNote, setSavingNote] = useState(false);
+
   const [pendingChange, setPendingChange] = useState<{ lead: LeadRow; status: LeadStatusValue } | null>(null);
   const [pendingValue, setPendingValue] = useState("");
   const [, startTransition] = useTransition();
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const allStatusCount = useMemo(() => Object.values(statusCounts).reduce((a, b) => a + b, 0), [statusCounts]);
+  // Every distinct raw value the sheet's status column has for this client —
+  // "__none__" (no status column configured, or a blank cell) sorts last.
+  const sheetStatusValues = useMemo(
+    () => Object.keys(sheetStatusCounts).filter((k) => k !== "__none__").sort(),
+    [sheetStatusCounts]
+  );
+  const sortedFunnel = useMemo(() => [...funnel].sort((a, b) => b.total - a.total), [funnel]);
+  const detailLead = detailLeadId ? leads.find((l) => l.id === detailLeadId) ?? null : null;
+
+  const journey = useMemo((): JourneyEntry[] => {
+    if (!detailLead) return [];
+    const notes: JourneyEntry[] = (notesByLead[detailLead.id] ?? []).map((n) => ({ kind: "note", id: n.id, at: n.createdAt, note: n.note, by: n.createdBy }));
+    const statuses: JourneyEntry[] = (activityByLead[detailLead.id] ?? []).map((a) => ({ kind: "status", id: a.id, at: a.changedAt, from: a.fromStatus, to: a.toStatus, value: a.value, by: a.changedBy }));
+    const created: JourneyEntry[] = [{ kind: "created", at: detailLead.createdAt }];
+    return [...notes, ...statuses, ...created].sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
+  }, [detailLead, notesByLead, activityByLead]);
+
+  // Client-level rollup of every campaign's numbers — avg time-to-convert is
+  // weighted by each campaign's won count so one small campaign with a single
+  // fast win can't skew the overall figure as much as a big one.
+  const overall = useMemo(() => {
+    const won = funnel.reduce((s, r) => s + r.won, 0);
+    const lost = funnel.reduce((s, r) => s + r.lost, 0);
+    const disqualified = funnel.reduce((s, r) => s + r.disqualified, 0);
+    const closedTotal = won + lost + disqualified;
+    const weightedDaysSum = funnel.reduce((s, r) => s + (r.avgDaysToConvert ?? 0) * r.won, 0);
+    return {
+      won,
+      lost,
+      disqualified,
+      closedTotal,
+      winRate: closedTotal > 0 ? (won / closedTotal) * 100 : null,
+      lossRate: closedTotal > 0 ? (lost / closedTotal) * 100 : null,
+      disqualifiedRate: closedTotal > 0 ? (disqualified / closedTotal) * 100 : null,
+      avgDaysToConvert: won > 0 ? weightedDaysSum / won : null,
+    };
+  }, [funnel]);
 
   function loadLeads() {
     if (!hasSheet) return;
     setLoadingLeads(true);
     const params = new URLSearchParams({ clientId, page: String(page), pageSize: String(PAGE_SIZE), range: dateRange });
     if (statusFilter) params.set("status", statusFilter);
+    if (campaignFilter) params.set("campaign", campaignFilter);
+    if (sheetStatusFilter) params.set("sheetStatus", sheetStatusFilter);
     fetch(`/api/leads?${params.toString()}`)
       .then((r) => r.json())
       .then((data) => {
         if (data.error) throw new Error(data.error);
         setLeads(data.leads);
         setTotal(data.total);
+        if (data.statusCounts) setStatusCounts(data.statusCounts);
+        if (data.sheetStatusCounts) setSheetStatusCounts(data.sheetStatusCounts);
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoadingLeads(false));
@@ -118,7 +216,7 @@ export default function LeadsPanel({
   useEffect(() => {
     loadLeads();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, statusFilter, hasSheet]);
+  }, [page, statusFilter, sheetStatusFilter, campaignFilter, hasSheet]);
 
   useEffect(() => {
     setPage(1);
@@ -175,10 +273,11 @@ export default function LeadsPanel({
     });
   }
 
-  function toggleExpanded(leadId: string) {
-    const next = expandedId === leadId ? null : leadId;
-    setExpandedId(next);
-    if (next && !activityByLead[next]) loadActivity(next);
+  function openDetail(leadId: string) {
+    setDetailLeadId(leadId);
+    setNoteDraft("");
+    if (!activityByLead[leadId]) loadActivity(leadId);
+    if (!notesByLead[leadId]) loadNotes(leadId);
   }
 
   function loadActivity(leadId: string) {
@@ -191,6 +290,39 @@ export default function LeadsPanel({
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoadingActivity(null));
+  }
+
+  function loadNotes(leadId: string) {
+    setLoadingNotes(leadId);
+    fetch(`/api/leads/notes?leadId=${leadId}`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.error) throw new Error(data.error);
+        setNotesByLead((prev) => ({ ...prev, [leadId]: data.notes }));
+      })
+      .catch((e) => setError(e.message))
+      .finally(() => setLoadingNotes(null));
+  }
+
+  function submitNote() {
+    if (!detailLeadId || !noteDraft.trim()) return;
+    setSavingNote(true);
+    const formData = new FormData();
+    formData.set("note", noteDraft.trim());
+    onAddNote(detailLeadId, formData)
+      .then(() => {
+        setNoteDraft("");
+        loadNotes(detailLeadId);
+      })
+      .catch((e) => setError(e.message))
+      .finally(() => setSavingNote(false));
+  }
+
+  function viewCampaignLeads(campaign: string) {
+    setCampaignFilter(campaign);
+    setStatusFilter("");
+    setPage(1);
+    setActiveSubTab("leads");
   }
 
   if (!hasSheet) {
@@ -240,126 +372,180 @@ export default function LeadsPanel({
         </div>
       </div>
 
-      <div className="card rounded-2xl p-5">
-        <div className="flex items-center justify-between mb-1">
-          <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Lead activity over time</p>
-          {loadingSeries && <span className="text-xs" style={{ color: "var(--text-muted)" }}>Updating…</span>}
-        </div>
-        <LeadTimelineChart points={series} />
+      <div className="flex items-center gap-2">
+        <SubTabButton active={activeSubTab === "leads"} label="Leads" icon="person_search" onClick={() => setActiveSubTab("leads")} />
+        <SubTabButton active={activeSubTab === "campaigns"} label="Campaign performance" icon="campaign" onClick={() => setActiveSubTab("campaigns")} />
       </div>
 
-      <div>
-        <div className="flex items-center justify-between mb-3">
-          <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Campaign performance</p>
-          {loadingFunnel && <span className="text-xs" style={{ color: "var(--text-muted)" }}>Updating…</span>}
-        </div>
-        {funnel.length === 0 ? (
-          <div className="card rounded-2xl p-6 text-center text-sm" style={{ color: "var(--text-secondary)" }}>
-            No leads in this date range.
+      {activeSubTab === "campaigns" && (
+        <div className="space-y-5">
+          <div className="card rounded-2xl p-5">
+            <div className="flex items-center justify-between mb-1">
+              <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Lead activity over time</p>
+              {loadingSeries && <span className="text-xs" style={{ color: "var(--text-muted)" }}>Updating…</span>}
+            </div>
+            <LeadTimelineChart points={series} />
           </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-            {funnel.map((row) => {
-              const contactRate = row.total > 0 ? Math.round((row.contacted / row.total) * 100) : 0;
-              const winRate = row.total > 0 ? Math.round((row.won / row.total) * 100) : 0;
-              const costPerLead = row.spend != null && row.total > 0 ? row.spend / row.total : null;
-              return (
-                <div key={row.campaign} className="card rounded-2xl p-5">
-                  <div className="flex justify-between items-start gap-2 mb-4">
-                    <p className="font-semibold text-sm truncate" title={row.campaign} style={{ color: "var(--text-primary)" }}>
-                      {row.campaign}
-                    </p>
-                    {row.spend != null && (
-                      <span className="text-xs font-bold whitespace-nowrap" style={{ color: "var(--text-secondary)" }}>
-                        ${row.spend.toLocaleString()}
-                        {row.spendSource && <span className="font-normal" style={{ color: "var(--text-muted)" }}> ({row.spendSource})</span>}
-                      </span>
-                    )}
-                  </div>
 
-                  <div className="grid grid-cols-4 gap-2 mb-4">
-                    <MiniStat label="Leads" value={row.total} />
-                    <MiniStat label="Contacted" value={row.contacted} />
-                    <MiniStat label="Won" value={row.won} color="var(--primary)" />
-                    <MiniStat label="Lost/DQ" value={row.lostOrDisqualified} color="var(--danger)" />
-                  </div>
+          {funnel.length > 0 && overall.closedTotal > 0 && (
+            <div className="card rounded-2xl p-4 flex items-center flex-wrap gap-x-6 gap-y-2">
+              <SummaryStat label="Win rate" value={`${Math.round(overall.winRate ?? 0)}%`} color="var(--primary)" />
+              <SummaryStat label="Loss rate" value={`${Math.round(overall.lossRate ?? 0)}%`} color="var(--danger)" />
+              <SummaryStat label="Disqualified rate" value={`${Math.round(overall.disqualifiedRate ?? 0)}%`} />
+              <SummaryStat
+                label="Avg. time to convert"
+                value={overall.avgDaysToConvert != null ? `${overall.avgDaysToConvert.toFixed(1)}d` : "—"}
+              />
+            </div>
+          )}
 
-                  <div className="h-1.5 rounded-full mb-2 overflow-hidden flex" style={{ background: "var(--surface-hover)" }}>
-                    <div style={{ width: `${winRate}%`, background: "var(--primary)" }} />
-                    <div style={{ width: `${Math.max(contactRate - winRate, 0)}%`, background: "var(--border-strong)" }} />
-                  </div>
-
-                  <div className="flex items-center justify-between text-xs flex-wrap gap-y-1">
-                    <span style={{ color: "var(--text-secondary)" }}>
-                      Contact rate <strong style={{ color: "var(--text-primary)" }}>{contactRate}%</strong>
-                    </span>
-                    <span style={{ color: "var(--text-secondary)" }}>
-                      Win rate <strong style={{ color: "var(--text-primary)" }}>{winRate}%</strong>
-                    </span>
-                    {costPerLead != null && (
-                      <span style={{ color: "var(--text-secondary)" }}>
-                        Cost/lead <strong style={{ color: "var(--text-primary)" }}>${costPerLead.toFixed(2)}</strong>
-                      </span>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{funnel.length} campaigns</p>
+              {loadingFunnel && <span className="text-xs" style={{ color: "var(--text-muted)" }}>Updating…</span>}
+            </div>
+            {funnel.length === 0 ? (
+              <div className="card rounded-2xl p-6 text-center text-sm" style={{ color: "var(--text-secondary)" }}>
+                No leads in this date range.
+              </div>
+            ) : (
+              <div className="card rounded-2xl overflow-x-auto">
+                <table className="w-full text-left text-sm min-w-[900px]">
+                  <thead>
+                    <tr style={{ borderBottom: "1px solid var(--border)" }}>
+                      {["Campaign", "Leads", "Contacted", "Won", "Lost", "DQ", "Contact rate", "Win rate", "Avg. time to win", "Spend", "Cost/lead", ""].map((h) => (
+                        <th key={h} className="py-2 px-3 text-xs font-bold whitespace-nowrap" style={{ color: "var(--text-secondary)" }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sortedFunnel.map((row) => {
+                      const contactRate = row.total > 0 ? Math.round((row.contacted / row.total) * 100) : null;
+                      const costPerLead = row.spend != null && row.total > 0 ? row.spend / row.total : null;
+                      return (
+                        <tr key={row.campaign} style={{ borderBottom: "1px solid var(--border)" }}>
+                          <td className="py-2 px-3 font-medium max-w-[220px] truncate" title={row.campaign} style={{ color: "var(--text-primary)" }}>
+                            {displayCampaignName(row.campaign)}
+                          </td>
+                          <td className="py-2 px-3" style={{ color: "var(--text-primary)" }}>{row.total}</td>
+                          <td className="py-2 px-3" style={{ color: "var(--text-secondary)" }}>{row.contacted}</td>
+                          <td className="py-2 px-3 font-semibold" style={{ color: "var(--primary)" }}>{row.won}</td>
+                          <td className="py-2 px-3" style={{ color: "var(--danger)" }}>{row.lost}</td>
+                          <td className="py-2 px-3" style={{ color: "var(--text-secondary)" }}>{row.disqualified}</td>
+                          <td className="py-2 px-3" style={{ color: "var(--text-secondary)" }}>{contactRate != null ? `${contactRate}%` : "—"}</td>
+                          <td className="py-2 px-3" style={{ color: "var(--text-secondary)" }}>{row.winRate != null ? `${Math.round(row.winRate)}%` : "—"}</td>
+                          <td className="py-2 px-3" style={{ color: "var(--text-secondary)" }}>{row.avgDaysToConvert != null ? `${row.avgDaysToConvert.toFixed(1)}d` : "—"}</td>
+                          <td className="py-2 px-3 whitespace-nowrap" style={{ color: "var(--text-secondary)" }}>
+                            {row.spend != null ? `$${row.spend.toLocaleString()}${row.spendSource ? ` (${row.spendSource})` : ""}` : "—"}
+                          </td>
+                          <td className="py-2 px-3" style={{ color: "var(--text-secondary)" }}>{costPerLead != null ? `$${costPerLead.toFixed(2)}` : "—"}</td>
+                          <td className="py-2 px-3">
+                            <button
+                              onClick={() => viewCampaignLeads(row.campaign)}
+                              className="text-xs font-semibold whitespace-nowrap"
+                              style={{ color: "var(--primary)" }}
+                            >
+                              View leads
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
-        )}
-      </div>
-
-      <div className="card rounded-2xl p-5 overflow-x-auto">
-        <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
-          <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{total.toLocaleString()} leads</p>
-          <select
-            value={statusFilter}
-            onChange={(e) => {
-              setStatusFilter(e.target.value as LeadStatusValue | "");
-              setPage(1);
-            }}
-            className="px-3 py-1.5 rounded-lg text-xs font-bold outline-none"
-            style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
-          >
-            <option value="">All statuses</option>
-            {LEAD_STATUSES.map((s) => (
-              <option key={s} value={s}>{LEAD_STATUS_LABELS[s]}</option>
-            ))}
-          </select>
         </div>
+      )}
 
-        {loadingLeads ? (
-          <p className="text-sm py-6 text-center" style={{ color: "var(--text-secondary)" }}>Loading…</p>
-        ) : leads.length === 0 ? (
-          <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
-            {total === 0 ? "No leads yet." : "No leads match this filter."}
-          </p>
-        ) : (
-          <>
-            <table className="w-full text-left text-sm min-w-[640px]">
-              <thead>
-                <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                  {["Name", "Contact", "Source", "Campaign", "Status", "Value", ""].map((h, i) => (
-                    <th key={i} className="py-2 pr-4 text-xs font-bold whitespace-nowrap" style={{ color: "var(--text-secondary)" }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {leads.map((lead) => {
-                  const st = LEAD_STATUS_STYLE[lead.status];
-                  const expanded = expandedId === lead.id;
-                  const rawEntries = lead.raw ? Object.entries(lead.raw).filter(([, v]) => v) : [];
-                  const activity = activityByLead[lead.id];
-                  return (
-                    <Fragment key={lead.id}>
-                      <tr style={{ borderBottom: expanded ? "none" : "1px solid var(--border)" }}>
+      {activeSubTab === "leads" && (
+        <div className="card rounded-2xl p-5 overflow-x-auto">
+          <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
+            <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{total.toLocaleString()} leads</p>
+            {campaignFilter && (
+              <button
+                onClick={() => setCampaignFilter(null)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold"
+                style={{ background: "var(--primary-tint)", color: "var(--primary)" }}
+              >
+                Campaign: {displayCampaignName(campaignFilter)}
+                <span className="material-symbols-outlined text-[14px]">close</span>
+              </button>
+            )}
+          </div>
+
+          {sheetStatusValues.length > 0 && (
+            <div className="mb-4">
+              <p className="text-[10px] font-bold tracking-wide mb-1.5" style={{ color: "var(--text-muted)" }}>SHEET STATUS</p>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <TabButton active={sheetStatusFilter === null} label="All" count={allStatusCount} onClick={() => { setSheetStatusFilter(null); setPage(1); }} />
+                {sheetStatusValues.map((v) => (
+                  <SheetStatusTabButton
+                    key={v}
+                    active={sheetStatusFilter === v}
+                    label={v}
+                    count={sheetStatusCounts[v] ?? 0}
+                    onClick={() => { setSheetStatusFilter(sheetStatusFilter === v ? null : v); setPage(1); }}
+                  />
+                ))}
+                {sheetStatusCounts.__none__ > 0 && (
+                  <TabButton
+                    active={sheetStatusFilter === "__none__"}
+                    label="No status"
+                    count={sheetStatusCounts.__none__}
+                    onClick={() => { setSheetStatusFilter(sheetStatusFilter === "__none__" ? null : "__none__"); setPage(1); }}
+                  />
+                )}
+              </div>
+            </div>
+          )}
+
+          <div className="mb-4">
+            <p className="text-[10px] font-bold tracking-wide mb-1.5" style={{ color: "var(--text-muted)" }}>PIPELINE STATUS</p>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <TabButton active={statusFilter === ""} label="All" count={allStatusCount} onClick={() => { setStatusFilter(""); setPage(1); }} />
+              {LEAD_STATUSES.map((s) => (
+                <TabButton
+                  key={s}
+                  active={statusFilter === s}
+                  label={LEAD_STATUS_LABELS[s]}
+                  count={statusCounts[s] ?? 0}
+                  color={LEAD_STATUS_STYLE[s].color}
+                  onClick={() => { setStatusFilter(s); setPage(1); }}
+                />
+              ))}
+            </div>
+          </div>
+
+          {loadingLeads ? (
+            <p className="text-sm py-6 text-center" style={{ color: "var(--text-secondary)" }}>Loading…</p>
+          ) : leads.length === 0 ? (
+            <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
+              {total === 0 ? "No leads yet." : "No leads match this filter."}
+            </p>
+          ) : (
+            <>
+              <table className="w-full text-left text-sm min-w-[760px]">
+                <thead>
+                  <tr style={{ borderBottom: "1px solid var(--border)" }}>
+                    {["Name", "Phone", "Email", "Source", "Campaign", "Sheet Status", "Status", "Value", ""].map((h, i) => (
+                      <th key={i} className="py-2 pr-4 text-xs font-bold whitespace-nowrap" style={{ color: "var(--text-secondary)" }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {leads.map((lead) => {
+                    const st = LEAD_STATUS_STYLE[lead.status];
+                    return (
+                      <tr key={lead.id} style={{ borderBottom: "1px solid var(--border)" }} className="cursor-pointer" onClick={() => openDetail(lead.id)}>
                         <td className="py-2 pr-4 font-medium whitespace-nowrap" style={{ color: "var(--text-primary)" }}>{lead.name || "—"}</td>
-                        <td className="py-2 pr-4 whitespace-nowrap" style={{ color: "var(--text-secondary)" }}>
-                          {lead.phone || lead.email || "—"}
-                        </td>
+                        <td className="py-2 pr-4 whitespace-nowrap" style={{ color: "var(--text-secondary)" }}>{lead.phone || "—"}</td>
+                        <td className="py-2 pr-4 whitespace-nowrap" style={{ color: "var(--text-secondary)" }}>{lead.email || "—"}</td>
                         <td className="py-2 pr-4 whitespace-nowrap" style={{ color: "var(--text-secondary)" }}>{lead.source || "—"}</td>
-                        <td className="py-2 pr-4 whitespace-nowrap" style={{ color: "var(--text-secondary)" }}>{lead.campaign || "—"}</td>
-                        <td className="py-2 pr-4">
+                        <td className="py-2 pr-4 whitespace-nowrap" style={{ color: "var(--text-secondary)" }}>{lead.campaign ? displayCampaignName(lead.campaign) : "—"}</td>
+                        <td className="py-2 pr-4"><SheetStatusBadge value={lead.sheetStatus} /></td>
+                        <td className="py-2 pr-4" onClick={(e) => e.stopPropagation()}>
                           {isCoach ? (
                             <select
                               value={lead.status}
@@ -382,91 +568,178 @@ export default function LeadsPanel({
                         </td>
                         <td className="py-2 pr-4">
                           <button
-                            onClick={() => toggleExpanded(lead.id)}
+                            onClick={(e) => { e.stopPropagation(); openDetail(lead.id); }}
                             className="text-xs font-semibold whitespace-nowrap"
                             style={{ color: "var(--primary)" }}
                           >
-                            {expanded ? "Hide" : isCoach ? "Details" : "History"}
+                            {isCoach ? "Details" : "History"}
                           </button>
                         </td>
                       </tr>
-                      {expanded && (
-                        <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                          <td colSpan={7} className="pb-3 pt-0">
-                            <div className="p-3 rounded-lg space-y-3" style={{ background: "var(--surface-hover)" }}>
-                              <div>
-                                <p className="text-[10px] font-bold tracking-wide mb-1.5" style={{ color: "var(--text-secondary)" }}>
-                                  {isCoach ? "ACTIVITY" : "STATUS HISTORY"}
-                                </p>
-                                {loadingActivity === lead.id ? (
-                                  <p className="text-xs" style={{ color: "var(--text-muted)" }}>Loading…</p>
-                                ) : !activity || activity.length === 0 ? (
-                                  <p className="text-xs" style={{ color: "var(--text-muted)" }}>No manual status changes yet.</p>
-                                ) : (
-                                  <div className="space-y-1">
-                                    {activity.map((a) => (
-                                      <p key={a.id} className="text-xs" style={{ color: "var(--text-primary)" }}>
-                                        {isCoach && <strong>{a.changedBy}</strong>}{isCoach && " changed status "}
-                                        {!isCoach && "Status changed "}
-                                        <span style={{ color: "var(--text-secondary)" }}>{LEAD_STATUS_LABELS[a.fromStatus]} → </span>
-                                        <strong>{LEAD_STATUS_LABELS[a.toStatus]}</strong>
-                                        {a.value != null && <span style={{ color: "var(--text-secondary)" }}> · ${a.value.toLocaleString()}</span>}
-                                        <span style={{ color: "var(--text-muted)" }}>
-                                          {" · "}
-                                          {new Date(a.changedAt).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
-                                        </span>
-                                      </p>
-                                    ))}
-                                  </div>
-                                )}
-                              </div>
-                              {isCoach && rawEntries.length > 0 && (
-                                <div>
-                                  <p className="text-[10px] font-bold tracking-wide mb-1.5" style={{ color: "var(--text-secondary)" }}>DETAILS</p>
-                                  <div className="grid grid-cols-3 gap-x-6 gap-y-1.5">
-                                    {rawEntries.map(([k, v]) => (
-                                      <div key={k} className="min-w-0">
-                                        <p className="text-[10px]" style={{ color: "var(--text-muted)" }}>{k}</p>
-                                        <p className="text-xs truncate" style={{ color: "var(--text-primary)" }}>{v}</p>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      )}
-                    </Fragment>
-                  );
-                })}
-              </tbody>
-            </table>
+                    );
+                  })}
+                </tbody>
+              </table>
 
-            <div className="flex items-center justify-between mt-4">
-              <p className="text-xs" style={{ color: "var(--text-muted)" }}>Page {page} of {totalPages}</p>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => setPage((p) => Math.max(1, p - 1))}
-                  disabled={page <= 1}
-                  className="px-3 py-1.5 rounded-lg text-xs font-bold disabled:opacity-40"
-                  style={{ border: "1px solid var(--border)", color: "var(--text-secondary)" }}
-                >
-                  Previous
-                </button>
-                <button
-                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                  disabled={page >= totalPages}
-                  className="px-3 py-1.5 rounded-lg text-xs font-bold disabled:opacity-40"
-                  style={{ border: "1px solid var(--border)", color: "var(--text-secondary)" }}
-                >
-                  Next
-                </button>
+              <div className="flex items-center justify-between mt-4">
+                <p className="text-xs" style={{ color: "var(--text-muted)" }}>Page {page} of {totalPages}</p>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    disabled={page <= 1}
+                    className="px-3 py-1.5 rounded-lg text-xs font-bold disabled:opacity-40"
+                    style={{ border: "1px solid var(--border)", color: "var(--text-secondary)" }}
+                  >
+                    Previous
+                  </button>
+                  <button
+                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                    disabled={page >= totalPages}
+                    className="px-3 py-1.5 rounded-lg text-xs font-bold disabled:opacity-40"
+                    style={{ border: "1px solid var(--border)", color: "var(--text-secondary)" }}
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {detailLead && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center p-4"
+          style={{ background: "rgba(0,0,0,0.6)" }}
+          onClick={() => setDetailLeadId(null)}
+        >
+          <div className="card rounded-2xl w-full max-w-xl max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div
+              className="p-6 rounded-t-2xl"
+              style={{ background: `linear-gradient(160deg, ${LEAD_STATUS_STYLE[detailLead.status].bg} 0%, var(--surface-card) 130%)` }}
+            >
+              <div className="flex items-start justify-between gap-3 mb-4">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div
+                    className="w-12 h-12 rounded-full flex items-center justify-center font-heading font-bold text-lg shrink-0"
+                    style={{ background: LEAD_STATUS_STYLE[detailLead.status].color, color: "#fff" }}
+                  >
+                    {(detailLead.name || "?").trim().split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase()}
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="font-heading font-bold text-lg truncate" style={{ color: "var(--text-primary)" }}>{detailLead.name || "Unnamed lead"}</h3>
+                    <p className="text-xs truncate" style={{ color: "var(--text-secondary)" }}>
+                      {[detailLead.phone, detailLead.email].filter(Boolean).join(" · ") || "No contact info"}
+                    </p>
+                  </div>
+                </div>
+                <button onClick={() => setDetailLeadId(null)} className="material-symbols-outlined shrink-0" style={{ color: "var(--text-muted)" }}>close</button>
+              </div>
+
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="px-2.5 py-1 rounded-full text-xs font-bold" style={{ background: LEAD_STATUS_STYLE[detailLead.status].color, color: "#fff" }}>
+                  {LEAD_STATUS_LABELS[detailLead.status]}
+                </span>
+                <SheetStatusBadge value={detailLead.sheetStatus} />
+                {detailLead.value != null && (
+                  <span className="px-2.5 py-1 rounded-full text-xs font-bold" style={{ background: "var(--surface-card)", color: "var(--text-primary)" }}>
+                    ${detailLead.value.toLocaleString()}
+                  </span>
+                )}
+                {detailLead.campaign && (
+                  <span className="text-xs" style={{ color: "var(--text-secondary)" }}>{displayCampaignName(detailLead.campaign)}</span>
+                )}
               </div>
             </div>
-          </>
-        )}
-      </div>
+
+            <div className="p-6 pt-5">
+              <div className="flex gap-2 mb-6">
+                <input
+                  value={noteDraft}
+                  onChange={(e) => setNoteDraft(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") submitNote(); }}
+                  placeholder="Add a note about this lead…"
+                  className="flex-1 px-3 py-2 rounded-lg outline-none text-sm"
+                  style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
+                />
+                <button
+                  onClick={submitNote}
+                  disabled={savingNote || !noteDraft.trim()}
+                  className="px-4 py-2 rounded-lg text-xs font-bold disabled:opacity-50"
+                  style={{ background: "var(--primary)", color: "#fff" }}
+                >
+                  Add
+                </button>
+              </div>
+
+              <div className="mb-6">
+                <p className="text-[10px] font-bold tracking-wide mb-3" style={{ color: "var(--text-secondary)" }}>LEAD JOURNEY</p>
+                {loadingActivity === detailLead.id || loadingNotes === detailLead.id ? (
+                  <p className="text-xs" style={{ color: "var(--text-muted)" }}>Loading…</p>
+                ) : (
+                  <div className="relative">
+                    <div className="absolute left-[5px] top-2 bottom-2 w-0.5" style={{ background: "var(--border)" }} />
+                    <div className="space-y-4">
+                      {journey.map((entry) => {
+                        const when = new Date(entry.at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+                        if (entry.kind === "created") {
+                          return (
+                            <div key="created" className="relative pl-5">
+                              <span className="absolute left-0 top-1 w-2.5 h-2.5 rounded-full" style={{ background: "var(--text-muted)" }} />
+                              <p className="text-xs" style={{ color: "var(--text-secondary)" }}>
+                                <strong style={{ color: "var(--text-primary)" }}>Lead created</strong> <span style={{ color: "var(--text-muted)" }}>· {when}</span>
+                              </p>
+                            </div>
+                          );
+                        }
+                        if (entry.kind === "note") {
+                          return (
+                            <div key={entry.id} className="relative pl-5">
+                              <span className="absolute left-0 top-1 w-2.5 h-2.5 rounded-full" style={{ background: "var(--primary)" }} />
+                              <div className="p-2.5 rounded-lg" style={{ background: "var(--primary-tint)" }}>
+                                <p className="text-xs" style={{ color: "var(--text-primary)" }}>{entry.note}</p>
+                                <p className="text-[10px] mt-1" style={{ color: "var(--text-muted)" }}>{entry.by} · {when}</p>
+                              </div>
+                            </div>
+                          );
+                        }
+                        const toStyle = LEAD_STATUS_STYLE[entry.to];
+                        return (
+                          <div key={entry.id} className="relative pl-5">
+                            <span className="absolute left-0 top-1 w-2.5 h-2.5 rounded-full" style={{ background: toStyle.color }} />
+                            <p className="text-xs" style={{ color: "var(--text-secondary)" }}>
+                              <strong style={{ color: "var(--text-primary)" }}>{entry.by}</strong> moved this lead to{" "}
+                              <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold" style={{ background: toStyle.bg, color: toStyle.color }}>
+                                {LEAD_STATUS_LABELS[entry.to]}
+                              </span>
+                              {entry.value != null && <span> · ${entry.value.toLocaleString()}</span>}
+                              <span style={{ color: "var(--text-muted)" }}> · {when}</span>
+                            </p>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {isCoach && detailLead.raw && Object.entries(detailLead.raw).filter(([, v]) => v).length > 0 && (
+                <div>
+                  <p className="text-[10px] font-bold tracking-wide mb-2" style={{ color: "var(--text-secondary)" }}>SHEET DETAILS</p>
+                  <div className="space-y-2">
+                    {Object.entries(detailLead.raw).filter(([, v]) => v).map(([k, v]) => (
+                      <div key={k} className="p-2.5 rounded-lg" style={{ background: "var(--surface-hover)" }}>
+                        <p className="text-[10px] font-semibold uppercase tracking-wide mb-1" style={{ color: "var(--text-muted)" }}>{k}</p>
+                        <p className="text-xs whitespace-pre-wrap break-words" style={{ color: "var(--text-primary)" }}>{v}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {pendingChange && (
         <div
@@ -512,11 +785,63 @@ export default function LeadsPanel({
   );
 }
 
-function MiniStat({ label, value, color }: { label: string; value: number; color?: string }) {
+function SubTabButton({ active, label, icon, onClick }: { active: boolean; label: string; icon: string; onClick: () => void }) {
   return (
-    <div>
-      <p className="font-heading font-bold text-lg" style={{ color: color ?? "var(--text-primary)" }}>{value}</p>
-      <p className="text-[10px]" style={{ color: "var(--text-muted)" }}>{label}</p>
+    <button
+      onClick={onClick}
+      className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-bold"
+      style={{
+        background: active ? "var(--primary)" : "var(--surface-hover)",
+        color: active ? "#fff" : "var(--text-secondary)",
+      }}
+    >
+      <span className="material-symbols-outlined text-[16px]">{icon}</span>
+      {label}
+    </button>
+  );
+}
+
+function TabButton({ active, label, count, color, onClick }: { active: boolean; label: string; count: number; color?: string; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className="px-3 py-1.5 rounded-full text-xs font-bold flex items-center gap-1.5 whitespace-nowrap"
+      style={{
+        background: active ? (color ?? "var(--primary)") : "var(--surface-hover)",
+        color: active ? "#fff" : "var(--text-secondary)",
+      }}
+    >
+      {label}
+      <span style={{ opacity: 0.75 }}>{count}</span>
+    </button>
+  );
+}
+
+// Always shows the value's own tag color (so the palette stays recognizable
+// across the whole tab), dimmed when not selected and ringed when it is —
+// rather than TabButton's invert-to-solid-color behavior, which would put
+// white text on a pastel background and lose all contrast.
+function SheetStatusTabButton({ active, label, count, onClick }: { active: boolean; label: string; count: number; onClick: () => void }) {
+  const { bg, fg } = tagColor(label);
+  return (
+    <button
+      onClick={onClick}
+      className="px-3 py-1.5 rounded-full text-xs font-bold flex items-center gap-1.5 whitespace-nowrap transition-opacity"
+      style={{ background: bg, color: fg, boxShadow: active ? `0 0 0 2px ${fg}` : "none", opacity: active ? 1 : 0.55 }}
+    >
+      {label}
+      <span style={{ opacity: 0.75 }}>{count}</span>
+    </button>
+  );
+}
+
+// Client-wide rollup stat (across every campaign) — same shape used in the
+// "Campaign performance" summary strip.
+function SummaryStat({ label, value, color }: { label: string; value: string; color?: string }) {
+  return (
+    <div className="flex items-baseline gap-1.5">
+      <span className="font-heading font-bold text-base" style={{ color: color ?? "var(--text-primary)" }}>{value}</span>
+      <span className="text-xs" style={{ color: "var(--text-muted)" }}>{label}</span>
     </div>
   );
 }
