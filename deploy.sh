@@ -21,7 +21,7 @@ fi
 
 if grep -q "REPLACE_WITH_YOUR_DOMAIN" docker-compose.yml; then
   echo "STOP: docker-compose.yml still has the placeholder domain. Edit"
-  echo "the traefik.http.routers.coach-os.rule line, then rerun."
+  echo "the traefik.http.routers.hive-os.rule line, then rerun."
   exit 1
 fi
 
@@ -35,7 +35,7 @@ docker compose build --no-cache app
 docker compose up -d
 
 echo "→ Waiting for Postgres to be healthy..."
-until docker inspect --format='{{.State.Health.Status}}' coach_os_postgres 2>/dev/null | grep -q healthy; do
+until docker inspect --format='{{.State.Health.Status}}' hive_os_postgres 2>/dev/null | grep -q healthy; do
   echo "  ...still waiting"
   sleep 2
 done

@@ -1,7 +1,7 @@
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: coach_os_postgres
+    container_name: hive_os_postgres
     restart: unless-stopped
     environment:
       POSTGRES_USER: coach
@@ -25,7 +25,7 @@ services:
         NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY}
         NEXT_PUBLIC_CLERK_SIGN_IN_URL: ${NEXT_PUBLIC_CLERK_SIGN_IN_URL}
         NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL: ${NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL}
-    container_name: coach_os
+    container_name: hive_os_app
     restart: unless-stopped
     depends_on:
       postgres:
@@ -38,11 +38,11 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=root_default"
-      - "traefik.http.routers.coach-os.rule=Host(`app.hivesocial.agency`)"
-      - "traefik.http.routers.coach-os.entrypoints=web,websecure"
-      - "traefik.http.routers.coach-os.tls=true"
-      - "traefik.http.routers.coach-os.tls.certresolver=mytlschallenge"
-      - "traefik.http.services.coach-os.loadbalancer.server.port=3000"
+      - "traefik.http.routers.hive-os.rule=Host(`app.hivesocial.agency`)"
+      - "traefik.http.routers.hive-os.entrypoints=web,websecure"
+      - "traefik.http.routers.hive-os.tls=true"
+      - "traefik.http.routers.hive-os.tls.certresolver=mytlschallenge"
+      - "traefik.http.services.hive-os.loadbalancer.server.port=3000"
 
 volumes:
   pg_data:

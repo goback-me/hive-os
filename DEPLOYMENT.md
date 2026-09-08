@@ -74,7 +74,18 @@ confirm before pushing anything you expect to go live.
 
 - `docker compose logs -f app` — tail the app's logs
 - Visit `https://app.hivesocial.agency` and confirm it loads
-- `docker compose ps` — confirm both `coach_os` (app) and `coach_os_postgres` are `Up`/`healthy`
+- `docker compose ps` — confirm both `hive_os_app` and `hive_os_postgres` are `Up`/`healthy`
+
+## Note: old "coach_os"-named containers on this VPS
+
+Containers are now named `hive_os_app` / `hive_os_postgres` (previously
+`coach_os` / `coach_os_postgres`, left over from before the Hive OS
+rebrand — `container_name` is hardcoded in `docker-compose.yml`, so Docker
+requires exact, unique names). If a stale `coach_os`/`coach_os_postgres`
+container from an old deploy is still sitting on the VPS (stopped or
+running), it won't conflict with these new names — it's just an orphaned
+leftover you can remove once you've confirmed the new deploy is healthy:
+`docker stop coach_os coach_os_postgres && docker rm coach_os coach_os_postgres`.
 
 ## Rolling back
 
