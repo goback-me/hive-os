@@ -6,7 +6,7 @@ const isPublicRoute = createRouteMatcher(["/login(.*)", "/refer(.*)", "/api/webh
 
 // Pages that only a COACH account may reach — everything else falls
 // through to the shared/client-scoped handling below. (Adapted from Hive
-// OS's isAdminOnlyRoute, extended with Coach OS's own agency-wide pages.)
+// OS's isAdminOnlyRoute, extended with the original coaching app's own agency-wide pages.)
 const isCoachOnlyRoute = createRouteMatcher([
   "/dashboard(.*)",
   "/clients",

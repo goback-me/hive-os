@@ -3,16 +3,40 @@ version: "3.8"
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: coach_os_postgres_dev
+    container_name: hive_os_postgres_dev
     restart: unless-stopped
     environment:
-      POSTGRES_USER: coach
-      POSTGRES_PASSWORD: coach
-      POSTGRES_DB: coach_os
+      POSTGRES_USER: hive
+      POSTGRES_PASSWORD: hive
+      POSTGRES_DB: hive_os
     ports:
       - "5432:5432"
     volumes:
-      - coach_os_pg_dev_data:/var/lib/postgresql/data
+      - hive_os_pg_dev_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hive -d hive_os"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY}
+        NEXT_PUBLIC_CLERK_SIGN_IN_URL: ${NEXT_PUBLIC_CLERK_SIGN_IN_URL}
+        NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL: ${NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL}
+    container_name: hive_os_app_dev
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    ports:
+      - "3000:3000"
+    # no traefik labels, no external network — pure local run
 
 volumes:
-  coach_os_pg_dev_data:
+  hive_os_pg_dev_data:

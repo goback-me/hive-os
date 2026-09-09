@@ -1,7 +1,7 @@
 import { prisma } from "./prisma";
 
 // ── Hive OS — agency-wide ad spend / lead / ROAS reporting ──────────────
-// Brought in alongside Coach OS's own getRevenueTrend below (which the
+// Brought in alongside the original coaching app's own getRevenueTrend below (which the
 // main dashboard page.tsx still calls — that page's UI is unchanged).
 // These functions run against the merged schema's RevenueMonthly/
 // AdSpendDaily/Lead tables and are ready for the Ads/Leads panels.
@@ -114,7 +114,7 @@ export async function getLeadFunnel(clientId: string) {
   return statuses.map((status, i) => ({ status, count: counts[i] }));
 }
 
-// ── Coach OS — main dashboard revenue trend (page.tsx uses this one) ────
+// ── Original coaching app — main dashboard revenue trend (page.tsx uses this one) ────
 export async function getRevenueTrend(months = 12) {
   const now = new Date();
   const points: { label: string; revenue: number }[] = [];

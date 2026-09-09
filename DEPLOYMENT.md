@@ -12,7 +12,7 @@ the actual scripts already in this repo (`deploy.sh`, `docker-compose.yml`,
    `root_default` — `docker-compose.yml` expects this network to exist
    already (it's how the app gets HTTPS routing without its own Traefik
    instance). If you're not sure it exists: `docker network ls | grep root_default`.
-3. **DNS**: `app.hivesocial.agency` (the domain baked into
+3. **DNS**: `portal.hivesocial.agency` (the domain baked into
    `docker-compose.yml`'s Traefik labels) must point at the VPS.
 4. **Clone the repo** onto the VPS, e.g. `/opt/hive-os` — pick whichever
    branch is meant to be production (see "Which branch" below).
@@ -50,12 +50,12 @@ Copy `.env.example` to `.env` and fill in:
 |---|---|
 | `POSTGRES_PASSWORD` | Pick a real password (not the placeholder) |
 | `DATABASE_URL` | Update to match the password above |
-| `NEXTAUTH_URL` | `https://app.hivesocial.agency` |
+| `NEXTAUTH_URL` | `https://portal.hivesocial.agency` |
 | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` / `CLERK_SECRET_KEY` | Clerk dashboard → your app → API Keys |
 | `CLERK_WEBHOOK_SECRET` | Clerk dashboard → Webhooks → endpoint at `/api/webhooks/clerk` |
 | `META_APP_ID` / `META_APP_SECRET` | Meta for Developers → your app |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Google Cloud Console → Credentials |
-| `GOOGLE_REDIRECT_URI` | `https://app.hivesocial.agency/api/google/callback` |
+| `GOOGLE_REDIRECT_URI` | `https://portal.hivesocial.agency/api/google/callback` |
 | `TOKEN_ENCRYPTION_KEY` | Generate with `openssl rand -hex 32` — encrypts stored Google/Meta tokens at rest |
 
 Also double check in the **Clerk dashboard** → User & Authentication →
@@ -73,7 +73,7 @@ confirm before pushing anything you expect to go live.
 ## After deploying
 
 - `docker compose logs -f app` — tail the app's logs
-- Visit `https://app.hivesocial.agency` and confirm it loads
+- Visit `https://portal.hivesocial.agency` and confirm it loads
 - `docker compose ps` — confirm both `hive_os_app` and `hive_os_postgres` are `Up`/`healthy`
 
 ## Note: old "coach_os"-named containers on this VPS
