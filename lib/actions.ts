@@ -252,14 +252,40 @@ export async function createModule(formData: FormData) {
   revalidatePath("/clients");
 }
 
-export async function createLesson(formData: FormData) {
+export type CreateLessonState = { error: string } | null;
+
+// Checks the URL is actually reachable (not just well-formed) before saving
+// it — malformed input never even reaches here since the form field is
+// type="url" (native browser validation). A dead link would otherwise sit
+// silently in a lesson until a client clicks it and hits a 404.
+async function checkLinkReachable(url: string): Promise<string | null> {
+  try {
+    let res = await fetch(url, { method: "HEAD", redirect: "follow", signal: AbortSignal.timeout(6000) });
+    // Some hosts (incl. YouTube on some paths) reject HEAD — retry with GET
+    // before concluding anything, rather than false-flagging a good link.
+    if (res.status === 405) {
+      res = await fetch(url, { method: "GET", redirect: "follow", signal: AbortSignal.timeout(6000) });
+    }
+    if (res.status === 404) return "That link returns a 404 — please update it or paste the correct one.";
+    return null;
+  } catch {
+    return "Couldn't reach that link (connection failed or timed out) — please check and paste the correct one.";
+  }
+}
+
+export async function createLesson(_prev: CreateLessonState, formData: FormData): Promise<CreateLessonState> {
   await requireCoach();
   const moduleId = String(formData.get("moduleId") || "");
   const title = String(formData.get("title") || "").trim();
   const videoUrl = String(formData.get("videoUrl") || "").trim();
   const content = String(formData.get("content") || "").trim();
-  if (!moduleId) throw new Error("Module is required");
-  if (!title) throw new Error("Lesson title is required");
+  if (!moduleId) return { error: "Module is required" };
+  if (!title) return { error: "Lesson title is required" };
+
+  if (videoUrl) {
+    const linkError = await checkLinkReachable(videoUrl);
+    if (linkError) return { error: linkError };
+  }
 
   const count = await prisma.lesson.count({ where: { moduleId } });
   await prisma.lesson.create({
@@ -267,6 +293,7 @@ export async function createLesson(formData: FormData) {
   });
   revalidatePath("/settings");
   revalidatePath("/clients");
+  return null;
 }
 
 export type CreateClientState = { error: string } | { slug: string } | null;

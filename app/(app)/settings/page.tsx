@@ -1,7 +1,8 @@
 import { prisma } from "@/lib/prisma";
-import { saveIntegrationSettings, createOnboardingStepTemplate, createModule, createLesson, createClient } from "@/lib/actions";
+import { saveIntegrationSettings, createOnboardingStepTemplate, createModule, createClient } from "@/lib/actions";
 import { requireCoach } from "@/lib/auth";
 import UsersPanel from "./UsersPanel";
+import AddLessonForm from "@/components/AddLessonForm";
 
 export const dynamic = "force-dynamic";
 
@@ -121,16 +122,7 @@ export default async function SettingsPage() {
 
         <div style={{ borderTop: "1px solid var(--border)" }} className="pt-4">
           <p className="text-xs font-semibold mb-2" style={{ color: "var(--text-secondary)" }}>Add a lesson to a module</p>
-          <form action={createLesson} className="space-y-2">
-            <select name="moduleId" required style={{ width: "100%", background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }} className="px-3 py-2 rounded-lg outline-none text-sm">
-              <option value="">Choose a module...</option>
-              {modules.map((m) => <option key={m.id} value={m.id}>{m.title}</option>)}
-            </select>
-            <input name="title" required placeholder="Lesson title" style={{ width: "100%", background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }} className="px-3 py-2 rounded-lg outline-none text-sm" />
-            <input name="videoUrl" placeholder="YouTube or Loom link (optional)" style={{ width: "100%", background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }} className="px-3 py-2 rounded-lg outline-none text-sm" />
-            <textarea name="content" placeholder="Written content (optional)" rows={3} style={{ width: "100%", background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }} className="px-3 py-2 rounded-lg outline-none text-sm resize-none" />
-            <button type="submit" className="px-4 py-2 rounded-lg text-sm font-bold btn-cta" style={{ background: "var(--secondary)", color: "#fff" }}>Add lesson</button>
-          </form>
+          <AddLessonForm modules={modules.map((m) => ({ id: m.id, title: m.title }))} />
         </div>
       </section>
 
