@@ -44,9 +44,5 @@ echo "→ Syncing database schema..."
 docker compose exec -T app npx prisma db push
 echo "  ...schema synced"
 
-echo "→ Seeding sample clients (safe to re-run)..."
-docker compose exec -T app npm run db:seed
-echo "  ...seed complete"
-
 echo ""
 echo "→ Deploy finished. Check logs with: docker compose logs -f app"
