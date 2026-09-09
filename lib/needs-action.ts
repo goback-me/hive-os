@@ -17,7 +17,7 @@ function daysBetween(a: Date, b: Date) {
 // list, since a client can trip either agency's rules.
 export async function computeNeedsAction() {
   const now = new Date();
-  const clients = await prisma.client.findMany({ where: { isActive: true } });
+  const clients = await prisma.client.findMany({ where: { isActive: true, archivedAt: null } });
 
   const items: {
     clientId: string;
@@ -191,8 +191,8 @@ export async function getDashboardKpis() {
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
 
   const [activeClients, totalClients, revenueAgg, sessionsThisMonth, spendAgg] = await Promise.all([
-    prisma.client.count({ where: { isActive: true } }),
-    prisma.client.count(),
+    prisma.client.count({ where: { isActive: true, archivedAt: null } }),
+    prisma.client.count({ where: { archivedAt: null } }),
     prisma.payment.aggregate({
       _sum: { amountDue: true },
       where: { status: "PAID", paidDate: { gte: monthStart } },

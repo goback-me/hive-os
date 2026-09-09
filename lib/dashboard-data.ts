@@ -34,7 +34,7 @@ export async function getRevenueVsSpendTrend() {
 export async function getTopPerformingClients(limit = 5) {
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-  const clients = await prisma.client.findMany({ where: { isActive: true } });
+  const clients = await prisma.client.findMany({ where: { isActive: true, archivedAt: null } });
 
   const rows = await Promise.all(
     clients.map(async (client) => {

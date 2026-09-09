@@ -17,7 +17,7 @@ const SEVERITY_STYLE: Record<string, { color: string; bg: string; icon: string }
 const STATUS_STYLE: Record<string, { bg: string; color: string; label: string }> = {
   ACTIVE: { bg: "var(--primary-tint)", color: "var(--primary)", label: "Active" },
   ONBOARDING: { bg: "var(--surface-hover)", color: "var(--text-secondary)", label: "Onboarding" },
-  CHURNED: { bg: "var(--danger-tint)", color: "var(--danger)", label: "Churned" },
+  CHURNED: { bg: "var(--danger-tint)", color: "var(--danger)", label: "Not Active" },
 };
 
 function greeting() {

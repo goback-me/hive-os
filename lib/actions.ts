@@ -325,6 +325,23 @@ export async function bulkUpdateClientStatus(clientIds: string[], status: string
   revalidatePath("/clients");
 }
 
+// Archiving is independent of status — hides the client from every default
+// list/dashboard view (see the archivedAt: null filters) without touching
+// ACTIVE/ONBOARDING/CHURNED or deleting anything. Unarchive just clears it.
+export async function archiveClient(clientId: string) {
+  await requireCoach();
+  await prisma.client.update({ where: { id: clientId }, data: { archivedAt: new Date() } });
+  revalidatePath("/clients");
+  revalidatePath("/leads");
+}
+
+export async function unarchiveClient(clientId: string) {
+  await requireCoach();
+  await prisma.client.update({ where: { id: clientId }, data: { archivedAt: null } });
+  revalidatePath("/clients");
+  revalidatePath("/leads");
+}
+
 // ── Users / logins (coach-only) ──────────────────────────────────────────
 // Creates the Clerk account AND the app-side profile in one go. The temp
 // password is shown once on screen — the user should change it after first

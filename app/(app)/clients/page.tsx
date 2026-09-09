@@ -1,19 +1,26 @@
+import Link from "next/link";
 import { prisma } from "@/lib/prisma";
-import { createClient, bulkUpdateClientStatus } from "@/lib/actions";
+import { createClient, bulkUpdateClientStatus, archiveClient, unarchiveClient } from "@/lib/actions";
 import { requireCoach } from "@/lib/auth";
 import AddClientModal from "./AddClientModal";
 import ClientsGrid from "./ClientsGrid";
 
 export const dynamic = "force-dynamic";
 
-export default async function ClientsPage() {
+export default async function ClientsPage({
+  searchParams,
+}: {
+  searchParams: { archived?: string };
+}) {
   await requireCoach(); // client logins are redirected to their own client page, never this list
 
+  const showArchived = searchParams.archived === "1";
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
 
   const [clients, programs] = await Promise.all([
     prisma.client.findMany({
+      where: showArchived ? { archivedAt: { not: null } } : { archivedAt: null },
       orderBy: { name: "asc" },
       include: { program: true },
     }),
@@ -35,10 +42,20 @@ export default async function ClientsPage() {
         <div>
           <h1 className="page-title font-heading" style={{ color: "var(--text-primary)" }}>Clients</h1>
           <p className="text-base mt-1" style={{ color: "var(--text-secondary)" }}>
-            All clients across {programs.map((p) => p.name).join(", ")}.
+            {showArchived ? "Archived clients." : `All clients across ${programs.map((p) => p.name).join(", ")}.`}
           </p>
         </div>
-        <AddClientModal action={createClient} />
+        <div className="flex items-center gap-3">
+          <Link
+            href={showArchived ? "/clients" : "/clients?archived=1"}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-semibold"
+            style={{ border: "1px solid var(--border)", color: "var(--text-secondary)" }}
+          >
+            <span className="material-symbols-outlined text-[18px]">{showArchived ? "arrow_back" : "archive"}</span>
+            {showArchived ? "Back to active clients" : "View archived"}
+          </Link>
+          {!showArchived && <AddClientModal action={createClient} />}
+        </div>
       </div>
 
       <ClientsGrid
@@ -52,6 +69,9 @@ export default async function ClientsPage() {
           revenue: Number(revenueByClient[i]._sum.amount ?? 0),
         }))}
         onBulkUpdateStatus={bulkUpdateClientStatus}
+        onArchive={archiveClient}
+        onUnarchive={unarchiveClient}
+        archivedView={showArchived}
       />
     </div>
   );

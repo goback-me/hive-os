@@ -16,7 +16,7 @@ export default async function LeadsPage({
 
   const [allClients, googleConnection] = await Promise.all([
     prisma.client.findMany({
-      where: { isActive: true },
+      where: { isActive: true, archivedAt: null },
       orderBy: { name: "asc" },
       select: { id: true, name: true, slug: true },
     }),

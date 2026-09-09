@@ -440,6 +440,10 @@ model Client {
   email       String?
   isActive    Boolean      @default(true)
   status      ClientStatus @default(ONBOARDING)
+  // Independent of status — an archived client is hidden from every default
+  // list/dashboard view regardless of ACTIVE/ONBOARDING/CHURNED, but keeps
+  // all their data. null = not archived.
+  archivedAt  DateTime?
   goals       String?
   description String?
   scope       String? // free-text scope of engagement, e.g. "Paid ads management" — replaces the fixed Program picker on the create-client form
