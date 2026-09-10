@@ -22,6 +22,24 @@ export const LEAD_STATUS_STYLE: Record<LeadStatusValue, { color: string; bg: str
   DISQUALIFIED: { color: "var(--text-muted)", bg: "var(--surface-hover)" },
 };
 
+// How far along the funnel each status is — WON/LOST/DISQUALIFIED are all
+// equally "closed" (none is more conclusive than another), everything else
+// is strictly earlier. Used to merge two sheet columns (an outreach-stage
+// column and a deal-outcome column) into one status: whichever one is
+// further along wins. See lib/lead-sync.ts.
+const STATUS_RANK: Record<LeadStatusValue, number> = {
+  NEW_LEAD: 0,
+  CHASE_UP: 1,
+  CLIENT_CONTACTED: 2,
+  WON: 3,
+  LOST: 3,
+  DISQUALIFIED: 3,
+};
+
+export function moreConclusive(a: LeadStatusValue, b: LeadStatusValue): LeadStatusValue {
+  return STATUS_RANK[b] > STATUS_RANK[a] ? b : a;
+}
+
 type StageTimestamps = { chaseUpAt: Date | null; contactedAt: Date | null; closedAt: Date | null };
 
 // A stage timestamp is set the FIRST time a lead ever reaches that stage,

@@ -32,13 +32,15 @@ export async function GET(req: NextRequest) {
     // this never affects what THIS response sends, only future picker loads.
     let visibleColumns = sheet.visibleColumns;
     let statusColumn = sheet.statusColumn;
+    let resultStatusColumn = sheet.resultStatusColumn;
     if (JSON.stringify(liveHeaders) !== JSON.stringify(sheet.allColumns)) {
       visibleColumns = sheet.visibleColumns.filter((c) => liveHeaders.includes(c));
       if (visibleColumns.length === 0) visibleColumns = liveHeaders;
       statusColumn = statusColumn && visibleColumns.includes(statusColumn) ? statusColumn : null;
+      resultStatusColumn = resultStatusColumn && visibleColumns.includes(resultStatusColumn) ? resultStatusColumn : null;
       await prisma.clientSheet.update({
         where: { clientId },
-        data: { allColumns: liveHeaders, visibleColumns, statusColumn },
+        data: { allColumns: liveHeaders, visibleColumns, statusColumn, resultStatusColumn },
       });
     }
 
@@ -47,22 +49,33 @@ export async function GET(req: NextRequest) {
     const headers = visibleIndexes.map((i) => liveHeaders[i]);
     const rows = liveRows.map((r) => visibleIndexes.map((i) => r[i]));
 
-    let statusValues: string[] | null = null;
-    let statusCounts: Record<string, number> | null = null;
-    if (statusColumn) {
-      const colIdx = headers.indexOf(statusColumn);
-      if (colIdx !== -1) {
-        statusCounts = {};
-        for (const r of rows) {
-          const v = r[colIdx];
-          if (!v) continue;
-          statusCounts[v] = (statusCounts[v] ?? 0) + 1;
-        }
-        statusValues = Object.keys(statusCounts).sort();
+    function valueCounts(column: string | null): { values: string[]; counts: Record<string, number> } | null {
+      if (!column) return null;
+      const colIdx = headers.indexOf(column);
+      if (colIdx === -1) return null;
+      const counts: Record<string, number> = {};
+      for (const r of rows) {
+        const v = r[colIdx];
+        if (!v) continue;
+        counts[v] = (counts[v] ?? 0) + 1;
       }
+      return { values: Object.keys(counts).sort(), counts };
     }
 
-    return NextResponse.json({ headers, rows, statusColumn, statusValues, statusCounts, totalRows: rows.length });
+    const statusStats = valueCounts(statusColumn);
+    const resultStatusStats = valueCounts(resultStatusColumn);
+
+    return NextResponse.json({
+      headers,
+      rows,
+      statusColumn,
+      statusValues: statusStats?.values ?? null,
+      statusCounts: statusStats?.counts ?? null,
+      resultStatusColumn,
+      resultStatusValues: resultStatusStats?.values ?? null,
+      resultStatusCounts: resultStatusStats?.counts ?? null,
+      totalRows: rows.length,
+    });
   } catch (err: any) {
     console.error("Fetch sheet data failed:", err);
     return NextResponse.json({ error: err.message ?? "failed" }, { status: 500 });

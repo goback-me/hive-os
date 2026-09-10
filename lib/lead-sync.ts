@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { getValidAccessToken, getSheetValues } from "@/lib/google-sheets";
 import { getMetaCampaignInsights } from "@/lib/meta-ads";
 import type { LeadStatusValue } from "@/lib/lead-status";
-import { LEAD_STATUSES, stageTimestampPatch } from "@/lib/lead-status";
+import { LEAD_STATUSES, moreConclusive, stageTimestampPatch } from "@/lib/lead-status";
 
 function normalizeHeader(h: string) {
   return h.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
@@ -52,6 +52,8 @@ export async function syncLeadsFromSheet(clientId: string): Promise<SyncSummary>
 
   const statusMapping = (sheet.statusMapping as Record<string, LeadStatusValue> | null) ?? {};
   const statusColIdx = sheet.statusColumn ? headers.indexOf(sheet.statusColumn) : -1;
+  const resultStatusMapping = (sheet.resultStatusMapping as Record<string, LeadStatusValue> | null) ?? {};
+  const resultStatusColIdx = sheet.resultStatusColumn ? headers.indexOf(sheet.resultStatusColumn) : -1;
 
   const nameIdx = findColumn(headers, ["name"]);
   const phoneIdx = findColumn(headers, ["phone"]);
@@ -76,13 +78,28 @@ export async function syncLeadsFromSheet(clientId: string): Promise<SyncSummary>
     const externalKey = normalizeIdentity(`${email}|${phone}|${name}`);
 
     const rawStatus = statusColIdx !== -1 ? row[statusColIdx] ?? "" : "";
-    const mappedStatus: LeadStatusValue = LEAD_STATUSES.includes(statusMapping[rawStatus] as LeadStatusValue)
+    const baseMappedStatus: LeadStatusValue = LEAD_STATUSES.includes(statusMapping[rawStatus] as LeadStatusValue)
       ? (statusMapping[rawStatus] as LeadStatusValue)
       : "NEW_LEAD";
 
-    // Quote Value takes priority — Revenue Generated is only a fallback for
-    // once the deal actually closes and a quote was never logged.
-    const value = parseMoney(quoteIdx !== -1 ? row[quoteIdx] : undefined) ?? parseMoney(revenueIdx !== -1 ? row[revenueIdx] : undefined);
+    // The result column (e.g. "Prospect Status": did it actually close?)
+    // overrides the outreach column above whenever it resolves to something
+    // more conclusive — a client typing "DISQUALIFIED" or "SOLD" here beats
+    // whatever the team's internal outreach-stage column still says.
+    const rawResultStatus = resultStatusColIdx !== -1 ? row[resultStatusColIdx] ?? "" : "";
+    const resultMappedStatus = LEAD_STATUSES.includes(resultStatusMapping[rawResultStatus] as LeadStatusValue)
+      ? (resultStatusMapping[rawResultStatus] as LeadStatusValue)
+      : null;
+    const mappedStatus = resultMappedStatus ? moreConclusive(baseMappedStatus, resultMappedStatus) : baseMappedStatus;
+
+    // Revenue is only ever counted once the result column resolves the deal
+    // to Won — a bare "quoted" value (not yet accepted) never counts, even
+    // though the Quote Value cell already has a dollar figure in it.
+    // Quote Value takes priority over Revenue Generated when both are set.
+    const value =
+      mappedStatus === "WON"
+        ? parseMoney(quoteIdx !== -1 ? row[quoteIdx] : undefined) ?? parseMoney(revenueIdx !== -1 ? row[revenueIdx] : undefined)
+        : null;
 
     // The real-world date this lead came in — NOT when our app happened to
     // sync it. Without this, a bulk first-time sync of months-old leads
@@ -93,7 +110,7 @@ export async function syncLeadsFromSheet(clientId: string): Promise<SyncSummary>
 
     // Everything else — every header not otherwise mapped — goes into `raw`
     // for display only, keyed by its actual header text.
-    const mappedIdx = new Set([nameIdx, phoneIdx, emailIdx, sourceIdx, campaignIdx, adsetIdx, revenueIdx, quoteIdx, statusColIdx, dateOptInIdx]);
+    const mappedIdx = new Set([nameIdx, phoneIdx, emailIdx, sourceIdx, campaignIdx, adsetIdx, revenueIdx, quoteIdx, statusColIdx, resultStatusColIdx, dateOptInIdx]);
     const raw: Record<string, string> = {};
     headers.forEach((h, i) => {
       if (!mappedIdx.has(i) && h) raw[h] = row[i] ?? "";
@@ -109,7 +126,10 @@ export async function syncLeadsFromSheet(clientId: string): Promise<SyncSummary>
       campaign: campaignIdx !== -1 ? row[campaignIdx] || null : null,
       adset: adsetIdx !== -1 ? row[adsetIdx] || null : null,
       ...(dateOptIn ? { createdAt: dateOptIn } : {}),
-      sheetStatus: rawStatus.trim() || null,
+      // Prefer the result column's value when present (it's the more
+      // decisive signal — "SOLD" tells you more than "LIVE TRANSFER") —
+      // otherwise fall back to the outreach column, whichever is filled in.
+      sheetStatus: rawResultStatus.trim() || rawStatus.trim() || null,
       value,
       raw,
       lastSyncedAt: new Date(),

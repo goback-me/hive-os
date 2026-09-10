@@ -218,6 +218,16 @@ model ClientSheet {
   // NEW_LEAD on sync (see lib/lead-sync.ts).
   statusMapping   Json?
 
+  // The "did it close" column (e.g. a client's "Prospect Status") — separate
+  // from statusColumn (e.g. "HIVE STATUS", the team's internal outreach
+  // stage). When resultStatusMapping resolves a row to something more
+  // conclusive (Won/Lost/Disqualified) than statusMapping did, the result
+  // wins — see moreConclusive() in lib/lead-status.ts. Revenue (Quote Value /
+  // Revenue Generated) is only ever counted on a lead once THIS column
+  // resolves it to Won — a bare "quoted, not yet closed" row never counts.
+  resultStatusColumn  String?
+  resultStatusMapping Json?
+
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 }

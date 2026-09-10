@@ -48,7 +48,7 @@ export default function UsersPanel({
         <AddClientModal action={onCreateClient} />
       </div>
       <p className="text-sm mb-4" style={{ color: "var(--text-secondary)" }}>
-        Coaches see every client. Client logins only ever see their own data. Need a new client first? Use "Add Client" above.
+        Admins see every client. Client logins only ever see their own data. Need a new client first? Use "Add Client" above.
       </p>
 
       <div className="space-y-2 mb-5">
@@ -59,7 +59,7 @@ export default function UsersPanel({
                 {u.name} <span style={{ color: "var(--text-muted)" }}>· {u.email}</span>
               </p>
               <p className="text-xs" style={{ color: "var(--text-secondary)" }}>
-                {u.role === "COACH" ? "Coach (full access)" : `Client · ${u.clientName ?? "—"}`}
+                {u.role === "COACH" ? "Admin (full access)" : `Client · ${u.clientName ?? "—"}`}
               </p>
             </div>
             <form action={deleteUser.bind(null, u.id)}>
@@ -113,7 +113,7 @@ export default function UsersPanel({
           className="px-3 py-2 rounded-lg outline-none text-sm"
         >
           <option value="CLIENT">Client (their data only)</option>
-          <option value="COACH">Coach (full access)</option>
+          <option value="COACH">Admin (full access)</option>
         </select>
         {role === "CLIENT" ? (
           <select

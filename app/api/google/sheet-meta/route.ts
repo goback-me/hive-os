@@ -23,5 +23,7 @@ export async function GET(req: NextRequest) {
     visibleColumns: sheet.visibleColumns,
     statusColumn: sheet.statusColumn,
     statusMapping: sheet.statusMapping ?? {},
+    resultStatusColumn: sheet.resultStatusColumn,
+    resultStatusMapping: sheet.resultStatusMapping ?? {},
   });
 }
