@@ -83,7 +83,7 @@ export default function AddClientModal({
                 <select name="status" defaultValue="ONBOARDING" style={inputStyle} className="px-3 py-2 rounded-lg outline-none">
                   <option value="ONBOARDING">Onboarding</option>
                   <option value="ACTIVE">Active</option>
-                  <option value="CHURNED">Churned</option>
+                  <option value="CHURNED">Not Active</option>
                 </select>
               </div>
               <div className="flex justify-end gap-2 pt-2">

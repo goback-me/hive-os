@@ -40,7 +40,6 @@ This one script does everything:
    `prisma/schema.prisma` directly; it does not replay the numbered
    migration files under `prisma/migrations/`, which exist for local dev
    history rather than the deploy path).
-7. Runs `npm run db:seed` (safe to re-run — only touches missing seed rows).
 
 ## `.env` — what has to be real before `deploy.sh` will proceed
 

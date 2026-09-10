@@ -1,10 +1,30 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
-import { createPortal } from "react-dom";
+import { useEffect, useRef, useState, useTransition } from "react";
+import { createPortal, useFormState, useFormStatus } from "react-dom";
+import type { CreateLessonState } from "@/lib/actions";
 
 type Lesson = { id: string; title: string; videoUrl: string | null; content: string | null };
 type ModuleWithLessons = { id: string; title: string; lessons: Lesson[] };
+
+// Lives inside the lesson <form> so useFormStatus can see it — closes the
+// "Add lesson" modal once a submit finishes with no error, but leaves it
+// open (with the error shown) if the link check or anything else failed.
+function AddLessonSubmit({ onDone }: { onDone: (success: boolean) => void }) {
+  const { pending } = useFormStatus();
+  const wasPending = useRef(false);
+
+  useEffect(() => {
+    if (wasPending.current && !pending) onDone(true);
+    wasPending.current = pending;
+  }, [pending, onDone]);
+
+  return (
+    <button type="submit" disabled={pending} className="px-4 py-2 rounded-lg text-sm font-bold btn-cta disabled:opacity-50" style={{ background: "var(--secondary)", color: "#fff" }}>
+      {pending ? "Checking link…" : "Add lesson"}
+    </button>
+  );
+}
 
 export default function PlaybooksPanel({
   clientId,
@@ -19,13 +39,14 @@ export default function PlaybooksPanel({
   completedLessonIds: string[];
   onToggle: (clientId: string, lessonId: string, completed: boolean) => Promise<void>;
   onCreateModule: (formData: FormData) => Promise<void>;
-  onCreateLesson: (formData: FormData) => Promise<void>;
+  onCreateLesson: (prevState: CreateLessonState, formData: FormData) => Promise<CreateLessonState>;
 }) {
   const [completed, setCompleted] = useState<Set<string>>(new Set(completedLessonIds));
   const [openLesson, setOpenLesson] = useState<Lesson | null>(null);
   const [addOpen, setAddOpen] = useState<"module" | "lesson" | null>(null);
   const [mounted, setMounted] = useState(false);
   const [, startTransition] = useTransition();
+  const [lessonState, lessonFormAction] = useFormState<CreateLessonState, FormData>(onCreateLesson, null);
 
   useEffect(() => setMounted(true), []);
 
@@ -196,10 +217,7 @@ export default function PlaybooksPanel({
                 <span className="material-symbols-outlined">close</span>
               </button>
             </div>
-            <form
-              action={async (fd) => { await onCreateLesson(fd); setAddOpen(null); }}
-              className="p-5 space-y-3"
-            >
+            <form action={lessonFormAction} className="p-5 space-y-3">
               <div>
                 <label className="text-xs font-semibold block mb-1" style={{ color: "var(--text-secondary)" }}>Module</label>
                 <select name="moduleId" required style={{ width: "100%", background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }} className="px-3 py-2 rounded-lg outline-none text-sm">
@@ -213,15 +231,18 @@ export default function PlaybooksPanel({
               </div>
               <div>
                 <label className="text-xs font-semibold block mb-1" style={{ color: "var(--text-secondary)" }}>YouTube or Loom link (optional)</label>
-                <input name="videoUrl" style={{ width: "100%", background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }} className="px-3 py-2 rounded-lg outline-none text-sm" placeholder="https://youtube.com/watch?v=..." />
+                <input name="videoUrl" type="url" style={{ width: "100%", background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }} className="px-3 py-2 rounded-lg outline-none text-sm" placeholder="https://youtube.com/watch?v=..." />
               </div>
               <div>
                 <label className="text-xs font-semibold block mb-1" style={{ color: "var(--text-secondary)" }}>Written content (optional)</label>
                 <textarea name="content" rows={3} style={{ width: "100%", background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }} className="px-3 py-2 rounded-lg outline-none text-sm resize-none" />
               </div>
+              {lessonState?.error && (
+                <p className="text-xs" style={{ color: "var(--danger)" }}>{lessonState.error}</p>
+              )}
               <div className="flex justify-end gap-2 pt-1">
                 <button type="button" onClick={() => setAddOpen(null)} className="px-4 py-2 rounded-lg text-sm font-semibold" style={{ border: "1px solid var(--border)", color: "var(--text-secondary)" }}>Cancel</button>
-                <button type="submit" className="px-4 py-2 rounded-lg text-sm font-bold btn-cta" style={{ background: "var(--secondary)", color: "#fff" }}>Add lesson</button>
+                <AddLessonSubmit onDone={() => { if (!lessonState?.error) setAddOpen(null); }} />
               </div>
             </form>
           </div>

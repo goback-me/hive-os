@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import ClientFilter from "@/components/ClientFilter";
 import GoogleAccountCard from "@/components/GoogleAccountCard";
 import LeadsSheetPanel from "@/components/LeadsSheetPanel";
+import AddClientSheetButton from "@/components/AddClientSheetButton";
 import { requireUser } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
@@ -15,7 +16,7 @@ export default async function LeadsPage({
 
   const [allClients, googleConnection] = await Promise.all([
     prisma.client.findMany({
-      where: { isActive: true },
+      where: { isActive: true, archivedAt: null },
       orderBy: { name: "asc" },
       select: { id: true, name: true, slug: true },
     }),
@@ -38,7 +39,15 @@ export default async function LeadsPage({
   const activeSlug = searchParams.client ?? clients[0].slug;
   const activeClient = clients.find((c) => c.slug === activeSlug) ?? clients[0];
 
-  const sheet = await prisma.clientSheet.findUnique({ where: { clientId: activeClient.id } });
+  const [sheet, connectedSheets] = await Promise.all([
+    prisma.clientSheet.findUnique({ where: { clientId: activeClient.id } }),
+    prisma.clientSheet.findMany({
+      where: { clientId: { in: clients.map((c) => c.id) } },
+      select: { clientId: true },
+    }),
+  ]);
+  const connectedClientIds = new Set(connectedSheets.map((s) => s.clientId));
+  const unconnectedClients = clients.filter((c) => !connectedClientIds.has(c.id));
 
   return (
     <div className="p-10 max-w-[1400px] mx-auto space-y-6">
@@ -49,7 +58,12 @@ export default async function LeadsPage({
             Live lead data pulled from each client's assigned Google Sheet.
           </p>
         </div>
-        {user.role === "COACH" && <ClientFilter clients={clients} activeSlug={activeClient.slug} />}
+        {user.role === "COACH" && (
+          <div className="flex items-center gap-2">
+            <ClientFilter clients={clients} activeSlug={activeClient.slug} />
+            <AddClientSheetButton unconnectedClients={unconnectedClients} />
+          </div>
+        )}
       </div>
 
       {searchParams.error && (
@@ -66,6 +80,7 @@ export default async function LeadsPage({
       )}
 
       <LeadsSheetPanel
+        key={activeClient.id}
         clientId={activeClient.id}
         googleConnected={Boolean(googleConnection)}
         spreadsheetId={sheet?.spreadsheetId ?? null}

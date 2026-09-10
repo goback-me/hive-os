@@ -2,7 +2,7 @@ import { prisma } from "./prisma";
 
 const UPCOMING_SESSION_WINDOW_DAYS = 3;
 const NO_CONTACT_DAYS = 14;
-// Hive OS thresholds — kept distinct from the Coach OS ones above since
+// Hive OS thresholds — kept distinct from the original coaching app's ones above since
 // they drive different checks (contract renewal window, contact-log gap).
 const RENEWAL_WINDOW_DAYS = 14;
 const NO_CALL_DAYS = 10;
@@ -11,13 +11,13 @@ function daysBetween(a: Date, b: Date) {
   return Math.round((a.getTime() - b.getTime()) / (1000 * 60 * 60 * 24));
 }
 
-// Wipes and rebuilds the NeedsActionItem cache table. Merges Coach OS's
+// Wipes and rebuilds the NeedsActionItem cache table. Merges the original coaching app's
 // session/onboarding-based checks with Hive OS's contract/contact-log
 // checks — both feed the same table and the same dashboard "Needs Action"
 // list, since a client can trip either agency's rules.
 export async function computeNeedsAction() {
   const now = new Date();
-  const clients = await prisma.client.findMany({ where: { isActive: true } });
+  const clients = await prisma.client.findMany({ where: { isActive: true, archivedAt: null } });
 
   const items: {
     clientId: string;
@@ -81,7 +81,7 @@ export async function computeNeedsAction() {
       });
     }
 
-    // ── Hive OS — contact log (separate signal from Coach OS's session-
+    // ── Hive OS — contact log (separate signal from the original coaching app's session-
     // based "no_contact" check below; a client can trip either or both) ──
     const lastContact = await prisma.contactLog.findFirst({
       where: { clientId: client.id },
@@ -100,7 +100,7 @@ export async function computeNeedsAction() {
       }
     }
 
-    // ── Coach OS — sessions / onboarding ────────────────────────────────
+    // ── Original coaching app — sessions / onboarding ────────────────────────────────
     const missedSessions = await prisma.session.findMany({
       where: { clientId: client.id, status: "SCHEDULED", scheduledAt: { lt: now } },
     });
@@ -184,15 +184,15 @@ export async function computeNeedsAction() {
 
 // Main dashboard page.tsx (unchanged UI) destructures revenueThisMonth/
 // activeClients/totalClients/sessionsThisMonth from this — those four keep
-// their exact Coach OS meaning. totalAdSpend/avgRoas are Hive OS additions,
+// their exact original meaning from the pre-merge coaching app. totalAdSpend/avgRoas are Hive OS additions,
 // available once the page's KPI cards are extended to show them.
 export async function getDashboardKpis() {
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
 
   const [activeClients, totalClients, revenueAgg, sessionsThisMonth, spendAgg] = await Promise.all([
-    prisma.client.count({ where: { isActive: true } }),
-    prisma.client.count(),
+    prisma.client.count({ where: { isActive: true, archivedAt: null } }),
+    prisma.client.count({ where: { archivedAt: null } }),
     prisma.payment.aggregate({
       _sum: { amountDue: true },
       where: { status: "PAID", paidDate: { gte: monthStart } },

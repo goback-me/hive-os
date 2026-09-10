@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type MouseEvent } from "react";
 import Link from "next/link";
 
 type ClientCard = {
@@ -16,20 +16,35 @@ type ClientCard = {
 const STATUS_STYLE: Record<string, { dot: string; bg: string; color: string; label: string }> = {
   ACTIVE: { dot: "var(--primary)", bg: "var(--primary-tint)", color: "var(--primary)", label: "Active" },
   ONBOARDING: { dot: "var(--text-secondary)", bg: "var(--surface-hover)", color: "var(--text-secondary)", label: "Onboarding" },
-  CHURNED: { dot: "var(--danger)", bg: "var(--danger-tint)", color: "var(--danger)", label: "Churned" },
+  CHURNED: { dot: "var(--danger)", bg: "var(--danger-tint)", color: "var(--danger)", label: "Not Active" },
 };
 
 export default function ClientsGrid({
   clients,
   onBulkUpdateStatus,
+  onArchive,
+  onUnarchive,
+  archivedView = false,
 }: {
   clients: ClientCard[];
   onBulkUpdateStatus: (clientIds: string[], status: string) => Promise<void>;
+  onArchive: (clientId: string) => Promise<void>;
+  onUnarchive: (clientId: string) => Promise<void>;
+  archivedView?: boolean;
 }) {
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkStatus, setBulkStatus] = useState("ACTIVE");
   const [applying, setApplying] = useState(false);
+  const [archiving, setArchiving] = useState<string | null>(null);
+
+  function handleArchiveToggle(e: MouseEvent, clientId: string) {
+    e.preventDefault();
+    e.stopPropagation();
+    setArchiving(clientId);
+    const action = archivedView ? onUnarchive : onArchive;
+    action(clientId).finally(() => setArchiving(null));
+  }
 
   function toggle(id: string) {
     setSelected((prev) => {
@@ -84,7 +99,7 @@ export default function ClientsGrid({
             >
               <option value="ACTIVE">Set to Active</option>
               <option value="ONBOARDING">Set to Onboarding</option>
-              <option value="CHURNED">Set to Churned</option>
+              <option value="CHURNED">Set to Not Active</option>
             </select>
             <button
               onClick={apply}
@@ -116,6 +131,19 @@ export default function ClientsGrid({
                 className="absolute top-4 right-4 w-2.5 h-2.5 rounded-full"
                 style={{ background: s.dot }}
               />
+              {!selecting && (
+                <button
+                  onClick={(e) => handleArchiveToggle(e, client.id)}
+                  disabled={archiving === client.id}
+                  title={archivedView ? "Unarchive" : "Archive"}
+                  className="absolute top-3 right-8 w-7 h-7 rounded-md flex items-center justify-center disabled:opacity-50"
+                  style={{ color: "var(--text-muted)" }}
+                >
+                  <span className="material-symbols-outlined text-[16px]">
+                    {archivedView ? "unarchive" : "archive"}
+                  </span>
+                </button>
+              )}
               <div className="flex items-start gap-3 mb-4">
                 <div
                   className="w-11 h-11 rounded-full flex items-center justify-center text-sm font-bold shrink-0"

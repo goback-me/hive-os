@@ -32,7 +32,7 @@ enum PaymentStatus {
 }
 
 // From Hive OS — richer payment typing (deposit/second/full/retainer),
-// kept alongside Coach OS's simpler `label` free-text field.
+// kept alongside the original coaching app's simpler `label` free-text field.
 enum PaymentType {
   DEPOSIT
   SECOND_PAYMENT
@@ -131,7 +131,7 @@ model ClientLessonProgress {
   @@unique([clientId, lessonId])
 }
 
-// ── Ads (Coach OS) — lightweight per-post metrics, schema-ready for a
+// ── Ads (original coaching app) — lightweight per-post metrics, schema-ready for a
 // Meta Ads API / server-tracker sync. Kept alongside Hive OS's daily-spend
 // model below since they answer different questions (creative performance
 // vs. day-by-day spend/ROAS).
@@ -450,6 +450,10 @@ model Client {
   email       String?
   isActive    Boolean      @default(true)
   status      ClientStatus @default(ONBOARDING)
+  // Independent of status — an archived client is hidden from every default
+  // list/dashboard view regardless of ACTIVE/ONBOARDING/CHURNED, but keeps
+  // all their data. null = not archived.
+  archivedAt  DateTime?
   goals       String?
   description String?
   scope       String? // free-text scope of engagement, e.g. "Paid ads management" — replaces the fixed Program picker on the create-client form
@@ -457,7 +461,7 @@ model Client {
   program     Program?     @relation(fields: [programId], references: [id])
   joinedAt    DateTime     @default(now())
 
-  // ── Coach OS — coaching-business relations ──────────────────────────
+  // ── Original coaching app — coaching-business relations ──────────────────────────
   users            User[]
   sessions         Session[]
   progressNotes    ProgressNote[]
@@ -511,13 +515,13 @@ model ProgressNote {
   @@index([clientId, createdAt])
 }
 
-// Merged: Coach OS's simple free-text `label` + Hive OS's typed `type`,
+// Merged: the original coaching app's simple free-text `label` + Hive OS's typed `type`,
 // `amountPaid` and `stripeInvoiceId` for real payment-sync support.
 model Payment {
   id              String        @id @default(cuid())
   clientId        String
   client          Client        @relation(fields: [clientId], references: [id])
-  type            PaymentType?  // optional — Coach OS rows won't have one
+  type            PaymentType?  // optional — rows from the original coaching app won't have one
   label           String
   amountDue       Decimal       @db.Decimal(10, 2)
   amountPaid      Decimal?      @db.Decimal(10, 2)
@@ -530,9 +534,9 @@ model Payment {
   @@index([status, dueDate])
 }
 
-// Cached rules-engine output — merged Coach OS (session/onboarding based)
+// Cached rules-engine output — merged the original coaching app (session/onboarding based)
 // and Hive OS (contract/contact-log based) checks feed the same table.
-// `amount` / `daysDelta` are Hive OS additions, left nullable so Coach OS's
+// `amount` / `daysDelta` are Hive OS additions, left nullable so the original coaching app's
 // checks (which don't have a dollar figure) can omit them.
 model NeedsActionItem {
   id          String   @id @default(cuid())

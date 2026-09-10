@@ -258,7 +258,7 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
         }
       />
       {/* Hive OS — Meta Marketing API connection for this client, merged in
-          alongside Coach OS's own manually-tracked AdCampaign rows above. */}
+          alongside the original coaching app's own manually-tracked AdCampaign rows above. */}
       <MetaAdsCard clientId={client.id} connected={Boolean(client.metaAdAccountId)} adAccountId={client.metaAdAccountId} />
     </div>
   );
@@ -321,7 +321,7 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
         tabs={[
           { key: "onboarding", label: "Onboarding", content: onboardingContent },
           { key: "dashboard", label: "Dashboard", content: dashboardContent },
-          { key: "leads", label: "Leads", content: leadsContent },
+          ...(clientSheet ? [{ key: "leads", label: "Leads", content: leadsContent }] : []),
           { key: "gameplan", label: "Gameplan", content: gameplanContent },
           { key: "playbooks", label: "Playbooks", content: playbooksContent },
           { key: "ads", label: "Ads", content: adsContent },
