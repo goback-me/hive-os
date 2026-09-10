@@ -35,7 +35,14 @@ docker compose build --no-cache app
 docker compose up -d
 
 echo "→ Waiting for Postgres to be healthy..."
+tries=0
 until docker inspect --format='{{.State.Health.Status}}' hive_os_postgres 2>/dev/null | grep -q healthy; do
+  tries=$((tries + 1))
+  if [ "$tries" -ge 30 ]; then
+    echo "STOP: Postgres never reported healthy after 60s. Check its logs:"
+    echo "  docker compose logs postgres"
+    exit 1
+  fi
   echo "  ...still waiting"
   sleep 2
 done
