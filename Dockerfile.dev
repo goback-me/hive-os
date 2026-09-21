@@ -1,0 +1,13 @@
+# Dev-only image: runs next dev with the source bind-mounted from the host,
+# so file changes reflect instantly — no rebuild. Separate from the main
+# Dockerfile (which does a full production build) on purpose; this one is
+# never used for the VPS/production deploy.
+FROM node:20-slim
+WORKDIR /app
+RUN apt-get update -y && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
+COPY package.json package-lock.json* ./
+RUN npm install
+EXPOSE 3000
+# prisma generate has to run here, not at build time — schema.prisma only
+# exists once the bind mount attaches at container start, not during build.
+CMD ["sh", "-c", "npx prisma generate && npm run dev"]

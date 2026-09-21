@@ -1,8 +1,15 @@
-import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
+import { clerkMiddleware, createRouteMatcher, clerkClient } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
 
 // Routes that don't require a signed-in session at all.
-const isPublicRoute = createRouteMatcher(["/login(.*)", "/refer(.*)", "/api/webhooks/clerk"]);
+const isPublicRoute = createRouteMatcher([
+  "/login(.*)",
+  "/refer(.*)",
+  "/api/webhooks/clerk",
+  // Local-dev auto-login only — the route itself also refuses to run
+  // outside dev, this just lets an unauthenticated request reach it at all.
+  ...(process.env.NODE_ENV !== "production" && process.env.ADMIN_EMAIL ? ["/api/dev-login"] : []),
+]);
 
 // Pages that only a COACH account may reach — everything else falls
 // through to the shared/client-scoped handling below. (Adapted from Hive
@@ -23,11 +30,19 @@ export default clerkMiddleware(async (auth, req) => {
   // publicMetadata is set the moment an account is created — see
   // lib/actions.ts createUser — and mirrored by the Clerk webhook,
   // app/api/webhooks/clerk/route.ts.
-  const metadata = (sessionClaims?.publicMetadata ?? {}) as {
-    role?: "COACH" | "CLIENT";
-    clientId?: string; // Client.id (cuid)
-    clientSlug?: string; // Client.slug — used by /clients/[slug]
-  };
+  type Metadata = { role?: "COACH" | "CLIENT"; clientId?: string; clientSlug?: string };
+  let metadata = (sessionClaims?.publicMetadata ?? {}) as Metadata;
+
+  // Some Clerk instances' default session token doesn't include
+  // publicMetadata at all (requires customizing the session token in Clerk
+  // Dashboard → Sessions) — fall back to the Backend API, which always has
+  // the full user object, so this works regardless of that per-project
+  // Dashboard setting. Same fallback as lib/auth.ts's getCurrentUser.
+  if (!metadata.role) {
+    const clerk = await clerkClient();
+    const user = await clerk.users.getUser(userId).catch(() => null);
+    if (user) metadata = (user.publicMetadata ?? {}) as Metadata;
+  }
 
   // Account exists in Clerk but hasn't been assigned a role/client yet
   // (shouldn't normally happen — accounts are only created by a coach

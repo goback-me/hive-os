@@ -1,26 +1,40 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
-import { createClient, bulkUpdateClientStatus, archiveClient, unarchiveClient } from "@/lib/actions";
+import { createClient, bulkUpdateClientStatus, archiveClient, unarchiveClient, deleteClientPermanently } from "@/lib/actions";
 import { requireCoach } from "@/lib/auth";
 import AddClientModal from "./AddClientModal";
 import ClientsGrid from "./ClientsGrid";
 
 export const dynamic = "force-dynamic";
 
+type View = "active" | "not-active" | "archived";
+
+const VIEW_WHERE: Record<View, object> = {
+  active: { archivedAt: null, status: { not: "CHURNED" } },
+  "not-active": { archivedAt: null, status: "CHURNED" },
+  archived: { archivedAt: { not: null } },
+};
+
+const TABS: { key: View; label: string }[] = [
+  { key: "active", label: "Active" },
+  { key: "not-active", label: "Not Active" },
+  { key: "archived", label: "Archived" },
+];
+
 export default async function ClientsPage({
   searchParams,
 }: {
-  searchParams: { archived?: string };
+  searchParams: { view?: string };
 }) {
   await requireCoach(); // client logins are redirected to their own client page, never this list
 
-  const showArchived = searchParams.archived === "1";
+  const view: View = searchParams.view === "not-active" || searchParams.view === "archived" ? searchParams.view : "active";
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
 
   const [clients, programs] = await Promise.all([
     prisma.client.findMany({
-      where: showArchived ? { archivedAt: { not: null } } : { archivedAt: null },
+      where: VIEW_WHERE[view],
       orderBy: { name: "asc" },
       include: { program: true },
     }),
@@ -38,24 +52,35 @@ export default async function ClientsPage({
 
   return (
     <div className="p-10 max-w-[1500px] mx-auto">
-      <div className="flex justify-between items-start mb-8">
+      <div className="flex justify-between items-start mb-6">
         <div>
           <h1 className="page-title font-heading" style={{ color: "var(--text-primary)" }}>Clients</h1>
           <p className="text-base mt-1" style={{ color: "var(--text-secondary)" }}>
-            {showArchived ? "Archived clients." : `All clients across ${programs.map((p) => p.name).join(", ")}.`}
+            {view === "active"
+              ? `Active clients across ${programs.map((p) => p.name).join(", ")}.`
+              : view === "not-active"
+              ? "Not active clients — change status here to reactivate."
+              : "Archived clients — unarchive or delete permanently."}
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        {view === "active" && <AddClientModal action={createClient} />}
+      </div>
+
+      <div className="flex gap-2 mb-6">
+        {TABS.map((t) => (
           <Link
-            href={showArchived ? "/clients" : "/clients?archived=1"}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-semibold"
-            style={{ border: "1px solid var(--border)", color: "var(--text-secondary)" }}
+            key={t.key}
+            href={t.key === "active" ? "/clients" : `/clients?view=${t.key}`}
+            className="px-3 py-2 rounded-lg text-sm font-semibold"
+            style={
+              view === t.key
+                ? { background: "var(--primary)", color: "#fff" }
+                : { border: "1px solid var(--border)", color: "var(--text-secondary)" }
+            }
           >
-            <span className="material-symbols-outlined text-[18px]">{showArchived ? "arrow_back" : "archive"}</span>
-            {showArchived ? "Back to active clients" : "View archived"}
+            {t.label}
           </Link>
-          {!showArchived && <AddClientModal action={createClient} />}
-        </div>
+        ))}
       </div>
 
       <ClientsGrid
@@ -71,7 +96,8 @@ export default async function ClientsPage({
         onBulkUpdateStatus={bulkUpdateClientStatus}
         onArchive={archiveClient}
         onUnarchive={unarchiveClient}
-        archivedView={showArchived}
+        onDeletePermanently={deleteClientPermanently}
+        view={view}
       />
     </div>
   );

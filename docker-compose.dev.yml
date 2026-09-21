@@ -37,6 +37,33 @@ services:
     ports:
       - "3000:3000"
     # no traefik labels, no external network — pure local run
+    profiles: ["prod-like"]
+
+  # Source bind-mounted, runs `next dev` — for instant reload while iterating.
+  # node_modules/.next are named volumes (not bind-mounted) so the container's
+  # own Linux-built binaries never get clobbered by the host's Windows ones,
+  # and so bind-mount I/O overhead doesn't slow down every file access.
+  app-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: hive_os_app_hotreload
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      # Docker Desktop's Windows bind-mount file events aren't always
+      # reliable enough for webpack's watcher — polling guarantees changes
+      # are picked up even when native fs events don't propagate through.
+      WATCHPACK_POLLING: "true"
+    ports:
+      - "3011:3000"
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - /app/.next
 
 volumes:
   hive_os_pg_dev_data:

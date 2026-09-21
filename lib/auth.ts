@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { cache } from "react";
 import { auth } from "@clerk/nextjs/server";
+import { getClerkAdminClient } from "@/lib/clerk-admin";
 
 export type CurrentUser = {
   id: string; // Clerk user id — app-side User.id is looked up separately where needed (e.g. Settings)
@@ -24,24 +25,34 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
   const { userId, sessionClaims } = await auth();
   if (!userId) return null;
 
-  const metadata = (sessionClaims?.publicMetadata ?? {}) as {
-    role?: "COACH" | "CLIENT";
-    clientId?: string;
-    clientSlug?: string;
-    name?: string;
-  };
+  type Metadata = { role?: "COACH" | "CLIENT"; clientId?: string; clientSlug?: string; name?: string };
+  let metadata = (sessionClaims?.publicMetadata ?? {}) as Metadata;
+  let email = sessionClaims?.email as string | undefined;
+  let firstName = sessionClaims?.firstName as string | undefined;
+  let lastName = sessionClaims?.lastName as string | undefined;
+
+  // Some Clerk instances' default session token doesn't include
+  // publicMetadata at all (that requires customizing the session token in
+  // Clerk Dashboard → Sessions) — falls back to the Backend API, which
+  // always has the full user object, so this works regardless of whether
+  // that's been configured on this particular Clerk project.
+  if (!metadata.role) {
+    const clerk = await getClerkAdminClient();
+    const user = await clerk.users.getUser(userId).catch(() => null);
+    if (user) {
+      metadata = (user.publicMetadata ?? {}) as Metadata;
+      email = user.emailAddresses.find((e) => e.id === user.primaryEmailAddressId)?.emailAddress ?? user.emailAddresses[0]?.emailAddress;
+      firstName = user.firstName ?? undefined;
+      lastName = user.lastName ?? undefined;
+    }
+  }
 
   // Logged into Clerk but no role assigned yet — treat as unauthenticated.
   // (Shouldn't happen in normal use: accounts are only created via the
   // Settings "Create user" flow, which sets metadata at creation time.)
   if (!metadata.role) return null;
 
-  const email = sessionClaims?.email as string | undefined;
-  const name =
-    metadata.name ||
-    [sessionClaims?.firstName, sessionClaims?.lastName].filter(Boolean).join(" ") ||
-    email ||
-    "Unnamed";
+  const name = metadata.name || [firstName, lastName].filter(Boolean).join(" ") || email || "Unnamed";
 
   return {
     id: userId,

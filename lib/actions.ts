@@ -369,6 +369,69 @@ export async function unarchiveClient(clientId: string) {
   revalidatePath("/leads");
 }
 
+// Irreversible — only ever offered from the archived view (also enforced
+// here, not just in the UI). Deletes every row this client owns across the
+// schema, in FK dependency order, in one transaction so it can't half-fail.
+// Clerk logins are deleted first since that's an external call that can't
+// be part of the DB transaction; best-effort so an already-orphaned Clerk
+// account never blocks the local cleanup.
+export async function deleteClientPermanently(clientId: string) {
+  await requireCoach();
+
+  const client = await prisma.client.findUnique({ where: { id: clientId } });
+  if (!client) return;
+  if (!client.archivedAt) throw new Error("Archive this client before deleting it permanently.");
+
+  const [clientUsers, leads, referralLink] = await Promise.all([
+    prisma.user.findMany({ where: { clientId } }),
+    prisma.lead.findMany({ where: { clientId }, select: { id: true } }),
+    prisma.referralLink.findUnique({ where: { clientId } }),
+  ]);
+
+  const clerk = await getClerkAdminClient();
+  await Promise.all(clientUsers.map((u) => clerk.users.deleteUser(u.clerkId).catch(() => {})));
+
+  const leadIds = leads.map((l) => l.id);
+
+  await prisma.$transaction([
+    ...(leadIds.length
+      ? [
+          prisma.leadActivity.deleteMany({ where: { leadId: { in: leadIds } } }),
+          prisma.leadNote.deleteMany({ where: { leadId: { in: leadIds } } }),
+        ]
+      : []),
+    prisma.lead.deleteMany({ where: { clientId } }),
+    prisma.clientOnboardingStep.deleteMany({ where: { clientId } }),
+    prisma.clientLessonProgress.deleteMany({ where: { clientId } }),
+    prisma.adCampaign.deleteMany({ where: { clientId } }),
+    prisma.clientAward.deleteMany({ where: { clientId } }),
+    prisma.clientSheet.deleteMany({ where: { clientId } }),
+    prisma.contract.deleteMany({ where: { clientId } }),
+    prisma.contactLog.deleteMany({ where: { clientId } }),
+    prisma.adSpendDaily.deleteMany({ where: { clientId } }),
+    prisma.revenueMonthly.deleteMany({ where: { clientId } }),
+    prisma.session.deleteMany({ where: { clientId } }),
+    prisma.progressNote.deleteMany({ where: { clientId } }),
+    prisma.payment.deleteMany({ where: { clientId } }),
+    prisma.needsActionItem.deleteMany({ where: { clientId } }),
+    prisma.task.deleteMany({ where: { clientId } }),
+    prisma.user.deleteMany({ where: { clientId } }),
+    // A referral is its own record (a prospect, not this client's data) —
+    // unlink it rather than deleting it, then remove the now-orphaned link.
+    ...(referralLink
+      ? [
+          prisma.referral.updateMany({ where: { referralLinkId: referralLink.id }, data: { referralLinkId: null } }),
+          prisma.referralLink.delete({ where: { id: referralLink.id } }),
+        ]
+      : []),
+    prisma.client.delete({ where: { id: clientId } }),
+  ]);
+
+  revalidatePath("/clients");
+  revalidatePath("/leads");
+  revalidatePath("/dashboard");
+}
+
 // ── Users / logins (coach-only) ──────────────────────────────────────────
 // Creates the Clerk account AND the app-side profile in one go. The temp
 // password is shown once on screen — the user should change it after first

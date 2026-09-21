@@ -24,19 +24,23 @@ export default function ClientsGrid({
   onBulkUpdateStatus,
   onArchive,
   onUnarchive,
-  archivedView = false,
+  onDeletePermanently,
+  view = "active",
 }: {
   clients: ClientCard[];
   onBulkUpdateStatus: (clientIds: string[], status: string) => Promise<void>;
   onArchive: (clientId: string) => Promise<void>;
   onUnarchive: (clientId: string) => Promise<void>;
-  archivedView?: boolean;
+  onDeletePermanently: (clientId: string) => Promise<void>;
+  view?: "active" | "not-active" | "archived";
 }) {
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkStatus, setBulkStatus] = useState("ACTIVE");
   const [applying, setApplying] = useState(false);
   const [archiving, setArchiving] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const archivedView = view === "archived";
 
   function handleArchiveToggle(e: MouseEvent, clientId: string) {
     e.preventDefault();
@@ -44,6 +48,16 @@ export default function ClientsGrid({
     setArchiving(clientId);
     const action = archivedView ? onUnarchive : onArchive;
     action(clientId).finally(() => setArchiving(null));
+  }
+
+  function handleDelete(e: MouseEvent, clientId: string, clientName: string) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!window.confirm(`Permanently delete ${clientName}? This deletes all their data — leads, sessions, payments, everything. This cannot be undone.`)) {
+      return;
+    }
+    setDeleting(clientId);
+    onDeletePermanently(clientId).finally(() => setDeleting(null));
   }
 
   function toggle(id: string) {
@@ -131,6 +145,17 @@ export default function ClientsGrid({
                 className="absolute top-4 right-4 w-2.5 h-2.5 rounded-full"
                 style={{ background: s.dot }}
               />
+              {!selecting && archivedView && (
+                <button
+                  onClick={(e) => handleDelete(e, client.id, client.name)}
+                  disabled={deleting === client.id}
+                  title="Delete permanently"
+                  className="absolute top-3 right-14 w-7 h-7 rounded-md flex items-center justify-center disabled:opacity-50"
+                  style={{ color: "var(--danger)" }}
+                >
+                  <span className="material-symbols-outlined text-[16px]">delete_forever</span>
+                </button>
+              )}
               {!selecting && (
                 <button
                   onClick={(e) => handleArchiveToggle(e, client.id)}

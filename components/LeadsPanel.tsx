@@ -529,7 +529,7 @@ export default function LeadsPanel({
               <table className="w-full text-left text-sm min-w-[760px]">
                 <thead>
                   <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                    {["Name", "Phone", "Email", "Source", "Campaign", "Sheet Status", "Status", "Value", ""].map((h, i) => (
+                    {["Name", "Phone", "Email", "Source", "Campaign", "Status", "Value", ""].map((h, i) => (
                       <th key={i} className="py-2 pr-4 text-xs font-bold whitespace-nowrap" style={{ color: "var(--text-secondary)" }}>{h}</th>
                     ))}
                   </tr>
@@ -544,7 +544,6 @@ export default function LeadsPanel({
                         <td className="py-2 pr-4 whitespace-nowrap" style={{ color: "var(--text-secondary)" }}>{lead.email || "—"}</td>
                         <td className="py-2 pr-4 whitespace-nowrap" style={{ color: "var(--text-secondary)" }}>{lead.source || "—"}</td>
                         <td className="py-2 pr-4 whitespace-nowrap" style={{ color: "var(--text-secondary)" }}>{lead.campaign ? displayCampaignName(lead.campaign) : "—"}</td>
-                        <td className="py-2 pr-4"><SheetStatusBadge value={lead.sheetStatus} /></td>
                         <td className="py-2 pr-4" onClick={(e) => e.stopPropagation()}>
                           {isCoach ? (
                             <select

@@ -1,6 +1,13 @@
 import { SignIn } from "@clerk/nextjs";
+import LoginError from "@/components/LoginError";
 
-export default function LoginPage() {
+const ERROR_MESSAGES: Record<string, string> = {
+  "no-access": "That account doesn't have access to Hive OS yet. Ask an admin to add you from Settings, then try again.",
+};
+
+export default function LoginPage({ searchParams }: { searchParams: { error?: string } }) {
+  const errorMessage = searchParams.error ? ERROR_MESSAGES[searchParams.error] ?? "Something went wrong signing you in. Please try again." : null;
+
   return (
     <div className="min-h-screen flex" style={{ background: "var(--surface)" }}>
       {/* Brand panel — hidden on narrow screens, the Apple-Store-style bold
@@ -35,31 +42,35 @@ export default function LoginPage() {
 
       {/* Form panel */}
       <div className="flex-1 flex items-center justify-center p-6">
-        <SignIn
-          path="/login"
-          routing="path"
-          fallbackRedirectUrl="/dashboard"
-          // No self-serve accounts in this app — a coach creates every login
-          // from Settings. This just hides the "Sign up" link/footer; the real
-          // lock is disabling sign-up in the Clerk dashboard (see README/setup notes).
-          appearance={{
-            variables: {
-              colorPrimary: "#0071E3",
-              colorText: "#1D1D1F",
-              colorTextSecondary: "#86868B",
-              colorBackground: "#ffffff",
-              colorInputBackground: "#ffffff",
-              colorInputText: "#1D1D1F",
-              borderRadius: "0.75rem",
-              fontFamily: "\"Inter\", \"SF Pro Text\", \"SF Pro Icons\", \"Helvetica Neue\", Helvetica, Arial, sans-serif",
-            },
-            elements: {
-              footerAction: "hidden",
-              footer: "hidden",
-              card: "shadow-none border border-[#D2D2D7]",
-            },
-          }}
-        />
+        {errorMessage ? (
+          <LoginError message={errorMessage} />
+        ) : (
+          <SignIn
+            path="/login"
+            routing="path"
+            fallbackRedirectUrl="/dashboard"
+            // No self-serve accounts in this app — a coach creates every login
+            // from Settings. This just hides the "Sign up" link/footer; the real
+            // lock is disabling sign-up in the Clerk dashboard (see README/setup notes).
+            appearance={{
+              variables: {
+                colorPrimary: "#0071E3",
+                colorText: "#1D1D1F",
+                colorTextSecondary: "#86868B",
+                colorBackground: "#ffffff",
+                colorInputBackground: "#ffffff",
+                colorInputText: "#1D1D1F",
+                borderRadius: "0.75rem",
+                fontFamily: "\"Inter\", \"SF Pro Text\", \"SF Pro Icons\", \"Helvetica Neue\", Helvetica, Arial, sans-serif",
+              },
+              elements: {
+                footerAction: "hidden",
+                footer: "hidden",
+                card: "shadow-none border border-[#D2D2D7]",
+              },
+            }}
+          />
+        )}
       </div>
     </div>
   );

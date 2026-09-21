@@ -15,7 +15,7 @@ export default async function SettingsPage() {
     prisma.awardTier.findMany({ orderBy: { order: "asc" } }),
     prisma.module.findMany({ orderBy: { order: "asc" }, include: { lessons: true } }),
     prisma.user.findMany({ orderBy: { createdAt: "asc" }, include: { client: { select: { name: true } } } }),
-    prisma.client.findMany({ select: { id: true, name: true }, orderBy: { name: "asc" } }),
+    prisma.client.findMany({ where: { archivedAt: null, status: { not: "CHURNED" } }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
   ]);
 
   const userRows = users.map((u) => ({
