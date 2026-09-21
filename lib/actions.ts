@@ -460,7 +460,10 @@ export async function createUser(formData: FormData) {
     clientSlug = client.slug;
   }
 
-  const tempPassword = randomCode(14);
+  // Clerk's password policy on this instance requires 15+ characters —
+  // 20 gives comfortable headroom above that (and above any other Clerk
+  // instance's policy) without needing to special-case a minimum here.
+  const tempPassword = randomCode(20);
   const clerk = await getClerkAdminClient();
 
   const [firstName, ...rest] = name.split(" ");

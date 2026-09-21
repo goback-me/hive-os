@@ -37,6 +37,11 @@ export default function LeadsSheetPanel({
   const [visibleColumns, setVisibleColumns] = useState<string[]>([]);
   const [statusColumn, setStatusColumn] = useState<string | null>(null);
   const [statusMapping, setStatusMapping] = useState<Record<string, LeadStatusValue>>({});
+  // The "did it close" column (e.g. "Prospect Status") — separate from the
+  // outreach-stage column above (e.g. "HIVE STATUS"). Whichever resolves to
+  // a more conclusive status wins — see moreConclusive() in lib/lead-status.ts.
+  const [resultStatusColumn, setResultStatusColumn] = useState<string | null>(null);
+  const [resultStatusMapping, setResultStatusMapping] = useState<Record<string, LeadStatusValue>>({});
   const [showColumnPicker, setShowColumnPicker] = useState(false);
 
   // Actual row data — server already stripped hidden columns out of this.
@@ -44,6 +49,8 @@ export default function LeadsSheetPanel({
   const [rows, setRows] = useState<string[][]>([]);
   const [statusValues, setStatusValues] = useState<string[]>([]);
   const [statusCounts, setStatusCounts] = useState<Record<string, number>>({});
+  const [resultStatusValues, setResultStatusValues] = useState<string[]>([]);
+  const [resultStatusCounts, setResultStatusCounts] = useState<Record<string, number>>({});
   const [statusFilter, setStatusFilter] = useState<string>("__all__");
 
   const [loadingData, setLoadingData] = useState(false);
@@ -58,6 +65,8 @@ export default function LeadsSheetPanel({
         setVisibleColumns(data.visibleColumns);
         setStatusColumn(data.statusColumn);
         setStatusMapping(data.statusMapping ?? {});
+        setResultStatusColumn(data.resultStatusColumn);
+        setResultStatusMapping(data.resultStatusMapping ?? {});
         setCurrentSpreadsheetName(data.spreadsheetName);
         setCurrentSheetName(data.sheetName);
       })
@@ -75,6 +84,8 @@ export default function LeadsSheetPanel({
         setRows(data.rows);
         setStatusValues(data.statusValues ?? []);
         setStatusCounts(data.statusCounts ?? {});
+        setResultStatusValues(data.resultStatusValues ?? []);
+        setResultStatusCounts(data.resultStatusCounts ?? {});
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoadingData(false));
@@ -144,20 +155,29 @@ export default function LeadsSheetPanel({
       ? visibleColumns.filter((c) => c !== col)
       : allColumns.filter((h) => visibleColumns.includes(h) || h === col); // keep header order
     setVisibleColumns(next);
-    // if we just hid the current status column, clear it locally too
+    // if we just hid the current status column(s), clear them locally too
     if (!next.includes(statusColumn ?? "")) setStatusColumn(null);
+    if (!next.includes(resultStatusColumn ?? "")) setResultStatusColumn(null);
   }
 
-  function saveColumns(nextStatusColumn: string | null) {
+  function saveColumns(nextStatusColumn: string | null, nextResultStatusColumn: string | null) {
     fetch("/api/google/columns", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ clientId, visibleColumns, statusColumn: nextStatusColumn, statusMapping }),
+      body: JSON.stringify({
+        clientId,
+        visibleColumns,
+        statusColumn: nextStatusColumn,
+        statusMapping,
+        resultStatusColumn: nextResultStatusColumn,
+        resultStatusMapping,
+      }),
     })
       .then((r) => r.json())
       .then((data) => {
         if (data.error) throw new Error(data.error);
         setStatusColumn(nextStatusColumn);
+        setResultStatusColumn(nextResultStatusColumn);
         setStatusFilter("__all__");
         setShowColumnPicker(false);
         loadData(); // re-fetch so the table reflects the new column set immediately
@@ -167,6 +187,15 @@ export default function LeadsSheetPanel({
 
   function setMappingFor(sheetValue: string, ourStatus: LeadStatusValue | "") {
     setStatusMapping((prev) => {
+      const next = { ...prev };
+      if (ourStatus) next[sheetValue] = ourStatus;
+      else delete next[sheetValue];
+      return next;
+    });
+  }
+
+  function setResultMappingFor(sheetValue: string, ourStatus: LeadStatusValue | "") {
+    setResultStatusMapping((prev) => {
       const next = { ...prev };
       if (ourStatus) next[sheetValue] = ourStatus;
       else delete next[sheetValue];
@@ -326,7 +355,7 @@ export default function LeadsSheetPanel({
             ))}
           </div>
 
-          <p className="text-xs mb-2" style={{ color: "var(--text-secondary)" }}>Status column (drives the filter dropdown, must be visible)</p>
+          <p className="text-xs mb-2" style={{ color: "var(--text-secondary)" }}>Outreach status column (your team's stage — e.g. "HIVE STATUS"; must be visible)</p>
           <select value={statusColumn ?? ""} onChange={(e) => setStatusColumn(e.target.value || null)} className="mb-3 px-3 py-2 rounded-lg text-xs font-bold outline-none" style={selectStyle}>
             <option value="">None</option>
             {visibleColumns.map((h) => (
@@ -365,8 +394,56 @@ export default function LeadsSheetPanel({
             </>
           )}
 
+          <p className="text-xs mb-2 pt-3" style={{ color: "var(--text-secondary)", borderTop: "1px solid var(--border)" }}>
+            Result status column (did the deal actually close? — e.g. "Prospect Status"; optional, must be visible)
+          </p>
+          <select
+            value={resultStatusColumn ?? ""}
+            onChange={(e) => setResultStatusColumn(e.target.value || null)}
+            className="mb-3 px-3 py-2 rounded-lg text-xs font-bold outline-none"
+            style={selectStyle}
+          >
+            <option value="">None</option>
+            {visibleColumns.map((h) => (
+              <option key={h} value={h}>
+                {h}
+              </option>
+            ))}
+          </select>
+
+          {resultStatusColumn && resultStatusValues.length > 0 && (
+            <>
+              <p className="text-xs mb-2" style={{ color: "var(--text-secondary)" }}>
+                Map "{resultStatusColumn}" values — these OVERRIDE the outreach status above whenever they're more
+                conclusive (e.g. "SOLD" beats "Live Transfer"). Revenue (Quote Value/Revenue Generated) is only
+                counted on a lead once it's mapped to Won here.
+              </p>
+              <div className="space-y-2 mb-3">
+                {resultStatusValues.map((v) => (
+                  <div key={v} className="flex items-center gap-2">
+                    <span className="text-xs font-semibold flex-1 truncate" style={{ color: "var(--text-primary)" }}>{v}</span>
+                    <span className="material-symbols-outlined text-[14px]" style={{ color: "var(--text-muted)" }}>arrow_forward</span>
+                    <select
+                      value={resultStatusMapping[v] ?? ""}
+                      onChange={(e) => setResultMappingFor(v, e.target.value as LeadStatusValue | "")}
+                      className="px-2 py-1.5 rounded-lg text-xs font-bold outline-none"
+                      style={selectStyle}
+                    >
+                      <option value="">Not conclusive (ignored)</option>
+                      {LEAD_STATUSES.map((s) => (
+                        <option key={s} value={s}>
+                          {LEAD_STATUS_LABELS[s]}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+
           <div>
-            <button onClick={() => saveColumns(statusColumn)} className="btn-gradient px-4 py-2 rounded-lg text-xs font-bold">
+            <button onClick={() => saveColumns(statusColumn, resultStatusColumn)} className="btn-gradient px-4 py-2 rounded-lg text-xs font-bold">
               Save
             </button>
           </div>

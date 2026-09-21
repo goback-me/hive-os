@@ -61,13 +61,18 @@ Also double check in the **Clerk dashboard** → User & Authentication →
 Restrictions: **"Allow sign-ups" must be OFF** — accounts are only ever
 created from Settings → Users & logins inside the app.
 
-## Which branch is production?
+## Which repo/branch is production?
 
-`deploy.sh` deploys whatever branch is checked out in the VPS's copy of
-this repo — check with `git branch --show-current` on the server itself.
-The GitHub remote only has `master` and `dev`; there is no `main`. If
-you're not sure which one the VPS is tracking, that's the first thing to
-confirm before pushing anything you expect to go live.
+The VPS deploys from **`goback-me/hive-os`**, branch **`main`** — this is
+a different GitHub repo from `goback-me/hive-coach` (an earlier, now-unused
+repo with unrelated history). Push here:
+
+```bash
+git push https://github.com/goback-me/hive-os.git master:main
+```
+
+`deploy.sh` itself just runs `git pull` on whatever's checked out on the
+VPS — check with `git branch --show-current` on the server if unsure.
 
 ## After deploying
 
