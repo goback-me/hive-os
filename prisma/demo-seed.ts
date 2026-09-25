@@ -1,7 +1,7 @@
 import { prisma } from "../lib/prisma";
 import { computeNeedsAction } from "../lib/needs-action";
 
-// LOCAL DEMO DATA ONLY — fills the dev DB with a believable agency (clients,
+// DEMO DATA — fills the DB with a believable agency (clients,
 // monthly revenue, ad spend, sessions, onboarding, notes, leads) for demos /
 // screen recordings. NOT part of deploy.sh (that runs seed.ts, which never
 // touches client data). Re-runnable: it wipes and rebuilds the demo rows for
@@ -10,8 +10,9 @@ import { computeNeedsAction } from "../lib/needs-action";
 // Jake Of All Tradez is a real sheet-connected client, so his synced leads are
 // left alone — only his revenue/campaigns/sessions/notes/onboarding get rebuilt.
 
-if (process.env.NODE_ENV === "production") {
-  console.error("demo-seed refuses to run with NODE_ENV=production — it writes fake revenue data.");
+// ponytail: explicit opt-in for running on live (demo period only) — remove the flag when real data takes over.
+if (process.env.NODE_ENV === "production" && process.env.ALLOW_DEMO_SEED !== "1") {
+  console.error("demo-seed refuses to run with NODE_ENV=production — it writes fake revenue data. Set ALLOW_DEMO_SEED=1 to override.");
   process.exit(1);
 }
 
@@ -194,10 +195,10 @@ async function main() {
     campaigns: [["Meta Leads — Bathroom Renos", 6240], ["Meta Leads — Kitchen Renos", 4180], ["Retargeting — Quote Requests", 1440]],
   });
 
-  // Empty duplicate Jake rows (no leads, no sheet) would drag retention down —
-  // archive them (reversible from the Clients → Archived view).
-  const dupes = await prisma.client.updateMany({
-    where: { name: { equals: "Jake Of All Tradez", mode: "insensitive" }, id: { not: jake.id }, clientSheet: null, leads: { none: {} }, archivedAt: null },
+  // Every non-demo client (old test rows, duplicate Jakes) gets archived so
+  // the dashboard only shows the demo agency — reversible from Clients → Archived.
+  const archived = await prisma.client.updateMany({
+    where: { slug: { notIn: [...CLIENTS.map((c) => c.slug), jake.slug] }, archivedAt: null },
     data: { archivedAt: now },
   });
 
@@ -206,7 +207,7 @@ async function main() {
   // Jake's rows makes him the first card.
   await prisma.needsActionItem.updateMany({ where: { clientId: jake.id }, data: { computedAt: new Date(now.getTime() + 60000) } });
   const lifetime = JAKE_REVENUE.reduce((a, b) => a + b, 0);
-  console.log(`Demo data ready: ${CLIENTS.length + 1} active clients, ${items} needs-action items, ${dupes.count} duplicate Jake archived.`);
+  console.log(`Demo data ready: ${CLIENTS.length + 1} active clients, ${items} needs-action items, ${archived.count} other clients archived.`);
   console.log(`Jake: $${JAKE_REVENUE.at(-1)!.toLocaleString()} this month, $${lifetime.toLocaleString()} lifetime, $11,860 ad spend.`);
 }
 
