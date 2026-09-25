@@ -37,16 +37,40 @@ function parseDate(v: string | undefined): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-export type SyncSummary = { total: number; created: number; updated: number };
+export type SyncSummary = { total: number; created: number; updated: number; removed: number };
+
+// Removes every synced lead (plus its history/notes) for a client — used when
+// the client's sheet is changed or removed, so leads from a sheet that's no
+// longer assigned never mix with the new one.
+export async function clearClientLeads(clientId: string) {
+  await prisma.$transaction([
+    prisma.leadActivity.deleteMany({ where: { lead: { clientId } } }),
+    prisma.leadNote.deleteMany({ where: { lead: { clientId } } }),
+    prisma.lead.deleteMany({ where: { clientId } }),
+  ]);
+}
 
 // Pulls the client's assigned sheet (read-only, always) and upserts each row
 // into the Lead table. A lead whose status has been manually set in the app
 // (statusManuallySetAt) never has its status overwritten by a later sync —
-// every other field still refreshes normally.
+// every other field still refreshes normally. The outcome (time or error) is
+// recorded on ClientSheet so the Leads tab can show it.
 export async function syncLeadsFromSheet(clientId: string): Promise<SyncSummary> {
   const sheet = await prisma.clientSheet.findUnique({ where: { clientId } });
   if (!sheet) throw new Error("No Google Sheet assigned to this client yet — connect one on the Leads page first.");
 
+  try {
+    const summary = await runSync(clientId, sheet);
+    await prisma.clientSheet.update({ where: { clientId }, data: { lastSyncedAt: new Date(), lastSyncError: null } });
+    return summary;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await prisma.clientSheet.update({ where: { clientId }, data: { lastSyncError: message.slice(0, 500) } }).catch(() => {});
+    throw err;
+  }
+}
+
+async function runSync(clientId: string, sheet: NonNullable<Awaited<ReturnType<typeof prisma.clientSheet.findUnique>>>): Promise<SyncSummary> {
   const accessToken = await getValidAccessToken();
   const { headers, rows } = await getSheetValues(accessToken, sheet.spreadsheetId, sheet.sheetName);
 
@@ -68,6 +92,13 @@ export async function syncLeadsFromSheet(clientId: string): Promise<SyncSummary>
   let created = 0;
   let updated = 0;
 
+  // One query up front instead of a findFirst per row (slow at 1000+ rows).
+  // Rows created during this sync are added too, so a duplicate row later in
+  // the same sheet updates the lead instead of creating a second one.
+  const existingLeads = await prisma.lead.findMany({ where: { clientId, externalKey: { not: null } } });
+  const byKey = new Map(existingLeads.map((l) => [l.externalKey!, l]));
+  const seenKeys = new Set<string>();
+
   for (const row of rows) {
     const name = nameIdx !== -1 ? row[nameIdx] : "";
     const phone = phoneIdx !== -1 ? row[phoneIdx] : "";
@@ -76,6 +107,7 @@ export async function syncLeadsFromSheet(clientId: string): Promise<SyncSummary>
     const identitySource = email || phone || name;
     if (!identitySource?.trim()) continue;
     const externalKey = normalizeIdentity(`${email}|${phone}|${name}`);
+    seenKeys.add(externalKey);
 
     const rawStatus = statusColIdx !== -1 ? row[statusColIdx] ?? "" : "";
     const baseMappedStatus: LeadStatusValue = LEAD_STATUSES.includes(statusMapping[rawStatus] as LeadStatusValue)
@@ -116,7 +148,7 @@ export async function syncLeadsFromSheet(clientId: string): Promise<SyncSummary>
       if (!mappedIdx.has(i) && h) raw[h] = row[i] ?? "";
     });
 
-    const existing = await prisma.lead.findFirst({ where: { clientId, externalKey } });
+    const existing = byKey.get(externalKey);
 
     const baseData = {
       name: name || null,
@@ -143,10 +175,13 @@ export async function syncLeadsFromSheet(clientId: string): Promise<SyncSummary>
       const statusPatch = existing.statusManuallySetAt
         ? {}
         : { status: mappedStatus, ...stageTimestampPatch(existing, mappedStatus) };
-      await prisma.lead.update({
-        where: { id: existing.id },
-        data: { ...baseData, ...statusPatch },
-      });
+      byKey.set(
+        externalKey,
+        await prisma.lead.update({
+          where: { id: existing.id },
+          data: { ...baseData, ...statusPatch },
+        })
+      );
       // A re-sync moving an existing lead to a new stage IS a real status
       // transition worth a history entry — only the very first status a
       // lead gets on creation (below) is routine ingestion, not a "change".
@@ -164,14 +199,30 @@ export async function syncLeadsFromSheet(clientId: string): Promise<SyncSummary>
       updated++;
     } else {
       const emptyStages = { chaseUpAt: null, contactedAt: null, closedAt: null };
-      await prisma.lead.create({
-        data: { clientId, externalKey, status: mappedStatus, ...stageTimestampPatch(emptyStages, mappedStatus), ...baseData },
-      });
+      byKey.set(
+        externalKey,
+        await prisma.lead.create({
+          data: { clientId, externalKey, status: mappedStatus, ...stageTimestampPatch(emptyStages, mappedStatus), ...baseData },
+        })
+      );
       created++;
     }
   }
 
-  return { total: rows.length, created, updated };
+  // The sheet is the source of truth: leads whose row was deleted (or whose
+  // name/phone/email was edited, which changes the key) are removed, so the
+  // Leads tab count always matches the sheet. Leads without an externalKey
+  // (added outside the sheet) are never touched.
+  const staleIds = existingLeads.filter((l) => !seenKeys.has(l.externalKey!)).map((l) => l.id);
+  if (staleIds.length) {
+    await prisma.$transaction([
+      prisma.leadActivity.deleteMany({ where: { leadId: { in: staleIds } } }),
+      prisma.leadNote.deleteMany({ where: { leadId: { in: staleIds } } }),
+      prisma.lead.deleteMany({ where: { id: { in: staleIds } } }),
+    ]);
+  }
+
+  return { total: rows.length, created, updated, removed: staleIds.length };
 }
 
 export type CampaignFunnelRow = {

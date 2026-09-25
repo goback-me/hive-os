@@ -76,6 +76,9 @@ export default function LeadsPanel({
   clientId,
   viewerRole,
   hasSheet,
+  clientSlug,
+  lastSyncedAt: initialLastSyncedAt,
+  lastSyncError,
   funnel: initialFunnel,
   onSync,
   onUpdateStatus,
@@ -84,8 +87,11 @@ export default function LeadsPanel({
   clientId: string;
   viewerRole: "COACH" | "CLIENT";
   hasSheet: boolean;
+  clientSlug: string;
+  lastSyncedAt: string | null;
+  lastSyncError: string | null;
   funnel: CampaignFunnelRow[];
-  onSync: (clientId: string) => Promise<SyncSummary>;
+  onSync: (clientId: string) => Promise<{ summary: SyncSummary } | { error: string }>;
   onUpdateStatus: (leadId: string, status: string, value?: number) => Promise<void>;
   onAddNote: (leadId: string, formData: FormData) => Promise<void>;
 }) {
@@ -113,7 +119,8 @@ export default function LeadsPanel({
 
   const [syncing, setSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(lastSyncError ? `Last sync failed: ${lastSyncError}` : null);
+  const [lastSynced, setLastSynced] = useState(initialLastSyncedAt);
 
   const [detailLeadId, setDetailLeadId] = useState<string | null>(null);
   const [activityByLead, setActivityByLead] = useState<Record<string, ActivityRow[]>>({});
@@ -226,11 +233,13 @@ export default function LeadsPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dateRange]);
 
-  const lastSynced = leads
-    .map((l) => l.lastSyncedAt)
-    .filter(Boolean)
-    .sort()
-    .at(-1);
+  // Auto-sync on open when the Lead table is stale (never synced, or >10 min
+  // old) — the tab reads the synced table, not the sheet, so without this it
+  // lags behind whatever the Leads page shows live.
+  useEffect(() => {
+    if (hasSheet && (!initialLastSyncedAt || Date.now() - new Date(initialLastSyncedAt).getTime() > 10 * 60000)) sync();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function refreshAfterChange(leadId: string) {
     loadLeads();
@@ -244,8 +253,11 @@ export default function LeadsPanel({
     setError(null);
     setSyncMessage(null);
     onSync(clientId)
-      .then((summary) => {
-        setSyncMessage(`Synced ${summary.total} leads — ${summary.created} new, ${summary.updated} updated.`);
+      .then((result) => {
+        if ("error" in result) throw new Error(`Sync failed: ${result.error}`);
+        const { summary } = result;
+        setLastSynced(new Date().toISOString());
+        setSyncMessage(`Synced ${summary.created + summary.updated} leads — ${summary.created} new, ${summary.updated} updated${summary.removed ? `, ${summary.removed} removed (no longer in sheet)` : ""}.`);
         setPage(1);
         loadLeads();
         loadFunnel();
@@ -332,7 +344,7 @@ export default function LeadsPanel({
         <p className="font-semibold" style={{ color: "var(--text-primary)" }}>No lead sheet connected yet</p>
         <p className="text-sm mt-1" style={{ color: "var(--text-secondary)" }}>
           {isCoach ? (
-            <>Connect this client's Google Sheet on the <Link href="/leads" className="font-semibold" style={{ color: "var(--primary)" }}>Leads page</Link> first.</>
+            <>Connect this client's Google Sheet on the <Link href={`/leads?client=${clientSlug}`} className="font-semibold" style={{ color: "var(--primary)" }}>Leads page</Link> first.</>
           ) : (
             "Ask your coach to connect your lead sheet."
           )}
@@ -351,7 +363,7 @@ export default function LeadsPanel({
                 Last synced {new Date(lastSynced).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
               </p>
             ) : (
-              <p className="text-xs" style={{ color: "var(--text-muted)" }}>Never synced yet</p>
+              <p className="text-xs" style={{ color: "var(--text-muted)" }}>{syncing ? "Syncing for the first time…" : "Never synced yet"}</p>
             )
           )}
           {syncMessage && <p className="text-xs mt-0.5" style={{ color: "var(--primary)" }}>{syncMessage}</p>}

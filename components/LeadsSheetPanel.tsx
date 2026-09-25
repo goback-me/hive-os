@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { LEAD_STATUSES, LEAD_STATUS_LABELS, type LeadStatusValue } from "@/lib/lead-status";
 
 type DriveFile = { id: string; name: string; modifiedTime: string };
@@ -20,9 +21,13 @@ export default function LeadsSheetPanel({
   spreadsheetName,
   sheetName,
 }: Props) {
+  const router = useRouter();
   const [step, setStep] = useState<"picking-sheet" | "picking-tab" | "ready">(
     spreadsheetId && sheetName ? "ready" : "picking-sheet"
   );
+  // What's currently assigned (updated after assign/remove without a reload).
+  const [assigned, setAssigned] = useState(spreadsheetId && sheetName ? { spreadsheetId, sheetName } : null);
+  const [notice, setNotice] = useState<{ text: string; ok: boolean } | null>(null);
   const [files, setFiles] = useState<DriveFile[] | null>(null);
   const [sheetSearch, setSheetSearch] = useState("");
   const [tabs, setTabs] = useState<string[] | null>(null);
@@ -128,6 +133,8 @@ export default function LeadsSheetPanel({
 
   function pickTab(tab: string) {
     if (!pickedFile) return;
+    const switching = assigned && (assigned.spreadsheetId !== pickedFile.id || assigned.sheetName !== tab);
+    if (switching && !confirm("Switch this client to a different sheet? Leads synced from the current sheet (and their notes/history) will be replaced.")) return;
     setLoadingList(true);
     setError(null);
     fetch("/api/google/select", {
@@ -143,11 +150,34 @@ export default function LeadsSheetPanel({
       .then((r) => r.json())
       .then((data) => {
         if (data.error) throw new Error(data.error);
+        setAssigned({ spreadsheetId: pickedFile.id, sheetName: tab });
+        setNotice(
+          data.syncError
+            ? { ok: false, text: `Sheet connected, but syncing leads failed: ${data.syncError}` }
+            : { ok: true, text: `Connected — ${data.synced} leads synced to the client's Leads tab.` }
+        );
         setStatusFilter("__all__");
         setStep("ready");
+        router.refresh(); // updates the "Connect another client" list
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoadingList(false));
+  }
+
+  function removeSheet() {
+    if (!confirm("Remove this client's sheet? Their synced leads (and notes/history) will be deleted from Hive OS. The Google Sheet itself isn't touched.")) return;
+    setError(null);
+    fetch(`/api/google/select?clientId=${clientId}`, { method: "DELETE" })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.error) throw new Error(data.error);
+        setAssigned(null);
+        setNotice(null);
+        setFiles(null);
+        setStep("picking-sheet");
+        router.refresh();
+      })
+      .catch((e) => setError(e.message));
   }
 
   function toggleColumn(col: string) {
@@ -176,6 +206,7 @@ export default function LeadsSheetPanel({
       .then((r) => r.json())
       .then((data) => {
         if (data.error) throw new Error(data.error);
+        setNotice(data.syncError ? { ok: false, text: `Saved, but re-syncing leads failed: ${data.syncError}` } : null);
         setStatusColumn(nextStatusColumn);
         setResultStatusColumn(nextResultStatusColumn);
         setStatusFilter("__all__");
@@ -219,7 +250,14 @@ export default function LeadsSheetPanel({
   if (step === "picking-sheet") {
     return (
       <div className="card rounded-2xl p-5 max-w-[32rem] mx-auto">
-        <h4 className="font-heading font-bold text-sm mb-3" style={{ color: "var(--text-primary)" }}>Pick a spreadsheet for this client</h4>
+        <div className="flex items-center justify-between mb-3">
+          <h4 className="font-heading font-bold text-sm" style={{ color: "var(--text-primary)" }}>Pick a spreadsheet for this client</h4>
+          {assigned && (
+            <button onClick={() => { setError(null); setStep("ready"); }} className="text-xs font-semibold" style={{ color: "var(--text-secondary)" }}>
+              Cancel
+            </button>
+          )}
+        </div>
 
         {!files && (
           <button
@@ -283,7 +321,13 @@ export default function LeadsSheetPanel({
   if (step === "picking-tab") {
     return (
       <div className="card rounded-2xl p-5 max-w-[32rem] mx-auto">
-        <h4 className="font-heading font-bold text-sm mb-3" style={{ color: "var(--text-primary)" }}>Pick a tab in "{pickedFile?.name}"</h4>
+        <div className="flex items-center justify-between mb-3">
+          <h4 className="font-heading font-bold text-sm" style={{ color: "var(--text-primary)" }}>Pick a tab in "{pickedFile?.name}"</h4>
+          <button onClick={() => { setError(null); setStep("picking-sheet"); }} className="text-xs font-semibold flex items-center gap-1" style={{ color: "var(--text-secondary)" }}>
+            <span className="material-symbols-outlined text-[14px]">arrow_back</span>
+            Back
+          </button>
+        </div>
         {error && <p className="text-xs mb-3" style={{ color: "var(--danger)" }}>{error}</p>}
         <div className="flex flex-wrap gap-2">
           {(tabs ?? []).map((t) => (
@@ -335,6 +379,10 @@ export default function LeadsSheetPanel({
           <button onClick={() => setStep("picking-sheet")} className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold" style={ghostBtn}>
             <span className="material-symbols-outlined text-[16px]">swap_horiz</span>
             Change sheet
+          </button>
+          <button onClick={removeSheet} className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold" style={{ border: "1px solid var(--border)", color: "var(--danger)" }}>
+            <span className="material-symbols-outlined text-[16px]">link_off</span>
+            Remove
           </button>
         </div>
       </div>
@@ -472,6 +520,7 @@ export default function LeadsSheetPanel({
         </div>
       )}
 
+      {notice && <p className="text-xs mb-3" style={{ color: notice.ok ? "var(--primary)" : "var(--danger)" }}>{notice.text}</p>}
       {error && <p className="text-xs mb-3" style={{ color: "var(--danger)" }}>{error}</p>}
       {loadingData && <p className="text-sm" style={{ color: "var(--text-secondary)" }}>Loading leads…</p>}
 

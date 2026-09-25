@@ -104,7 +104,11 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
 
   const revThisMonth = Number(revenueThisMonth._sum.amount ?? 0);
   const lifetimeRevenue = Number(lifetimeRevenueAgg._sum.amount ?? 0);
-  const totalSpend = campaigns.reduce((s, c) => s + Number(c.spend), 0);
+  // Same source as the Ads tab: Meta's live all-time spend when connected,
+  // otherwise the manually tracked campaigns.
+  const totalSpend = metaCampaigns
+    ? metaCampaigns.reduce((s, c) => s + c.spend, 0)
+    : campaigns.reduce((s, c) => s + Number(c.spend), 0);
   const profit = revThisMonth - totalSpend;
 
   const earnedTierIds = new Set(clientAwards.map((a) => a.awardTierId));
@@ -115,8 +119,8 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
     <div className="space-y-5">
       <div className="grid grid-cols-4 gap-4">
         <StatCard icon="payments" label="Revenue this month" value={`$${revThisMonth.toLocaleString()}`} />
-        <StatCard icon="ads_click" label="Ad spend" value={`$${totalSpend.toLocaleString()}`} />
-        <StatCard icon="trending_up" label="Profit" value={`$${profit.toLocaleString()}`} />
+        <StatCard icon="ads_click" label="Ad spend" value={`$${totalSpend.toLocaleString("en-US", { maximumFractionDigits: 2 })}`} />
+        <StatCard icon="trending_up" label="Profit" value={`$${profit.toLocaleString("en-US", { maximumFractionDigits: 2 })}`} />
         <StatCard icon="account_balance_wallet" label="Lifetime revenue" value={`$${lifetimeRevenue.toLocaleString()}`} />
       </div>
 
@@ -289,6 +293,9 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
       clientId={client.id}
       viewerRole={viewer.role}
       hasSheet={Boolean(clientSheet)}
+      clientSlug={client.slug}
+      lastSyncedAt={clientSheet?.lastSyncedAt?.toISOString() ?? null}
+      lastSyncError={clientSheet?.lastSyncError ?? null}
       funnel={campaignFunnel}
       onSync={syncClientLeads}
       onUpdateStatus={updateLeadStatus}
@@ -320,7 +327,7 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
         tabs={[
           { key: "onboarding", label: "Onboarding", content: onboardingContent },
           { key: "dashboard", label: "Dashboard", content: dashboardContent },
-          ...(clientSheet ? [{ key: "leads", label: "Leads", content: leadsContent }] : []),
+          ...(clientSheet || viewer.role === "COACH" ? [{ key: "leads", label: "Leads", content: leadsContent }] : []),
           { key: "gameplan", label: "Gameplan", content: gameplanContent },
           { key: "playbooks", label: "Playbooks", content: playbooksContent },
           { key: "ads", label: "Ads", content: adsContent },

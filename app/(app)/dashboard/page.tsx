@@ -38,15 +38,17 @@ export default async function DashboardPage() {
 
   const kpis = await getDashboardKpis();
   const trend = await getRevenueTrend(12);
-  const items = await prisma.needsActionItem.findMany({
+  const allItems = await prisma.needsActionItem.findMany({
     // Belt-and-suspenders: computeNeedsAction only ever generates rows for
     // non-archived clients, but this guarantees a client archived since the
     // last recompute can't still show up here in the meantime.
     where: { client: { archivedAt: null } },
     orderBy: [{ severity: "asc" }, { computedAt: "desc" }],
-    take: 8,
     include: { client: { select: { slug: true } } },
   });
+  // One card per client — their most urgent item (list is already sorted by urgency).
+  const seenClients = new Set<string>();
+  const items = allItems.filter((i) => !seenClients.has(i.clientId) && seenClients.add(i.clientId)).slice(0, 8);
   const clients = await prisma.client.findMany({
     where: { archivedAt: null, status: { not: "CHURNED" } },
     orderBy: { name: "asc" },

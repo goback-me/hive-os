@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
 import { requireCoach, requireClientAccess } from "@/lib/auth";
 import { getClerkAdminClient } from "@/lib/clerk-admin";
-import { syncLeadsFromSheet } from "@/lib/lead-sync";
+import { syncLeadsFromSheet, type SyncSummary } from "@/lib/lead-sync";
 import { stageTimestampPatch } from "@/lib/lead-status";
 
 function slugify(name: string) {
@@ -152,11 +152,17 @@ export async function createProgressNote(clientId: string, formData: FormData) {
 }
 
 // ── Leads tab — sync from the assigned Google Sheet + manual status edits ─
-export async function syncClientLeads(clientId: string) {
+// Returns the error instead of throwing — Next.js hides thrown server-action
+// messages in production, which made failed syncs impossible to diagnose.
+export async function syncClientLeads(clientId: string): Promise<{ summary: SyncSummary } | { error: string }> {
   await requireClientAccess(clientId);
-  const summary = await syncLeadsFromSheet(clientId);
-  revalidatePath(`/clients`);
-  return summary;
+  try {
+    const summary = await syncLeadsFromSheet(clientId);
+    revalidatePath(`/clients`);
+    return { summary };
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : "Sync failed" };
+  }
 }
 
 // A manual status change never gets clobbered by a later sync (see

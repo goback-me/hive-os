@@ -228,6 +228,11 @@ model ClientSheet {
   resultStatusColumn  String?
   resultStatusMapping Json?
 
+  // Outcome of the last sheet → Lead table sync (see lib/lead-sync.ts) —
+  // shown on the client's Leads tab so a failed sync is visible, not silent.
+  lastSyncedAt    DateTime?
+  lastSyncError   String?
+
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 }

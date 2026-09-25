@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireCoach } from "@/lib/auth";
 import { LEAD_STATUSES } from "@/lib/lead-status";
+import { syncLeadsFromSheet } from "@/lib/lead-sync";
 
 // Saves which columns show, and (optionally) which visible column is the
 // "status" column used for the filter dropdown. A status column that isn't
@@ -45,5 +46,11 @@ export async function POST(req: NextRequest) {
     },
   });
 
-  return NextResponse.json({ ok: true });
+  // Re-sync so new status mappings show on the client's Leads tab right away.
+  try {
+    await syncLeadsFromSheet(clientId);
+    return NextResponse.json({ ok: true });
+  } catch (err: any) {
+    return NextResponse.json({ ok: true, syncError: err.message ?? "Sync failed" });
+  }
 }
