@@ -201,3 +201,24 @@ body {
 
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 10px; }
+/* RevenueChart load animation — line draws itself, dots pop in behind it */
+.chart-draw {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: chart-draw 1.6s cubic-bezier(0.65, 0, 0.35, 1) forwards;
+}
+@keyframes chart-draw {
+  to { stroke-dashoffset: 0; }
+}
+.chart-dot {
+  transform-box: fill-box;
+  transform-origin: center;
+  transform: scale(0);
+  animation: chart-dot 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+@keyframes chart-dot {
+  to { transform: scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chart-draw, .chart-dot { animation: none; stroke-dashoffset: 0; transform: none; }
+}

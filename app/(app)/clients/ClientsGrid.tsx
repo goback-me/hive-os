@@ -9,7 +9,7 @@ type ClientCard = {
   name: string;
   description: string | null;
   status: string;
-  programName: string | null;
+  scope: string | null;
   revenue: number;
 };
 
@@ -192,7 +192,7 @@ export default function ClientsGrid({
                 </div>
                 <div className="text-right">
                   <p className="text-[10px] font-bold" style={{ color: s.color }}>{s.label}</p>
-                  <p className="text-[10px]" style={{ color: "var(--text-muted)" }}>{client.programName ?? "—"}</p>
+                  <p className="text-[10px]" style={{ color: "var(--text-muted)" }}>{client.scope ?? "—"}</p>
                 </div>
               </div>
             </>

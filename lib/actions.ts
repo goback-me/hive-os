@@ -211,6 +211,12 @@ export async function saveGameplanLink(clientId: string, formData: FormData) {
   revalidatePath(`/clients`);
 }
 
+export async function saveClientGoals(clientId: string, goals: string) {
+  await requireClientAccess(clientId);
+  await prisma.client.update({ where: { id: clientId }, data: { goals: goals.trim() || null } });
+  revalidatePath(`/clients`);
+}
+
 // ── Playbooks / lessons ──────────────────────────────────────────────────
 export async function toggleLessonComplete(clientId: string, lessonId: string, completed: boolean) {
   await requireClientAccess(clientId);

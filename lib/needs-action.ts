@@ -193,9 +193,11 @@ export async function getDashboardKpis() {
   const [activeClients, totalClients, revenueAgg, sessionsThisMonth, spendAgg] = await Promise.all([
     prisma.client.count({ where: { isActive: true, archivedAt: null } }),
     prisma.client.count({ where: { archivedAt: null } }),
-    prisma.payment.aggregate({
-      _sum: { amountDue: true },
-      where: { status: "PAID", paidDate: { gte: monthStart } },
+    // RevenueMonthly, same as the client pages — keeps this KPI equal to the
+    // sum of every client's "Revenue this month" card.
+    prisma.revenueMonthly.aggregate({
+      _sum: { amount: true },
+      where: { month: monthStart, client: { archivedAt: null } },
     }),
     prisma.session.count({
       where: { status: "COMPLETED", scheduledAt: { gte: monthStart } },
@@ -206,7 +208,7 @@ export async function getDashboardKpis() {
     }),
   ]);
 
-  const revenueThisMonth = Number(revenueAgg._sum.amountDue ?? 0);
+  const revenueThisMonth = Number(revenueAgg._sum.amount ?? 0);
   const totalAdSpend = Number(spendAgg._sum.spend ?? 0);
 
   return {

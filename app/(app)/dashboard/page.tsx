@@ -50,9 +50,16 @@ export default async function DashboardPage() {
   const clients = await prisma.client.findMany({
     where: { archivedAt: null, status: { not: "CHURNED" } },
     orderBy: { name: "asc" },
-    include: { program: true },
     take: 12,
   });
+  const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+  const clientRevenue = await prisma.revenueMonthly.findMany({
+    where: { month: monthStart, clientId: { in: clients.map((c) => c.id) } },
+  });
+  const revenueByClientId = new Map(clientRevenue.map((r) => [r.clientId, Number(r.amount)]));
+
+  const lastMonth = trend.at(-2)?.revenue ?? 0;
+  const delta = lastMonth > 0 ? Math.round(((kpis.revenueThisMonth - lastMonth) / lastMonth) * 100) : null;
 
   return (
     <div className="p-10 max-w-[1400px] mx-auto space-y-10">
@@ -64,7 +71,7 @@ export default async function DashboardPage() {
       </div>
 
       <div className="grid grid-cols-4 gap-4">
-        <KpiCard icon="payments" label="Revenue this month" value={`$${kpis.revenueThisMonth.toLocaleString()}`} delta="+8%" />
+        <KpiCard icon="payments" label="Revenue this month" value={`$${kpis.revenueThisMonth.toLocaleString()}`} delta={delta === null ? undefined : `${delta >= 0 ? "+" : ""}${delta}%`} />
         <KpiCard icon="diversity_3" label="Active clients" value={String(kpis.activeClients)} sub={`${kpis.totalClients} total`} />
         <KpiCard icon="event_available" label="Sessions this month" value={String(kpis.sessionsThisMonth)} />
         <KpiCard icon="trending_up" label="Avg. retention" value={kpis.totalClients > 0 ? `${Math.round((kpis.activeClients / kpis.totalClients) * 100)}%` : "0%"} />
@@ -114,7 +121,7 @@ export default async function DashboardPage() {
                     </div>
                     <div>
                       <p className="font-semibold text-sm" style={{ color: "var(--text-primary)" }}>{client.name}</p>
-                      <p className="text-xs" style={{ color: "var(--text-secondary)" }}>{client.program?.name ?? "No program"}</p>
+                      <p className="text-xs" style={{ color: "var(--text-secondary)" }}>{client.scope ?? "—"}</p>
                     </div>
                   </div>
                   <span className="w-2 h-2 rounded-full mt-1" style={{ background: s.color }} />
@@ -122,7 +129,7 @@ export default async function DashboardPage() {
                 <div className="flex justify-between items-end mt-3">
                   <div>
                     <p className="text-[10px]" style={{ color: "var(--text-muted)" }}>Revenue this month</p>
-                    <p className="font-bold" style={{ color: "var(--text-primary)" }}>$0</p>
+                    <p className="font-bold" style={{ color: "var(--text-primary)" }}>${(revenueByClientId.get(client.id) ?? 0).toLocaleString()}</p>
                   </div>
                   <span className="text-[10px] font-bold px-2 py-1 rounded-full" style={{ background: s.bg, color: s.color }}>
                     {s.label}

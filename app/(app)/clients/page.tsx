@@ -32,14 +32,10 @@ export default async function ClientsPage({
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
 
-  const [clients, programs] = await Promise.all([
-    prisma.client.findMany({
-      where: VIEW_WHERE[view],
-      orderBy: { name: "asc" },
-      include: { program: true },
-    }),
-    prisma.program.findMany({ orderBy: { name: "asc" } }),
-  ]);
+  const clients = await prisma.client.findMany({
+    where: VIEW_WHERE[view],
+    orderBy: { name: "asc" },
+  });
 
   const revenueByClient = await Promise.all(
     clients.map((c) =>
@@ -57,7 +53,7 @@ export default async function ClientsPage({
           <h1 className="page-title font-heading" style={{ color: "var(--text-primary)" }}>Clients</h1>
           <p className="text-base mt-1" style={{ color: "var(--text-secondary)" }}>
             {view === "active"
-              ? `Active clients across ${programs.map((p) => p.name).join(", ")}.`
+              ? "Active clients."
               : view === "not-active"
               ? "Not active clients — change status here to reactivate."
               : "Archived clients — unarchive or delete permanently."}
@@ -90,7 +86,7 @@ export default async function ClientsPage({
           name: client.name,
           description: client.description,
           status: client.status,
-          programName: client.program?.name ?? null,
+          scope: client.scope,
           revenue: Number(revenueByClient[i]._sum.amount ?? 0),
         }))}
         onBulkUpdateStatus={bulkUpdateClientStatus}

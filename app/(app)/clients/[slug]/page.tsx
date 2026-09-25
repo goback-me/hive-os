@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import {
   toggleOnboardingStep,
   saveGameplanLink,
+  saveClientGoals,
   toggleLessonComplete,
   createModule,
   createLesson,
@@ -28,6 +29,7 @@ import AwardsPanel from "@/components/AwardsPanel";
 import ProgressNotesPanel from "@/components/ProgressNotesPanel";
 import ClientReferralPanel from "@/components/ClientReferralPanel";
 import MetaAdsCard from "@/components/MetaAdsCard";
+import GoalsCard from "@/components/GoalsCard";
 
 // Forces this page to render fresh on every single request — no static
 // caching, no ISR.
@@ -36,10 +38,7 @@ export const revalidate = 0;
 export const fetchCache = "force-no-store";
 
 export default async function ClientDetailPage({ params }: { params: { slug: string } }) {
-  const client = await prisma.client.findUnique({
-    where: { slug: params.slug },
-    include: { program: true },
-  });
+  const client = await prisma.client.findUnique({ where: { slug: params.slug } });
   if (!client) notFound();
 
   // A client login gets bounced to /dashboard (which redirects to their own
@@ -77,7 +76,12 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
     prisma.adCampaign.findMany({ where: { clientId: client.id } }),
     prisma.awardTier.findMany({ orderBy: { order: "asc" } }),
     prisma.clientAward.findMany({ where: { clientId: client.id } }),
-    prisma.lead.findMany({ where: { clientId: client.id }, orderBy: { createdAt: "desc" }, take: 5 }),
+    // Same order as the Leads tab; skips blank sheet rows (no name/phone/email).
+    prisma.lead.findMany({
+      where: { clientId: client.id, OR: [{ name: { not: "" } }, { phone: { not: "" } }, { email: { not: "" } }] },
+      orderBy: { createdAt: "desc" },
+      take: 5,
+    }),
     prisma.progressNote.findMany({ where: { clientId: client.id }, orderBy: { createdAt: "desc" }, take: 5 }),
     prisma.clientSheet.findUnique({ where: { clientId: client.id } }),
   ]);
@@ -137,10 +141,16 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
                           <span className="material-symbols-outlined text-[16px]" style={{ color: "var(--text-secondary)" }}>person_search</span>
                         </span>
                         <div>
-                          <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>{l.source ?? l.campaign ?? "Unknown source"}</p>
+                          <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>{l.name || l.phone || l.email || "Unnamed lead"}</p>
                           <p className="text-xs" style={{ color: "var(--text-muted)" }}>
-                            {l.createdAt.toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-                            {l.value ? ` · $${Number(l.value).toLocaleString()}` : ""}
+                            {[
+                              l.name ? l.phone || l.email : null,
+                              l.source || l.campaign,
+                              l.createdAt.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+                              l.value ? `$${Number(l.value).toLocaleString()}` : null,
+                            ]
+                              .filter(Boolean)
+                              .join(" · ")}
                           </p>
                         </div>
                       </div>
@@ -168,17 +178,11 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
             <dl className="space-y-3 text-sm">
               <DetailRow icon="mail" label="Email" value={client.email ?? "—"} />
               {client.scope && <DetailRow icon="task_alt" label="Scope" value={client.scope} />}
-              <DetailRow icon="school" label="Program" value={client.program?.name ?? "—"} />
               <DetailRow icon="calendar_today" label="Joined" value={client.joinedAt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })} />
             </dl>
           </div>
 
-          <div className="card rounded-2xl p-5">
-            <p className="text-sm font-semibold mb-4" style={{ color: "var(--text-primary)" }}>Goals</p>
-            <p className="text-sm" style={{ color: client.goals ? "var(--text-primary)" : "var(--text-secondary)" }}>
-              {client.goals || "No goals recorded yet."}
-            </p>
-          </div>
+          <GoalsCard clientId={client.id} initialGoals={client.goals} onSave={saveClientGoals} />
 
           <div className="card rounded-2xl p-5">
             <p className="text-sm font-semibold mb-4" style={{ color: "var(--text-primary)" }}>Awards Progress</p>
@@ -307,11 +311,6 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
         <div>
           <div className="flex items-center gap-3">
             <h1 className="page-title font-heading" style={{ color: "var(--text-primary)" }}>{client.name}</h1>
-            {client.program && (
-              <span className="text-[10px] font-bold px-2 py-1 rounded" style={{ background: "var(--surface-hover)", color: "var(--text-secondary)" }}>
-                {client.program.name}
-              </span>
-            )}
           </div>
           <p className="text-sm mt-1" style={{ color: "var(--text-secondary)" }}>Since {client.joinedAt.toLocaleDateString("en-US", { month: "short", year: "numeric" })}</p>
         </div>

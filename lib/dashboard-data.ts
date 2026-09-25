@@ -114,21 +114,22 @@ export async function getLeadFunnel(clientId: string) {
   return statuses.map((status, i) => ({ status, count: counts[i] }));
 }
 
-// ── Original coaching app — main dashboard revenue trend (page.tsx uses this one) ────
+// Main dashboard revenue trend (page.tsx uses this one). Reads RevenueMonthly —
+// the same table the client pages/awards use — so the agency chart always
+// equals the sum of what each client's own page shows.
 export async function getRevenueTrend(months = 12) {
   const now = new Date();
   const points: { label: string; revenue: number }[] = [];
 
   for (let i = months - 1; i >= 0; i--) {
     const start = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    const end = new Date(now.getFullYear(), now.getMonth() - i + 1, 1);
-    const agg = await prisma.payment.aggregate({
-      _sum: { amountDue: true },
-      where: { status: "PAID", paidDate: { gte: start, lt: end } },
+    const agg = await prisma.revenueMonthly.aggregate({
+      _sum: { amount: true },
+      where: { month: start, client: { archivedAt: null } },
     });
     points.push({
       label: start.toLocaleDateString("en-US", { month: "short", year: "2-digit" }),
-      revenue: Number(agg._sum.amountDue ?? 0),
+      revenue: Number(agg._sum.amount ?? 0),
     });
   }
 
