@@ -2,7 +2,7 @@ import { SignIn } from "@clerk/nextjs";
 import LoginError from "@/components/LoginError";
 
 const ERROR_MESSAGES: Record<string, string> = {
-  "no-access": "That account doesn't have access to Hive OS yet. Ask an admin to add you from Settings, then try again.",
+  "no-access": "That account doesn't have access to Hive HQ yet. Ask an admin to add you from Settings, then try again.",
 };
 
 export default function LoginPage({ searchParams }: { searchParams: { error?: string } }) {
@@ -22,13 +22,12 @@ export default function LoginPage({ searchParams }: { searchParams: { error?: st
           style={{ background: "radial-gradient(circle at 70% 20%, rgba(255,255,255,0.16), transparent 55%)" }}
         />
         <div className="relative">
-          <div className="w-11 h-11 rounded-2xl flex items-center justify-center text-white font-bold text-lg" style={{ background: "rgba(255,255,255,0.15)" }}>
-            H
-          </div>
+          {/* White version of the blue logo — blue-on-blue would disappear on this panel */}
+          <img src="/logo.webp" alt="Hive HQ" width={48} height={48} className="w-12 h-12" style={{ filter: "brightness(0) invert(1)" }} />
         </div>
         <div className="relative">
           <h1 className="font-heading font-bold text-white mb-4" style={{ fontSize: "3.25rem", lineHeight: 1.05, letterSpacing: "-0.02em" }}>
-            Hive OS
+            Hive HQ
           </h1>
           <p className="text-lg max-w-md" style={{ color: "rgba(255,255,255,0.85)" }}>
             Hive Social's internal client portal — leads, ad performance, revenue,
@@ -36,7 +35,7 @@ export default function LoginPage({ searchParams }: { searchParams: { error?: st
           </p>
         </div>
         <div className="relative text-sm" style={{ color: "rgba(255,255,255,0.6)" }}>
-          © {new Date().getFullYear()} Hive OS
+          © {new Date().getFullYear()} Hive HQ
         </div>
       </div>
 

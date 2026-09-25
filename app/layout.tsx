@@ -3,8 +3,9 @@ import { ClerkProvider } from "@clerk/nextjs";
 import "./globals.css";
 
 export const metadata = {
-  title: "Hive OS",
+  title: "Hive HQ",
   description: "Hive Social's client portal — leads, ad performance, revenue, and referrals in one place",
+  icons: { icon: { url: "/logo.webp", type: "image/webp" }, apple: "/logo.webp" },
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

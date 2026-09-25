@@ -165,7 +165,7 @@ export default function LeadsSheetPanel({
   }
 
   function removeSheet() {
-    if (!confirm("Remove this client's sheet? Their synced leads (and notes/history) will be deleted from Hive OS. The Google Sheet itself isn't touched.")) return;
+    if (!confirm("Remove this client's sheet? Their synced leads (and notes/history) will be deleted from Hive HQ. The Google Sheet itself isn't touched.")) return;
     setError(null);
     fetch(`/api/google/select?clientId=${clientId}`, { method: "DELETE" })
       .then((r) => r.json())

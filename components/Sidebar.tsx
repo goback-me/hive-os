@@ -25,20 +25,10 @@ export default function Sidebar({ user }: { user: { name: string; role: "COACH" 
       style={{ background: "var(--surface-card)", borderRight: "1px solid var(--border)" }}
     >
       <div className="flex items-center gap-3 px-2 mb-8">
-        <div
-          className="w-10 h-10 rounded-xl flex items-center justify-center text-white font-bold"
-          style={{ background: "var(--primary)" }}
-        >
-          C
-        </div>
-        <div>
-          <h1 className="font-heading font-bold text-lg leading-none" style={{ color: "var(--text-primary)" }}>
-            Hive OS
-          </h1>
-          <p className="text-[10px] uppercase tracking-widest" style={{ color: "var(--text-muted)" }}>
-            Client Command
-          </p>
-        </div>
+        <img src="/logo.webp" alt="" width={36} height={36} className="w-9 h-9 shrink-0" />
+        <h1 className="font-heading font-bold text-xl tracking-tight" style={{ color: "var(--text-primary)" }}>
+          Hive HQ
+        </h1>
       </div>
 
       <nav className="flex-1 space-y-1">
