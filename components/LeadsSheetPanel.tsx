@@ -2,16 +2,19 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { TARGET_OPTIONS, parseTarget, targetLabel } from "@/lib/lead-status";
+import { TARGET_OPTIONS, targetLabel } from "@/lib/lead-status";
+import { findHeaderIndex, normalizeStatus } from "@/lib/sheet-parse";
+import { classifyStatus } from "@/lib/status-classifier";
 
 // Mapping values are dropdown-encoded: "WON", "DISQUALIFIED:BUDGET",
-// "__none__" (no outcome). "" = no entry → the built-in default applies.
+// "__none__" (no outcome). "" = no entry → the keyword classifier decides,
+// the same rules the sync uses (lib/status-classifier.ts).
 type Mapping = Record<string, string>;
-const defaultLabel = (defaults: Mapping, v: string, fallback: string) => {
-  const t = parseTarget(defaults[v]);
-  return t ? `Default: ${targetLabel(t)}` : fallback;
+const defaultLabel = (v: string) => {
+  const t = classifyStatus(v);
+  if (t === null) return "Auto: No outcome";
+  return t ? `Auto: ${targetLabel(t)}` : "Unrecognised — pick one";
 };
-import { findHeaderIndex, normalizeStatus } from "@/lib/sheet-parse";
 
 type DriveFile = { id: string; name: string; modifiedTime: string };
 
@@ -51,13 +54,11 @@ export default function LeadsSheetPanel({
   const [visibleColumns, setVisibleColumns] = useState<string[]>([]);
   const [statusColumn, setStatusColumn] = useState<string | null>(null);
   const [statusMapping, setStatusMapping] = useState<Mapping>({});
-  const [defaultStatusMapping, setDefaultStatusMapping] = useState<Mapping>({});
   // The "did it close" column (e.g. "Prospect Status") — separate from the
   // outreach-stage column above (e.g. "HIVE STATUS"). Whichever is further
   // along the funnel wins — see combineTargets() in lib/lead-status.ts.
   const [resultStatusColumn, setResultStatusColumn] = useState<string | null>(null);
   const [resultStatusMapping, setResultStatusMapping] = useState<Mapping>({});
-  const [defaultResultStatusMapping, setDefaultResultStatusMapping] = useState<Mapping>({});
   const [showColumnPicker, setShowColumnPicker] = useState(false);
   // From the last sync: normalized status values nothing maps to yet.
   const [unmapped, setUnmapped] = useState<{ status: Record<string, number>; result: Record<string, number> }>({ status: {}, result: {} });
@@ -86,10 +87,8 @@ export default function LeadsSheetPanel({
         setVisibleColumns(data.visibleColumns);
         setStatusColumn(data.statusColumn);
         setStatusMapping(data.statusMapping ?? {});
-        setDefaultStatusMapping(data.defaultStatusMapping ?? {});
         setResultStatusColumn(data.resultStatusColumn);
         setResultStatusMapping(data.resultStatusMapping ?? {});
-        setDefaultResultStatusMapping(data.defaultResultStatusMapping ?? {});
         setUnmapped(data.unmappedStatuses ?? { status: {}, result: {} });
         setHasOptInDateColumn(data.hasOptInDateColumn ?? true);
         setCurrentSpreadsheetName(data.spreadsheetName);
@@ -456,7 +455,7 @@ export default function LeadsSheetPanel({
           {statusColumn && statusValues.length > 0 && (
             <>
               <p className="text-xs mb-2" style={{ color: "var(--text-secondary)" }}>
-                Map "{statusColumn}" values to funnel stages. Leave on "Default" to use the built-in mapping; values with no default count as New Lead and show a warning.
+                Map "{statusColumn}" values to funnel stages. Leave on "Auto" to use the keyword rules; unrecognised values contribute no stage and show a warning.
               </p>
               <div className="space-y-2 mb-3">
                 {statusValues.map((v) => (
@@ -469,7 +468,7 @@ export default function LeadsSheetPanel({
                       className="px-2 py-1.5 rounded-lg text-xs font-bold outline-none"
                       style={selectStyle}
                     >
-                      <option value="">{defaultLabel(defaultStatusMapping, v, "Unmapped (New Lead)")}</option>
+                      <option value="">{defaultLabel(v)}</option>
                       <option value="__none__">No outcome (ignore)</option>
                       {TARGET_OPTIONS.map((o) => (
                         <option key={o.value} value={o.value}>
@@ -518,7 +517,7 @@ export default function LeadsSheetPanel({
                       className="px-2 py-1.5 rounded-lg text-xs font-bold outline-none"
                       style={selectStyle}
                     >
-                      <option value="">{defaultLabel(defaultResultStatusMapping, v, "Unmapped (ignored)")}</option>
+                      <option value="">{defaultLabel(v)}</option>
                       <option value="__none__">No outcome (ignore)</option>
                       {TARGET_OPTIONS.map((o) => (
                         <option key={o.value} value={o.value}>
@@ -573,7 +572,7 @@ export default function LeadsSheetPanel({
         <div className="mb-3 p-3 rounded-lg" style={{ background: "var(--danger-tint)" }}>
           <p className="text-xs font-bold mb-2 flex items-center gap-1.5" style={{ color: "var(--danger)" }}>
             <span className="material-symbols-outlined text-[16px]">warning</span>
-            {unmappedEntries.length} status value{unmappedEntries.length === 1 ? "" : "s"} not mapped — those rows fall back to New Lead / no outcome
+            {unmappedEntries.length} status value{unmappedEntries.length === 1 ? "" : "s"} not recognised — pick a stage for each (rows with nothing recognised count as Chase Up)
           </p>
           <div className="space-y-1.5">
             {unmappedEntries.map((u) => (

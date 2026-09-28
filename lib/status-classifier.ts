@@ -1,0 +1,61 @@
+// Free-text sheet status → funnel stage, by keyword. Teams type these by
+// hand ("DSIQUALIFED BUDGET", "QUOTED - LOST", ":phone: Lead Contacted"), so
+// exact-match tables miss most real values. A client's saved statusMapping
+// always wins over these rules (see lib/lead-sync.ts). Pure — safe in the UI.
+
+import { normalizeStatus } from "./sheet-parse";
+import type { DqReasonValue, LeadStageValue, LostReasonValue } from "./lead-status";
+
+export type ClassifiedStatus = { stage: LeadStageValue; dqReason?: DqReasonValue; lostReason?: LostReasonValue };
+
+// Common misspellings seen in real sheets, fixed before matching.
+function fixTypos(s: string) {
+  return s
+    .replace(/\b(dsiqualifi?ed|disqualifed|disqualfied|disqualifid|disqaulified|dq)\b/g, "disqualified")
+    .replace(/\bsuiteable\b/g, "suitable");
+}
+
+const has = (s: string, re: RegExp) => re.test(s);
+
+function lostReason(s: string): LostReasonValue {
+  if (has(s, /ghost/)) return "GHOSTED";
+  if (has(s, /elsewhere|someone else/)) return "WENT_ELSEWHERE";
+  if (has(s, /budget|price|expensive/)) return "BUDGET";
+  return "UNKNOWN";
+}
+
+function dqReason(s: string): DqReasonValue {
+  if (has(s, /distance|location|area/)) return "LOCATION";
+  if (has(s, /budget/)) return "BUDGET";
+  if (has(s, /price shopper/)) return "PRICE_SHOPPER";
+  if (has(s, /not suitable/)) return "NOT_SUITABLE";
+  if (has(s, /ghost/)) return "GHOSTED";
+  if (has(s, /spam|wrong number/)) return "SPAM";
+  if (has(s, /not interested/)) return "NOT_INTERESTED";
+  return "UNKNOWN";
+}
+
+// null = a known "no outcome" value (blank, N/A, pending update).
+// undefined = not recognised — reported back as unmapped, never guessed.
+// Rules run in order; the first match wins.
+export function classifyStatus(raw: string | null | undefined): ClassifiedStatus | null | undefined {
+  const s = fixTypos(normalizeStatus(raw));
+  if (s === "" || s === "n a" || s === "na" || s === "pending update") return null;
+
+  if (has(s, /\bwon\b/)) return { stage: "WON" };
+  if (has(s, /\bquoted\b/) && has(s, /\blost\b/)) return { stage: "LOST", lostReason: "UNKNOWN" };
+  if (has(s, /\blost\b/)) return { stage: "LOST", lostReason: lostReason(s) };
+  if (has(s, /\bquoted\b|\bquote sent\b/)) return { stage: "QUOTE_SENT" };
+  if (has(s, /\battended\b/)) return { stage: "CONSULT_ATTENDED" };
+  if (has(s, /\bdidnt attend\b|\bno show\b/)) return { stage: "CONSULT_NO_SHOW" };
+  if (has(s, /\bbooked\b/)) return { stage: "CONSULT_BOOKED" };
+  if (has(s, /\bdisqualified\b|\bnot suitable\b/)) return { stage: "DISQUALIFIED", dqReason: dqReason(s) };
+  if (has(s, /\blive transfer\b/)) return { stage: "HANDOVER_LIVE" };
+  if (has(s, /\blive attempted\b/)) return { stage: "HANDOVER_ATTEMPTED" };
+  if (has(s, /\btext hand over\b/)) return { stage: "HANDOVER_TEXT" };
+  if (has(s, /\bclient contacted\b/)) return { stage: "CLIENT_CONTACTED" };
+  if (has(s, /\blead contacted\b/)) return { stage: "CONTACTED" };
+  if (has(s, /\bnot ready\b/)) return { stage: "NURTURE" };
+  if (has(s, /\bchase up\b/)) return { stage: "CHASE_UP" };
+  return undefined;
+}

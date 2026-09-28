@@ -21,7 +21,7 @@ export const LEAD_STAGES = [
 ] as const;
 export type LeadStageValue = (typeof LEAD_STAGES)[number];
 
-export const DQ_REASONS = ["GHOSTED", "SPAM", "NOT_INTERESTED", "BUDGET", "LOCATION", "UNKNOWN"] as const;
+export const DQ_REASONS = ["GHOSTED", "SPAM", "NOT_INTERESTED", "BUDGET", "LOCATION", "PRICE_SHOPPER", "NOT_SUITABLE", "UNKNOWN"] as const;
 export type DqReasonValue = (typeof DQ_REASONS)[number];
 export const DQ_PHASES = ["PRE_CONTACT", "POST_CONTACT", "POST_HANDOVER"] as const;
 export type DqPhaseValue = (typeof DQ_PHASES)[number];
@@ -52,6 +52,8 @@ export const DQ_REASON_LABELS: Record<DqReasonValue, string> = {
   NOT_INTERESTED: "Not interested",
   BUDGET: "Budget",
   LOCATION: "Location",
+  PRICE_SHOPPER: "Price shopper",
+  NOT_SUITABLE: "Not suitable",
   UNKNOWN: "Reason missing",
 };
 export const DQ_PHASE_LABELS: Record<DqPhaseValue, string> = {
@@ -159,53 +161,15 @@ export const TARGET_OPTIONS: { value: string; label: string }[] = [
   ...DQ_REASONS.map((r) => ({ value: `DISQUALIFIED:${r}`, label: `DQ · ${DQ_REASON_LABELS[r]}` })),
 ];
 
-// Applied automatically when a client's own mapping has no entry for a
-// value. Keys are normalizeStatus() output (lib/sheet-parse.ts).
-const dq = (dqReason: DqReasonValue): StageTarget => ({ stage: "DISQUALIFIED", dqReason });
-const lost = (lostReason: LostReasonValue): StageTarget => ({ stage: "LOST", lostReason });
-
-export const DEFAULT_STATUS_MAPPING: Record<string, StageTarget> = {
-  "chase up": { stage: "CHASE_UP" },
-  "lead contacted": { stage: "CONTACTED" },
-  "not ready yet": { stage: "NURTURE" },
-  "live attempted": { stage: "HANDOVER_ATTEMPTED" },
-  "live transfer": { stage: "HANDOVER_LIVE" },
-  "text hand over": { stage: "HANDOVER_TEXT" },
-  "client contacted": { stage: "CLIENT_CONTACTED" },
-  disqualified: dq("UNKNOWN"),
-  "dq ghosted": dq("GHOSTED"),
-  "dq spam": dq("SPAM"),
-  "dq not interested": dq("NOT_INTERESTED"),
-  "dq budget": dq("BUDGET"),
-  "dq location": dq("LOCATION"),
-};
-
-export const DEFAULT_RESULT_MAPPING: Record<string, StageTarget> = {
-  "": { stage: null },
-  "n a": { stage: null },
-  "pending update": { stage: null },
-  "consult booked": { stage: "CONSULT_BOOKED" },
-  "didnt attend": { stage: "CONSULT_NO_SHOW" },
-  "consult attended": { stage: "CONSULT_ATTENDED" },
-  "quote sent": { stage: "QUOTE_SENT" },
-  won: { stage: "WON" },
-  lost: lost("UNKNOWN"),
-  "lost ghosted": lost("GHOSTED"),
-  "lost went elsewhere": lost("WENT_ELSEWHERE"),
-  "lost budget": lost("BUDGET"),
-  "dq budget": dq("BUDGET"),
-  "dq location": dq("LOCATION"),
-  "dq not interested": dq("NOT_INTERESTED"),
-};
-
 // Hive column + Prospect column → one stage. The higher-ranked wins; on a tie
 // (both terminal) the Prospect/result column wins — it's the client's word
 // on how the deal ended. `prior` is the furthest non-terminal stage either
 // column shows, used for dqPhase and so a DQ still records how far it got.
-export function combineTargets(status: StageTarget | undefined, result: StageTarget | undefined) {
+// `fallback` applies when neither column gives a stage.
+export function combineTargets(status: StageTarget | undefined, result: StageTarget | undefined, fallback: LeadStageValue = "NEW_LEAD") {
   const s = status?.stage ? status : undefined;
   const r = result?.stage ? result : undefined;
-  const final: StageTarget = !s && !r ? { stage: "NEW_LEAD" } : !s ? r! : !r ? s : STAGE_RANK[s.stage!] > STAGE_RANK[r.stage!] ? s : r;
+  const final: StageTarget = !s && !r ? { stage: fallback } : !s ? r! : !r ? s : STAGE_RANK[s.stage!] > STAGE_RANK[r.stage!] ? s : r;
   const prior = [s?.stage, r?.stage]
     .filter((x): x is LeadStageValue => !!x && !isTerminal(x))
     .sort((a, b) => STAGE_RANK[b] - STAGE_RANK[a])[0] ?? null;

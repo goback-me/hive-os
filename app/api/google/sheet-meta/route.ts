@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/auth";
 import { parseMapping } from "@/lib/lead-sync";
-import { DEFAULT_RESULT_MAPPING, DEFAULT_STATUS_MAPPING, encodeTarget, type StageTarget } from "@/lib/lead-status";
+import { encodeTarget, type StageTarget } from "@/lib/lead-status";
 import { DATE_OPT_IN_KEYWORDS, findColumn } from "@/lib/sheet-parse";
 
 // Returns the cached column names (all of them, including hidden ones) so
@@ -28,10 +28,8 @@ export async function GET(req: NextRequest) {
     visibleColumns: sheet.visibleColumns,
     statusColumn: sheet.statusColumn,
     statusMapping: encodeAll(parseMapping(sheet.statusMapping)),
-    defaultStatusMapping: encodeAll(DEFAULT_STATUS_MAPPING),
     resultStatusColumn: sheet.resultStatusColumn,
     resultStatusMapping: encodeAll(parseMapping(sheet.resultStatusMapping)),
-    defaultResultStatusMapping: encodeAll(DEFAULT_RESULT_MAPPING),
     unmappedStatuses: sheet.unmappedStatuses ?? { status: {}, result: {} },
     hasOptInDateColumn: findColumn(sheet.allColumns, DATE_OPT_IN_KEYWORDS) !== -1,
   });

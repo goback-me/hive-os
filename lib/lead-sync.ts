@@ -3,9 +3,8 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getValidAccessToken, getSheetValues } from "@/lib/google-sheets";
 import { getMetaCampaignInsights } from "@/lib/meta-ads";
+import { classifyStatus } from "@/lib/status-classifier";
 import {
-  DEFAULT_RESULT_MAPPING,
-  DEFAULT_STATUS_MAPPING,
   combineTargets,
   parseTarget,
   planStageEvents,
@@ -60,6 +59,21 @@ export function parseMapping(mapping: unknown): Record<string, StageTarget> {
     if (t) out[k] = t;
   }
   return out;
+}
+
+// One status cell → stage target. The client's saved mapping wins; otherwise
+// the keyword classifier. A value neither recognises is counted in
+// `unmapped` (normalized value → rows) and contributes no stage.
+export function resolveStatus(raw: string, mapping: Record<string, StageTarget>, unmapped: Record<string, number>): StageTarget | undefined {
+  const key = normalizeStatus(raw);
+  if (key in mapping) return mapping[key];
+  const classified = classifyStatus(raw);
+  if (classified === null) return { stage: null }; // known "no outcome"
+  if (classified === undefined) {
+    if (key) unmapped[key] = (unmapped[key] ?? 0) + 1;
+    return undefined;
+  }
+  return classified;
 }
 
 export type UnmappedStatuses = { status: Record<string, number>; result: Record<string, number> };
@@ -167,11 +181,12 @@ async function runSync(
   const accessToken = await getValidAccessToken();
   const { headers, rows, cells } = await getSheetValues(accessToken, sheet.spreadsheetId, sheet.sheetName, { unformatted: true });
 
-  // Client's own mapping first, then the built-in defaults.
-  const statusMapping = { ...DEFAULT_STATUS_MAPPING, ...parseMapping(sheet.statusMapping) };
+  // Client's own mapping first, then the keyword classifier (resolveStatus).
+  const statusMapping = parseMapping(sheet.statusMapping);
   const statusColIdx = findHeaderIndex(headers, sheet.statusColumn);
-  const resultStatusMapping = { ...DEFAULT_RESULT_MAPPING, ...parseMapping(sheet.resultStatusMapping) };
+  const resultStatusMapping = parseMapping(sheet.resultStatusMapping);
   const resultStatusColIdx = findHeaderIndex(headers, sheet.resultStatusColumn);
+  const hasStatusColumn = statusColIdx !== -1 || resultStatusColIdx !== -1;
 
   // A configured status column that's missing from the sheet would quietly
   // turn every lead into the fallback stage — stop instead and say why.
@@ -249,19 +264,16 @@ async function runSync(
     const existing = (e && byEmail.get(e)) || free(p ? byPhone.get(p) : undefined) || free(n ? byName.get(n) : undefined) || undefined;
 
     // Hive/outreach column + Prospect/result column → one stage (the
-    // higher-ranked wins, see combineTargets). Values nothing maps to are
-    // reported back to the Leads tab instead of silently becoming New Lead.
+    // higher-ranked wins, see combineTargets). Values nothing recognises are
+    // reported back to the Leads tab instead of being silently guessed.
     const rawStatus = statusColIdx !== -1 ? row[statusColIdx] ?? "" : "";
-    const statusKey = normalizeStatus(rawStatus);
-    const statusTarget = statusColIdx !== -1 ? statusMapping[statusKey] : undefined;
-    if (statusKey && !statusTarget) unmapped.status[statusKey] = (unmapped.status[statusKey] ?? 0) + 1;
-
+    const statusTarget = statusColIdx !== -1 ? resolveStatus(rawStatus, statusMapping, unmapped.status) : undefined;
     const rawResultStatus = resultStatusColIdx !== -1 ? row[resultStatusColIdx] ?? "" : "";
-    const resultKey = normalizeStatus(rawResultStatus);
-    const resultTarget = resultStatusColIdx !== -1 ? resultStatusMapping[resultKey] : undefined;
-    if (resultKey && !resultTarget) unmapped.result[resultKey] = (unmapped.result[resultKey] ?? 0) + 1;
+    const resultTarget = resultStatusColIdx !== -1 ? resolveStatus(rawResultStatus, resultStatusMapping, unmapped.result) : undefined;
 
-    const { final, prior } = combineTargets(statusTarget, resultTarget);
+    // Nothing in either column = the automation's default stage (Chase Up) —
+    // only when there's no status column configured at all is it New Lead.
+    const { final, prior } = combineTargets(statusTarget, resultTarget, hasStatusColumn ? "CHASE_UP" : "NEW_LEAD");
 
     // Revenue is only ever counted once the deal resolves to Won — a bare
     // "quoted" value (not yet accepted) never counts, even though the Quote

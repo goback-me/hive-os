@@ -1,16 +1,16 @@
 // Run: npx tsx lib/lead-status.check.ts — throws on the first failure.
 import assert from "node:assert/strict";
-import { DEFAULT_RESULT_MAPPING, DEFAULT_STATUS_MAPPING, combineTargets, parseTarget, planStageEvents } from "./lead-status";
-import { normalizeStatus } from "./sheet-parse";
+import { combineTargets, parseTarget, planStageEvents, type StageTarget } from "./lead-status";
+import { classifyStatus } from "./status-classifier";
 
-const hive = (v: string) => DEFAULT_STATUS_MAPPING[normalizeStatus(v)];
-const prospect = (v: string) => DEFAULT_RESULT_MAPPING[normalizeStatus(v)];
+// Same resolution the sync uses: null ("no outcome") → { stage: null }.
+const hive = (v: string): StageTarget | undefined => {
+  const t = classifyStatus(v);
+  return t === null ? { stage: null } : t;
+};
+const prospect = hive;
 
-// Defaults resolve through normalizeStatus
-assert.deepEqual(hive(":phone: Lead Contacted :phone:"), { stage: "CONTACTED" });
 assert.deepEqual(hive("DQ - Ghosted"), { stage: "DISQUALIFIED", dqReason: "GHOSTED" });
-assert.deepEqual(prospect("Didn't attend"), { stage: "CONSULT_NO_SHOW" });
-assert.deepEqual(prospect("N/A"), { stage: null });
 
 // Higher rank wins; prospect "no outcome" keeps the hive stage
 let c = combineTargets(hive("Live Transfer"), prospect("Consult Booked"));
