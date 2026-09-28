@@ -337,6 +337,9 @@ model Lead {
   // What the sheet currently says, even while statusManuallySetAt locks
   // `stage` — powers the "sheet says X" badge on locked leads.
   sheetStage          LeadStage?
+  // sha256 of the feedback/notes cell last parsed into LeadNoteEvents — the
+  // cell (and its AI classification) is only re-parsed when this changes.
+  notesHash           String?
   lastSyncedAt        DateTime?
 
   // Soft delete — set when the lead's sheet row disappears (or the sheet is
@@ -348,6 +351,7 @@ model Lead {
   activity    LeadActivity[]
   notes       LeadNote[]
   stageEvents LeadStageEvent[]
+  noteEvents  LeadNoteEvent[]
 
   @@index([clientId, createdAt])
   @@index([clientId, externalKey])
@@ -400,6 +404,40 @@ model LeadStageEvent {
   createdAt DateTime         @default(now())
 
   @@index([leadId, stage])
+}
+
+enum NoteEventType {
+  CALL_ATTEMPT
+  DQ_SPAM
+  HANDOVER_LIVE
+  HANDOVER_TEXT
+  CONSULT_BOOKED
+  CONSULT_ATTENDED
+  QUOTE_SENT
+  NOTE
+}
+
+enum NoteEventSource {
+  REGEX
+  AI
+}
+
+// One dated entry from the sheet's feedback/notes cell ("HS 12/3> NP"),
+// parsed by lib/notes-parser.ts (REGEX) or Claude for what the rules miss
+// (AI). The team's own dates — the source of truth for stage timing in the
+// funnel's duration medians. Rebuilt whenever the cell changes (notesHash).
+model LeadNoteEvent {
+  id        String          @id @default(cuid())
+  leadId    String
+  lead      Lead            @relation(fields: [leadId], references: [id])
+  at        DateTime
+  who       String
+  event     NoteEventType
+  rawText   String
+  source    NoteEventSource
+  createdAt DateTime        @default(now())
+
+  @@index([leadId, event])
 }
 
 // ── Contracts / renewals (Hive OS) — drives "renewal" needs-action cards ─
@@ -610,4 +648,3 @@ model Payment {
 
   @@index([status, dueDate])
 }
-

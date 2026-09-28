@@ -109,7 +109,7 @@ export default function FunnelPanel({ funnel, loading, onViewCampaign }: { funne
           ))}
         </div>
         <p className="text-[10px] mt-2" style={{ color: "var(--text-muted)" }}>
-          Only from stage changes the app saw happen (sync or manual) — imported and inferred stages have no reliable time.
+          From the team's dated notes when available, otherwise stage changes the app saw happen (sync or manual) — imported and inferred stages have no reliable time.
         </p>
       </div>
 

@@ -58,7 +58,7 @@ export type DurationKey = (typeof DURATION_KEYS)[number];
 export type Durations = Record<DurationKey, { medianDays: number | null; n: number }>;
 
 export const DURATION_LABELS: Record<DurationKey, string> = {
-  leadToContacted: "Lead → contacted",
+  leadToContacted: "Lead → first contact",
   contactedToHandover: "Contacted → handover",
   handoverToBooked: "Handover → consult booked",
   consultToQuote: "Consult → quote",

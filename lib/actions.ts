@@ -485,6 +485,7 @@ export async function deleteClientPermanently(clientId: string) {
           prisma.leadActivity.deleteMany({ where: { leadId: { in: leadIds } } }),
           prisma.leadNote.deleteMany({ where: { leadId: { in: leadIds } } }),
           prisma.leadStageEvent.deleteMany({ where: { leadId: { in: leadIds } } }),
+          prisma.leadNoteEvent.deleteMany({ where: { leadId: { in: leadIds } } }),
         ]
       : []),
     prisma.lead.deleteMany({ where: { clientId } }),

@@ -12,13 +12,14 @@
     "create-admin": "tsx prisma/create-admin.ts"
   },
   "dependencies": {
-    "@clerk/nextjs": "^6.9.6",
+    "@anthropic-ai/sdk": "^0.128.0",
     "@clerk/backend": "^1.18.0",
+    "@clerk/nextjs": "^6.9.6",
     "@prisma/client": "^5.20.0",
-    "svix": "^1.42.0",
     "next": "14.2.25",
     "react": "^18",
-    "react-dom": "^18"
+    "react-dom": "^18",
+    "svix": "^1.42.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.0.0",

@@ -71,6 +71,7 @@ async function wipe(clientId: string, keepLeads: boolean) {
   if (!keepLeads) {
     await prisma.leadActivity.deleteMany({ where: { lead: { clientId } } });
     await prisma.leadStageEvent.deleteMany({ where: { lead: { clientId } } });
+    await prisma.leadNoteEvent.deleteMany({ where: { lead: { clientId } } });
     await prisma.leadNote.deleteMany({ where: { lead: { clientId } } });
     await prisma.lead.deleteMany({ where: { clientId } });
   }

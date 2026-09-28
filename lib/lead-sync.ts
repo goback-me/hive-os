@@ -1,9 +1,11 @@
-import { randomUUID } from "crypto";
+import { createHash, randomUUID } from "crypto";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getValidAccessToken, getSheetValues } from "@/lib/google-sheets";
 import { getMetaCampaignInsights } from "@/lib/meta-ads";
 import { classifyStatus } from "@/lib/status-classifier";
+import { NOTES_KEYWORDS, parseNotes, type ParsedNote } from "@/lib/notes-parser";
+import { classifyNotesWithAI } from "@/lib/notes-ai";
 import {
   combineTargets,
   parseTarget,
@@ -143,6 +145,9 @@ function leadChanged(existing: ExistingLead, data: Record<string, unknown>) {
   return false;
 }
 
+// A notes cell that changed since the last sync and has been re-parsed.
+type NoteJob = { hash: string; notes: (ParsedNote & { source?: "REGEX" | "AI" })[] };
+
 type PendingUpdate = {
   lead: ExistingLead;
   data: Record<string, unknown>;
@@ -150,6 +155,7 @@ type PendingUpdate = {
   stageTo?: LeadStageValue;
   value: number | null;
   events: PlannedEvent[];
+  noteJob?: NoteJob;
 };
 
 type StageEventRow = { id: string; leadId: string; stage: LeadStageValue; at: Date; source: "SYNC" | "IMPORT" | "INFERRED" };
@@ -204,6 +210,7 @@ async function runSync(
   const quoteIdx = findColumn(headers, ["quote value", "quote"]);
   const dateOptInIdx = findColumn(headers, DATE_OPT_IN_KEYWORDS);
   const attemptsIdx = findColumn(headers, ["attempt"]);
+  const notesIdx = findColumn(headers, NOTES_KEYWORDS);
   // Other date-ish columns only go into `raw` for display — turn serials
   // back into dd/mm/yyyy so they don't show as "46000.5".
   const dateLikeIdx = new Set(headers.map((h, i) => (normalizeHeader(h).split(" ").includes("date") ? i : -1)).filter((i) => i !== -1));
@@ -243,7 +250,7 @@ async function runSync(
   // same name when neither has a matching email/phone. Fine at our volumes.
   const claimed = new Map<string, number>(); // leadId -> row index that claimed it
   const pending = new Map<string, PendingUpdate>();
-  const creates = new Map<string, { data: Record<string, unknown>; events: PlannedEvent[] }>(); // externalKey -> new lead
+  const creates = new Map<string, { data: Record<string, unknown>; events: PlannedEvent[]; noteJob?: NoteJob }>(); // externalKey -> new lead
   let identifiedRows = 0;
 
   rows.forEach((row, rowIdx) => {
@@ -292,6 +299,17 @@ async function runSync(
     const dateOptIn = dateOptInIdx !== -1 ? parseSheetDate(cells[rowIdx][dateOptInIdx]) : null;
     const attempts = attemptsIdx !== -1 ? parseInt(row[attemptsIdx], 10) : NaN;
 
+    // Feedback/notes cell → dated events, only when the cell changed since the
+    // last parse (hash) — keeps the AI step to genuinely new text.
+    let noteJob: NoteJob | undefined;
+    if (notesIdx !== -1) {
+      const cell = row[notesIdx] ?? "";
+      const hash = createHash("sha256").update(cell).digest("hex");
+      if (!existing || existing.notesHash !== hash) {
+        noteJob = { hash, notes: parseNotes(cell, dateOptIn ?? existing?.createdAt ?? new Date()) };
+      }
+    }
+
     // Everything else — every header not otherwise mapped — goes into `raw`
     // for display only, keyed by its actual header text.
     const mappedIdx = new Set([nameIdx, phoneIdx, emailIdx, sourceIdx, campaignIdx, adsetIdx, revenueIdx, quoteIdx, statusColIdx, resultStatusColIdx, dateOptInIdx, attemptsIdx]);
@@ -312,7 +330,9 @@ async function runSync(
       source: sourceIdx !== -1 ? row[sourceIdx] || null : null,
       campaign: campaignIdx !== -1 ? row[campaignIdx] || null : null,
       adset: adsetIdx !== -1 ? row[adsetIdx] || null : null,
-      callAttempts: Number.isFinite(attempts) ? attempts : null,
+      // With a notes column, call attempts are counted from the notes (set
+      // after parsing, below) — the attempts column is the fallback.
+      ...(notesIdx === -1 ? { callAttempts: Number.isFinite(attempts) ? attempts : null } : {}),
       ...(dateOptIn ? { createdAt: dateOptIn } : {}),
       // Prefer the result column's value when present (it's the more
       // decisive signal — "SOLD" tells you more than "LIVE TRANSFER") —
@@ -328,7 +348,7 @@ async function runSync(
       // Respect a manual override — the sheet's stage (and its events) only
       // apply while nobody has manually set this lead's stage.
       if (existing.statusManuallySetAt) {
-        pending.set(existing.id, { lead: existing, data: baseData, value, events: [] });
+        pending.set(existing.id, { lead: existing, data: baseData, value, events: [], noteJob });
         return;
       }
       const plan = planStageEvents({
@@ -343,15 +363,39 @@ async function runSync(
         ...(final.stage !== existing.stage ? { stageFrom: existing.stage, stageTo: final.stage } : {}),
         value,
         events: plan.events,
+        noteJob,
       });
     } else {
       const plan = planStageEvents({ oldStage: null, newStage: final.stage, prior, eventStages: new Set() });
       creates.set(externalKey, {
         data: { id: randomUUID(), clientId, stage: final.stage, ...reasonFields(final, plan.dqPhase), ...baseData },
         events: plan.events,
+        noteJob,
       });
     }
   });
+
+  // Notes the regex rules couldn't place go to Claude in one batch. No key →
+  // they stay NOTE. An API failure also leaves them NOTE but withholds the
+  // new notesHash, so the next sync tries those cells again.
+  const noteHolders: { data: Record<string, unknown>; noteJob?: NoteJob }[] = [...pending.values(), ...creates.values()];
+  const unplaced = noteHolders.flatMap((h) => (h.noteJob?.notes ?? []).filter((n) => n.event === "NOTE").map((n) => ({ job: h.noteJob!, n })));
+  let aiFailed = false;
+  if (unplaced.length) {
+    try {
+      const events = await classifyNotesWithAI(unplaced.map((u) => u.n.rawText));
+      if (events) unplaced.forEach((u, i) => ((u.n.event = events[i]), (u.n.source = "AI")));
+    } catch (err) {
+      aiFailed = true;
+      console.error("Note classification failed — entries kept as NOTE, will retry next sync:", err);
+    }
+  }
+  for (const h of noteHolders) {
+    if (!h.noteJob) continue;
+    h.data.callAttempts = h.noteJob.notes.filter((n) => n.event === "CALL_ATTEMPT").length;
+    const retryLater = aiFailed && h.noteJob.notes.some((n) => n.event === "NOTE");
+    if (!retryLater) h.data.notesHash = h.noteJob.hash;
+  }
 
   // The sheet is the source of truth: an active lead whose row is gone is
   // soft-deleted. Leads without an externalKey (added outside the sheet) are
@@ -367,7 +411,7 @@ async function runSync(
     throw new Error(`Sync aborted: would remove ${removing} of ${activeLeads.length} leads — check the sheet/tab`);
   }
 
-  const updates = Array.from(pending.values()).filter((u) => u.events.length > 0 || leadChanged(u.lead, u.data));
+  const updates = Array.from(pending.values()).filter((u) => u.events.length > 0 || u.noteJob || leadChanged(u.lead, u.data));
   const restored = updates.filter((u) => u.lead.deletedAt).length;
   const now = new Date();
 
@@ -376,6 +420,15 @@ async function runSync(
     ...newLeads.flatMap((c) => eventRows(c.data.id as string, c.events, true, now)),
     ...updates.flatMap((u) => eventRows(u.lead.id, u.events, false, now)),
   ];
+
+  // Leads whose notes were re-parsed: their note events are replaced wholesale.
+  const reparsed = [
+    ...newLeads.filter((c) => c.noteJob).map((c) => ({ leadId: c.data.id as string, job: c.noteJob! })),
+    ...updates.filter((u) => u.noteJob).map((u) => ({ leadId: u.lead.id, job: u.noteJob! })),
+  ];
+  const noteRows = reparsed.flatMap(({ leadId, job }) =>
+    job.notes.map((n) => ({ leadId, at: n.at, who: n.who, event: n.event, rawText: n.rawText, source: n.source ?? ("REGEX" as const) }))
+  );
 
   // All-or-nothing: a sync that fails halfway leaves the previous state intact.
   await prisma.$transaction(
@@ -394,6 +447,12 @@ async function runSync(
       }
       for (const batch of chunks(events)) {
         await tx.leadStageEvent.createMany({ data: batch });
+      }
+      for (const batch of chunks(reparsed.map((r) => r.leadId))) {
+        await tx.leadNoteEvent.deleteMany({ where: { leadId: { in: batch } } });
+      }
+      for (const batch of chunks(noteRows)) {
+        await tx.leadNoteEvent.createMany({ data: batch });
       }
       for (const batch of chunks(staleIds)) {
         await tx.lead.updateMany({ where: { id: { in: batch } }, data: { deletedAt: now } });
@@ -416,10 +475,17 @@ function campaignKey(campaign: string | null) {
 
 const ALL = "__all__";
 
-// Median days between stages, per campaign plus client-wide (GROUPING SETS),
-// from SYNC/MANUAL events only — IMPORT/INFERRED timestamps are guesses.
-// "Lead" is the lead's createdAt (opt-in date). Negative gaps (bad dates)
-// are ignored. n = sample size behind each median.
+// Days from b to a. Note dates are whole days (Sydney midnight) while opt-in
+// has a time, so a same-day gap can come out slightly negative — anything
+// within a day clamps to 0; a real negative (bad data) stays NULL.
+const gapDays = (a: string, b: string) =>
+  Prisma.raw(`CASE WHEN ${a} - ${b} > INTERVAL '-1 day' THEN GREATEST(EXTRACT(EPOCH FROM (${a} - ${b})) / 86400, 0) END`);
+
+// Median days between stages, per campaign plus client-wide (GROUPING SETS).
+// Each step's time is the team's dated note (LeadNoteEvent: first call
+// attempt, handover, consult booked/attended, quote) when there is one, else
+// our SYNC/MANUAL stage event — IMPORT/INFERRED timestamps are guesses and
+// never used. "Lead" is the opt-in date. n = sample size behind each median.
 async function getFunnelDurations(clientId: string, dateRange?: { from?: Date; to?: Date }): Promise<Map<string, Durations>> {
   const fromClause = dateRange?.from ? Prisma.sql`AND "createdAt" >= ${dateRange.from}` : Prisma.empty;
   const toClause = dateRange?.to ? Prisma.sql`AND "createdAt" < ${dateRange.to}` : Prisma.empty;
@@ -441,15 +507,37 @@ async function getFunnelDurations(clientId: string, dateRange?: { from?: Date; t
       JOIN l ON l.id = e."leadId"
       WHERE e.source IN ('SYNC', 'MANUAL')
       GROUP BY e."leadId"
+    ), n AS (
+      -- The team's own dated notes win over when our sync noticed a change.
+      SELECT ne."leadId",
+        MIN(ne.at) FILTER (WHERE ne.event = 'CALL_ATTEMPT') AS contacted,
+        MIN(ne.at) FILTER (WHERE ne.event IN ('HANDOVER_LIVE', 'HANDOVER_TEXT')) AS handover,
+        MIN(ne.at) FILTER (WHERE ne.event = 'CONSULT_BOOKED') AS booked,
+        MIN(ne.at) FILTER (WHERE ne.event = 'CONSULT_ATTENDED') AS attended,
+        MIN(ne.at) FILTER (WHERE ne.event = 'QUOTE_SENT') AS quote
+      FROM "LeadNoteEvent" ne
+      JOIN l ON l.id = ne."leadId"
+      GROUP BY ne."leadId"
+    ), t AS (
+      SELECT l.id, l.campaign, l."createdAt",
+        COALESCE(n.contacted, f.contacted) AS contacted,
+        COALESCE(n.handover, f.handover) AS handover,
+        COALESCE(n.booked, f.booked) AS booked,
+        COALESCE(n.attended, f.attended) AS attended,
+        COALESCE(n.quote, f.quote) AS quote,
+        f.won
+      FROM l
+      LEFT JOIN f ON f."leadId" = l.id
+      LEFT JOIN n ON n."leadId" = l.id
     ), d AS (
-      SELECT l.campaign,
-        EXTRACT(EPOCH FROM (f.contacted - l."createdAt")) / 86400 AS "leadToContacted",
-        EXTRACT(EPOCH FROM (f.handover - f.contacted)) / 86400 AS "contactedToHandover",
-        EXTRACT(EPOCH FROM (f.booked - f.handover)) / 86400 AS "handoverToBooked",
-        EXTRACT(EPOCH FROM (f.quote - f.attended)) / 86400 AS "consultToQuote",
-        EXTRACT(EPOCH FROM (f.won - f.quote)) / 86400 AS "quoteToWon",
-        EXTRACT(EPOCH FROM (f.won - l."createdAt")) / 86400 AS "leadToWon"
-      FROM l JOIN f ON f."leadId" = l.id
+      SELECT campaign,
+        ${gapDays("contacted", '"createdAt"')} AS "leadToContacted",
+        ${gapDays("handover", "contacted")} AS "contactedToHandover",
+        ${gapDays("booked", "handover")} AS "handoverToBooked",
+        ${gapDays("quote", "attended")} AS "consultToQuote",
+        ${gapDays("won", "quote")} AS "quoteToWon",
+        ${gapDays("won", '"createdAt"')} AS "leadToWon"
+      FROM t
     )
     SELECT CASE WHEN GROUPING(campaign) = 1 THEN '__all__' ELSE campaign END AS campaign,
       percentile_cont(0.5) WITHIN GROUP (ORDER BY "leadToContacted") FILTER (WHERE "leadToContacted" >= 0) AS "leadToContacted_med",

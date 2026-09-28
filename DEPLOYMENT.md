@@ -72,6 +72,7 @@ Copy `.env.example` to `.env` and fill in:
 | `GOOGLE_REDIRECT_URI` | `https://portal.hivesocial.agency/api/google/callback` |
 | `TOKEN_ENCRYPTION_KEY` | Generate with `openssl rand -hex 32` — encrypts stored Google/Meta tokens at rest |
 | `CRON_SECRET` | Generate with `openssl rand -hex 32` — auth for the lead-sync cron (see below) |
+| `ANTHROPIC_API_KEY` | Optional. console.anthropic.com → API Keys — classifies lead-note entries the regex rules miss; without it they stay as plain notes |
 
 Also double check in the **Clerk dashboard** → User & Authentication →
 Restrictions: **"Allow sign-ups" must be OFF** — accounts are only ever

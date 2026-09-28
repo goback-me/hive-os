@@ -1,0 +1,52 @@
+// Run: npx tsx lib/notes-parser.check.ts — throws on the first failure.
+import assert from "node:assert/strict";
+import { classifyNoteText, parseNotes } from "./notes-parser";
+import { formatSheetDate, parseSheetDate } from "./sheet-parse";
+
+// Event rules, first match wins
+const rules: [string, string][] = [
+  ["NP", "CALL_ATTEMPT"],
+  ["no pickup, left vm", "CALL_ATTEMPT"],
+  ["voicemail", "CALL_ATTEMPT"],
+  ["txt sent", "CALL_ATTEMPT"],
+  ["DND", "CALL_ATTEMPT"],
+  ["wrong num", "DQ_SPAM"],
+  ["test lead", "DQ_SPAM"],
+  ["live to Jake", "HANDOVER_LIVE"],
+  ["LT to Sam", "HANDOVER_LIVE"],
+  ["lt", "HANDOVER_LIVE"],
+  ["live att no answer from client", "HANDOVER_TEXT"],
+  ["email handover sent", "HANDOVER_TEXT"],
+  ["self booked", "CONSULT_BOOKED"],
+  ["booked in for Tuesday", "CONSULT_BOOKED"],
+  ["site visit done", "CONSULT_ATTENDED"],
+  ["quote provided $12k", "QUOTE_SENT"],
+  ["wants a price for a 3 bed", "NOTE"],
+  // short tokens don't fire inside other words
+  ["inpection pending", "NOTE"],
+  ["salt water pool", "NOTE"],
+];
+for (const [text, event] of rules) assert.equal(classifyNoteText(text), event, text);
+
+// Entries, AU d/m dates, undated fragments join the entry before them
+const optIn = parseSheetDate("10/03/2026")!;
+const notes = parseNotes("HS 12/3> NP, left vm\nMaddy 13/3 live to Jake, mddy 2/4 quote provided", optIn);
+assert.deepEqual(
+  notes.map((n) => [formatSheetDate(n.at), n.who, n.event, n.rawText]),
+  [
+    ["12/03/2026", "hs", "CALL_ATTEMPT", "NP, left vm"],
+    ["13/03/2026", "maddy", "HANDOVER_LIVE", "live to Jake"],
+    ["02/04/2026", "mddy", "QUOTE_SENT", "quote provided"],
+  ]
+);
+
+// Year rollover: a month before the opt-in month is next year
+const lateOptIn = parseSheetDate("20/11/2025")!;
+const rolled = parseNotes("al 28/11 NP, al 3/1 booked in for Friday", lateOptIn);
+assert.deepEqual(rolled.map((n) => formatSheetDate(n.at)), ["28/11/2025", "03/01/2026"]);
+
+// Junk: leading undated text dropped, impossible dates skipped, empty cell
+assert.deepEqual(parseNotes("called twice, HS 31/2 np", optIn), []);
+assert.deepEqual(parseNotes("", optIn), []);
+
+console.log("notes-parser: all checks passed");
