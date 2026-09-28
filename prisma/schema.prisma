@@ -232,6 +232,10 @@ model ClientSheet {
   // shown on the client's Leads tab so a failed sync is visible, not silent.
   lastSyncedAt    DateTime?
   lastSyncError   String?
+  // Normalized status values seen in the last sync that had no mapping —
+  // {status: {value: count}, result: {value: count}} — shown as a warning
+  // with a quick-map dropdown on the Leads tab.
+  unmappedStatuses Json?
 
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt

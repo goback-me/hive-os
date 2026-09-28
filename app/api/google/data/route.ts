@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getValidAccessToken, getSheetValues } from "@/lib/google-sheets";
 import { requireUser } from "@/lib/auth";
+import { normalizeStatus } from "@/lib/sheet-parse";
 
 // Fetches live rows for a client's assigned sheet. Only visibleColumns are
 // ever included in the response — hidden column data never leaves the
@@ -51,19 +52,23 @@ export async function GET(req: NextRequest) {
     const headers = visibleIndexes.map((i) => liveHeaders[i]);
     const rows = liveRows.map((r) => visibleIndexes.map((i) => r[i]));
 
-    function valueCounts(column: string | null): { values: string[]; counts: Record<string, number> } | null {
+    // Grouped by normalized value (the mapping key) — "DQ " and "dq" are one
+    // entry. `labels` keeps the first raw spelling seen, for display.
+    function valueCounts(column: string | null): { values: string[]; counts: Record<string, number>; labels: Record<string, string> } | null {
       if (!column) return null;
       // Read from the live sheet, not the visible subset — mapping works on
       // a status column even when it's hidden from the table.
       const colIdx = liveHeaders.indexOf(column);
       if (colIdx === -1) return null;
       const counts: Record<string, number> = {};
+      const labels: Record<string, string> = {};
       for (const r of liveRows) {
-        const v = r[colIdx];
+        const v = normalizeStatus(r[colIdx]);
         if (!v) continue;
         counts[v] = (counts[v] ?? 0) + 1;
+        labels[v] ??= r[colIdx].trim();
       }
-      return { values: Object.keys(counts).sort(), counts };
+      return { values: Object.keys(counts).sort(), counts, labels };
     }
 
     const statusStats = valueCounts(statusColumn);
@@ -75,9 +80,11 @@ export async function GET(req: NextRequest) {
       statusColumn,
       statusValues: statusStats?.values ?? null,
       statusCounts: statusStats?.counts ?? null,
+      statusLabels: statusStats?.labels ?? null,
       resultStatusColumn,
       resultStatusValues: resultStatusStats?.values ?? null,
       resultStatusCounts: resultStatusStats?.counts ?? null,
+      resultStatusLabels: resultStatusStats?.labels ?? null,
       totalRows: rows.length,
     });
   } catch (err: any) {

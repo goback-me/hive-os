@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireCoach } from "@/lib/auth";
 import { LEAD_STATUSES } from "@/lib/lead-status";
-import { syncLeadsFromSheet } from "@/lib/lead-sync";
+import { normalizeMappingKeys, syncLeadsFromSheet } from "@/lib/lead-sync";
 
 // Saves which columns show, and (optionally) which column is the "status"
 // column. The status/result columns don't have to be visible — mapping works
@@ -34,8 +34,8 @@ export async function POST(req: NextRequest) {
       visibleColumns,
       statusColumn: statusColumn ?? null,
       resultStatusColumn: resultStatusColumn ?? null,
-      ...(statusMapping ? { statusMapping } : {}),
-      ...(resultStatusMapping ? { resultStatusMapping } : {}),
+      ...(statusMapping ? { statusMapping: normalizeMappingKeys<string>(statusMapping) } : {}),
+      ...(resultStatusMapping ? { resultStatusMapping: normalizeMappingKeys<string>(resultStatusMapping) } : {}),
     },
   });
 

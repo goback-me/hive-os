@@ -4,59 +4,38 @@ import { getValidAccessToken, getSheetValues } from "@/lib/google-sheets";
 import { getMetaCampaignInsights } from "@/lib/meta-ads";
 import type { LeadStatusValue } from "@/lib/lead-status";
 import { LEAD_STATUSES, moreConclusive, stageTimestampPatch } from "@/lib/lead-status";
-
-function normalizeHeader(h: string) {
-  return h.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-}
-
-// Sheet headers are messy in practice (line breaks, trailing "?"/spaces).
-// An exact normalized match always wins ("Name" beats "Campaign Name");
-// otherwise the first header that CONTAINS a keyword. `exclude` words veto a
-// header entirely, so "Campaign Name" / "Ad Name" can never be the lead's name.
-export function findColumn(headers: string[], keywords: string[], exclude: string[] = []): number {
-  const normalized = headers.map(normalizeHeader);
-  const allowed = (h: string) => !exclude.some((x) => (x.includes(" ") ? h.includes(x) : h.split(" ").includes(x)));
-  const exact = normalized.findIndex((h) => allowed(h) && keywords.includes(h));
-  if (exact !== -1) return exact;
-  for (const kw of keywords) {
-    const i = normalized.findIndex((h) => allowed(h) && h.includes(kw));
-    if (i !== -1) return i;
-  }
-  return -1;
-}
+import {
+  DATE_OPT_IN_KEYWORDS,
+  findColumn,
+  formatSheetDate,
+  normalizeEmail,
+  normalizeHeader,
+  normalizePhone,
+  normalizeStatus,
+  parseSheetDate,
+} from "@/lib/sheet-parse";
 
 function normalizeIdentity(v: string) {
   return v.toLowerCase().replace(/[^a-z0-9]+/g, "");
-}
-
-export function normalizeEmail(v: string | null | undefined) {
-  return (v ?? "").trim().toLowerCase();
-}
-
-// Digits only, AU mobiles in international form: "0412 345 678",
-// "+61 412 345 678" and a Sheets number that lost its leading 0
-// (412345678) all become "61412345678".
-export function normalizePhone(v: string | null | undefined) {
-  const d = (v ?? "").replace(/\D/g, "");
-  if (/^04\d{8}$/.test(d)) return "61" + d.slice(1);
-  if (/^4\d{8}$/.test(d)) return "61" + d;
-  return d;
 }
 
 function normalizeName(v: string | null | undefined) {
   return normalizeIdentity(v ?? "");
 }
 
+// Stored mappings may have been saved with raw sheet text as keys — always
+// compare on the normalized form so "DQ " and "dq" hit the same entry.
+export function normalizeMappingKeys<T>(mapping: unknown): Record<string, T> {
+  if (!mapping || typeof mapping !== "object") return {};
+  return Object.fromEntries(Object.entries(mapping as Record<string, T>).map(([k, v]) => [normalizeStatus(k), v]));
+}
+
+export type UnmappedStatuses = { status: Record<string, number>; result: Record<string, number> };
+
 function parseMoney(v: string | undefined): number | null {
   if (!v) return null;
   const n = Number(v.replace(/[^0-9.-]/g, ""));
   return Number.isFinite(n) && n !== 0 ? n : null;
-}
-
-function parseDate(v: string | undefined): Date | null {
-  if (!v) return null;
-  const d = new Date(v);
-  return Number.isNaN(d.getTime()) ? null : d;
 }
 
 // total = sheet rows, leads = rows with an identity; updated only counts leads that actually changed.
@@ -80,8 +59,11 @@ export async function syncLeadsFromSheet(clientId: string): Promise<SyncSummary>
   if (!sheet) throw new Error("No Google Sheet assigned to this client yet — connect one on the Leads page first.");
 
   try {
-    const summary = await runSync(clientId, sheet);
-    await prisma.clientSheet.update({ where: { clientId }, data: { lastSyncedAt: new Date(), lastSyncError: null } });
+    const { summary, unmapped } = await runSync(clientId, sheet);
+    await prisma.clientSheet.update({
+      where: { clientId },
+      data: { lastSyncedAt: new Date(), lastSyncError: null, unmappedStatuses: unmapped },
+    });
     return summary;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -123,13 +105,16 @@ type PendingUpdate = {
   value: number | null;
 };
 
-async function runSync(clientId: string, sheet: NonNullable<Awaited<ReturnType<typeof prisma.clientSheet.findUnique>>>): Promise<SyncSummary> {
+async function runSync(
+  clientId: string,
+  sheet: NonNullable<Awaited<ReturnType<typeof prisma.clientSheet.findUnique>>>
+): Promise<{ summary: SyncSummary; unmapped: UnmappedStatuses }> {
   const accessToken = await getValidAccessToken();
-  const { headers, rows } = await getSheetValues(accessToken, sheet.spreadsheetId, sheet.sheetName);
+  const { headers, rows, cells } = await getSheetValues(accessToken, sheet.spreadsheetId, sheet.sheetName, { unformatted: true });
 
-  const statusMapping = (sheet.statusMapping as Record<string, LeadStatusValue> | null) ?? {};
+  const statusMapping = normalizeMappingKeys<LeadStatusValue>(sheet.statusMapping);
   const statusColIdx = sheet.statusColumn ? headers.indexOf(sheet.statusColumn) : -1;
-  const resultStatusMapping = (sheet.resultStatusMapping as Record<string, LeadStatusValue> | null) ?? {};
+  const resultStatusMapping = normalizeMappingKeys<LeadStatusValue>(sheet.resultStatusMapping);
   const resultStatusColIdx = sheet.resultStatusColumn ? headers.indexOf(sheet.resultStatusColumn) : -1;
 
   const nameIdx = findColumn(headers, ["name", "full name"], ["campaign", "ad", "adset", "ad set", "business"]);
@@ -140,7 +125,11 @@ async function runSync(clientId: string, sheet: NonNullable<Awaited<ReturnType<t
   const adsetIdx = findColumn(headers, ["adset", "ad set"]);
   const revenueIdx = findColumn(headers, ["revenue generated", "revenue"]);
   const quoteIdx = findColumn(headers, ["quote value", "quote"]);
-  const dateOptInIdx = findColumn(headers, ["date opt in", "opt in"]);
+  const dateOptInIdx = findColumn(headers, DATE_OPT_IN_KEYWORDS);
+  // Other date-ish columns only go into `raw` for display — turn serials
+  // back into dd/mm/yyyy so they don't show as "46000.5".
+  const dateLikeIdx = new Set(headers.map((h, i) => (normalizeHeader(h).split(" ").includes("date") ? i : -1)).filter((i) => i !== -1));
+  const unmapped: UnmappedStatuses = { status: {}, result: {} };
 
   // Every lead this client has ever had from a sheet, soft-deleted included —
   // a row that reappears restores its old lead (notes + history intact)
@@ -171,9 +160,11 @@ async function runSync(clientId: string, sheet: NonNullable<Awaited<ReturnType<t
   let identifiedRows = 0;
 
   rows.forEach((row, rowIdx) => {
-    const name = nameIdx !== -1 ? row[nameIdx] : "";
-    const phone = phoneIdx !== -1 ? row[phoneIdx] : "";
-    const email = emailIdx !== -1 ? row[emailIdx] : "";
+    const name = nameIdx !== -1 ? row[nameIdx].trim() : "";
+    // A mobile stored as a number comes back without its leading 0.
+    const phoneText = phoneIdx !== -1 ? row[phoneIdx].trim() : "";
+    const phone = /^4\d{8}$/.test(phoneText) ? "0" + phoneText : phoneText;
+    const email = emailIdx !== -1 ? row[emailIdx].trim() : "";
     // Every row needs SOME identity to match across syncs — skip fully blank rows.
     if (!(email || phone || name)?.trim()) return;
     identifiedRows++;
@@ -186,18 +177,20 @@ async function runSync(clientId: string, sheet: NonNullable<Awaited<ReturnType<t
     const existing = (e && byEmail.get(e)) || free(p ? byPhone.get(p) : undefined) || free(n ? byName.get(n) : undefined) || undefined;
 
     const rawStatus = statusColIdx !== -1 ? row[statusColIdx] ?? "" : "";
-    const baseMappedStatus: LeadStatusValue = LEAD_STATUSES.includes(statusMapping[rawStatus] as LeadStatusValue)
-      ? (statusMapping[rawStatus] as LeadStatusValue)
-      : "NEW_LEAD";
+    const statusKey = normalizeStatus(rawStatus);
+    const statusHit = LEAD_STATUSES.includes(statusMapping[statusKey] as LeadStatusValue);
+    if (statusKey && !statusHit) unmapped.status[statusKey] = (unmapped.status[statusKey] ?? 0) + 1;
+    const baseMappedStatus: LeadStatusValue = statusHit ? statusMapping[statusKey] : "NEW_LEAD";
 
     // The result column (e.g. "Prospect Status": did it actually close?)
     // overrides the outreach column above whenever it resolves to something
     // more conclusive — a client typing "DISQUALIFIED" or "SOLD" here beats
     // whatever the team's internal outreach-stage column still says.
     const rawResultStatus = resultStatusColIdx !== -1 ? row[resultStatusColIdx] ?? "" : "";
-    const resultMappedStatus = LEAD_STATUSES.includes(resultStatusMapping[rawResultStatus] as LeadStatusValue)
-      ? (resultStatusMapping[rawResultStatus] as LeadStatusValue)
-      : null;
+    const resultKey = normalizeStatus(rawResultStatus);
+    const resultHit = LEAD_STATUSES.includes(resultStatusMapping[resultKey] as LeadStatusValue);
+    if (resultKey && !resultHit) unmapped.result[resultKey] = (unmapped.result[resultKey] ?? 0) + 1;
+    const resultMappedStatus = resultHit ? resultStatusMapping[resultKey] : null;
     const mappedStatus = resultMappedStatus ? moreConclusive(baseMappedStatus, resultMappedStatus) : baseMappedStatus;
 
     // Revenue is only ever counted once the result column resolves the deal
@@ -214,14 +207,17 @@ async function runSync(clientId: string, sheet: NonNullable<Awaited<ReturnType<t
     // would stamp every single one with today's date, silently corrupting
     // month-attribution, the activity timeline, and time-to-convert. Only
     // set when the sheet actually has a parseable value — never invent one.
-    const dateOptIn = parseDate(dateOptInIdx !== -1 ? row[dateOptInIdx] : undefined);
+    const dateOptIn = dateOptInIdx !== -1 ? parseSheetDate(cells[rowIdx][dateOptInIdx]) : null;
 
     // Everything else — every header not otherwise mapped — goes into `raw`
     // for display only, keyed by its actual header text.
     const mappedIdx = new Set([nameIdx, phoneIdx, emailIdx, sourceIdx, campaignIdx, adsetIdx, revenueIdx, quoteIdx, statusColIdx, resultStatusColIdx, dateOptInIdx]);
     const raw: Record<string, string> = {};
     headers.forEach((h, i) => {
-      if (!mappedIdx.has(i) && h) raw[h] = row[i] ?? "";
+      if (mappedIdx.has(i) || !h) return;
+      const cell = cells[rowIdx][i];
+      const asDate = dateLikeIdx.has(i) && typeof cell === "number" ? parseSheetDate(cell) : null;
+      raw[h] = asDate ? formatSheetDate(asDate) : row[i] ?? "";
     });
 
     const baseData: Record<string, unknown> = {
@@ -302,7 +298,10 @@ async function runSync(clientId: string, sheet: NonNullable<Awaited<ReturnType<t
     { timeout: 120_000, maxWait: 10_000 }
   );
 
-  return { total: rows.length, leads: identifiedRows, created: creates.size, updated: updates.length - restored, removed: staleIds.length, restored };
+  return {
+    summary: { total: rows.length, leads: identifiedRows, created: creates.size, updated: updates.length - restored, removed: staleIds.length, restored },
+    unmapped,
+  };
 }
 
 export type CampaignFunnelRow = {

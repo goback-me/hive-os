@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { encryptToken, decryptToken } from "@/lib/crypto";
+import { cellToString } from "@/lib/sheet-parse";
 
 const SCOPES = [
   "https://www.googleapis.com/auth/spreadsheets.readonly",
@@ -132,19 +133,31 @@ export async function listSheetTabs(accessToken: string, spreadsheetId: string) 
 }
 
 // ── Sheets: fetch all values from a tab (first row = headers) ────────
-export async function getSheetValues(accessToken: string, spreadsheetId: string, sheetName: string) {
+// `unformatted` (used by the lead sync) returns raw typed values — numbers
+// without currency/locale formatting and dates as Sheets serial numbers —
+// in `cells`; `rows` is always the same data as strings. The default
+// (formatted) is what a human sees in Sheets, for display-only callers.
+export async function getSheetValues(
+  accessToken: string,
+  spreadsheetId: string,
+  sheetName: string,
+  opts: { unformatted?: boolean } = {}
+) {
   const range = encodeURIComponent(`${sheetName}`);
+  const query = opts.unformatted ? "?valueRenderOption=UNFORMATTED_VALUE&dateTimeRenderOption=SERIAL_NUMBER" : "";
   const res = await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${range}`,
+    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${range}${query}`,
     { headers: { Authorization: `Bearer ${accessToken}` } }
   );
   if (!res.ok) throw new Error(`Sheet values fetch failed: ${await res.text()}`);
   const data = await res.json();
-  const rows: string[][] = data.values ?? [];
-  const [headerRow, ...bodyRows] = rows;
-  const headers = headerRow ?? [];
+  const values: unknown[][] = data.values ?? [];
+  const [headerRow, ...bodyRows] = values;
+  const headers = (headerRow ?? []).map(cellToString); // not trimmed — stored statusColumn names must keep matching
+  const cells = bodyRows.map((r) => headers.map((_, i) => r[i] ?? ""));
   return {
     headers,
-    rows: bodyRows.map((r) => headers.map((_, i) => r[i] ?? "")),
+    rows: cells.map((r) => r.map(cellToString)),
+    cells,
   };
 }

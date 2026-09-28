@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { LEAD_STATUSES, LEAD_STATUS_LABELS, type LeadStatusValue } from "@/lib/lead-status";
+import { normalizeStatus } from "@/lib/sheet-parse";
 
 type DriveFile = { id: string; name: string; modifiedTime: string };
 
@@ -48,12 +49,17 @@ export default function LeadsSheetPanel({
   const [resultStatusColumn, setResultStatusColumn] = useState<string | null>(null);
   const [resultStatusMapping, setResultStatusMapping] = useState<Record<string, LeadStatusValue>>({});
   const [showColumnPicker, setShowColumnPicker] = useState(false);
+  // From the last sync: normalized status values nothing maps to yet.
+  const [unmapped, setUnmapped] = useState<{ status: Record<string, number>; result: Record<string, number> }>({ status: {}, result: {} });
+  const [hasOptInDateColumn, setHasOptInDateColumn] = useState(true);
 
   // Actual row data — server already stripped hidden columns out of this.
   const [headers, setHeaders] = useState<string[]>([]);
   const [rows, setRows] = useState<string[][]>([]);
   const [statusValues, setStatusValues] = useState<string[]>([]);
   const [statusCounts, setStatusCounts] = useState<Record<string, number>>({});
+  const [statusLabels, setStatusLabels] = useState<Record<string, string>>({});
+  const [resultStatusLabels, setResultStatusLabels] = useState<Record<string, string>>({});
   const [resultStatusValues, setResultStatusValues] = useState<string[]>([]);
   const [resultStatusCounts, setResultStatusCounts] = useState<Record<string, number>>({});
   const [statusFilter, setStatusFilter] = useState<string>("__all__");
@@ -72,6 +78,8 @@ export default function LeadsSheetPanel({
         setStatusMapping(data.statusMapping ?? {});
         setResultStatusColumn(data.resultStatusColumn);
         setResultStatusMapping(data.resultStatusMapping ?? {});
+        setUnmapped(data.unmappedStatuses ?? { status: {}, result: {} });
+        setHasOptInDateColumn(data.hasOptInDateColumn ?? true);
         setCurrentSpreadsheetName(data.spreadsheetName);
         setCurrentSheetName(data.sheetName);
       })
@@ -89,6 +97,8 @@ export default function LeadsSheetPanel({
         setRows(data.rows);
         setStatusValues(data.statusValues ?? []);
         setStatusCounts(data.statusCounts ?? {});
+        setStatusLabels(data.statusLabels ?? {});
+        setResultStatusLabels(data.resultStatusLabels ?? {});
         setResultStatusValues(data.resultStatusValues ?? []);
         setResultStatusCounts(data.resultStatusCounts ?? {});
       })
@@ -189,7 +199,11 @@ export default function LeadsSheetPanel({
     setVisibleColumns(next);
   }
 
-  function saveColumns(nextStatusColumn: string | null, nextResultStatusColumn: string | null) {
+  function saveColumns(
+    nextStatusColumn: string | null,
+    nextResultStatusColumn: string | null,
+    mappings: { statusMapping: typeof statusMapping; resultStatusMapping: typeof resultStatusMapping } = { statusMapping, resultStatusMapping }
+  ) {
     fetch("/api/google/columns", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -197,9 +211,9 @@ export default function LeadsSheetPanel({
         clientId,
         visibleColumns,
         statusColumn: nextStatusColumn,
-        statusMapping,
+        statusMapping: mappings.statusMapping,
         resultStatusColumn: nextResultStatusColumn,
-        resultStatusMapping,
+        resultStatusMapping: mappings.resultStatusMapping,
       }),
     })
       .then((r) => r.json())
@@ -210,6 +224,7 @@ export default function LeadsSheetPanel({
         setResultStatusColumn(nextResultStatusColumn);
         setStatusFilter("__all__");
         setShowColumnPicker(false);
+        loadMeta(); // picks up the re-sync's unmapped-status list
         loadData(); // re-fetch so the table reflects the new column set immediately
       })
       .catch((e) => setError(e.message));
@@ -231,6 +246,17 @@ export default function LeadsSheetPanel({
       else delete next[sheetValue];
       return next;
     });
+  }
+
+  // One-click fix from the "unmapped values" warning: save + re-sync straight away.
+  function quickMap(column: "status" | "result", value: string, ourStatus: LeadStatusValue) {
+    const next = {
+      statusMapping: column === "status" ? { ...statusMapping, [value]: ourStatus } : statusMapping,
+      resultStatusMapping: column === "result" ? { ...resultStatusMapping, [value]: ourStatus } : resultStatusMapping,
+    };
+    setStatusMapping(next.statusMapping);
+    setResultStatusMapping(next.resultStatusMapping);
+    saveColumns(statusColumn, resultStatusColumn, next);
   }
 
   const ghostBtn = { border: "1px solid var(--border)", color: "var(--text-secondary)" } as const;
@@ -347,7 +373,12 @@ export default function LeadsSheetPanel({
 
   // ── Step 3: assigned + ready — table with column + status filters ────
   const statusIdx = statusColumn ? headers.indexOf(statusColumn) : -1;
-  const filteredRows = statusIdx !== -1 && statusFilter !== "__all__" ? rows.filter((r) => r[statusIdx] === statusFilter) : rows;
+  const filteredRows =
+    statusIdx !== -1 && statusFilter !== "__all__" ? rows.filter((r) => normalizeStatus(r[statusIdx]) === statusFilter) : rows;
+  const unmappedEntries = [
+    ...Object.entries(unmapped.status).map(([value, count]) => ({ column: "status" as const, name: statusColumn, value, count })),
+    ...Object.entries(unmapped.result).map(([value, count]) => ({ column: "result" as const, name: resultStatusColumn, value, count })),
+  ].sort((a, b) => b.count - a.count);
 
   return (
     <div className="card rounded-2xl p-5">
@@ -364,7 +395,7 @@ export default function LeadsSheetPanel({
               <option value="__all__">All statuses ({rows.length})</option>
               {statusValues.map((v) => (
                 <option key={v} value={v}>
-                  {v} ({statusCounts[v] ?? 0})
+                  {statusLabels[v] ?? v} ({statusCounts[v] ?? 0})
                 </option>
               ))}
             </select>
@@ -418,7 +449,7 @@ export default function LeadsSheetPanel({
               <div className="space-y-2 mb-3">
                 {statusValues.map((v) => (
                   <div key={v} className="flex items-center gap-2">
-                    <span className="text-xs font-semibold flex-1 truncate" style={{ color: "var(--text-primary)" }}>{v}</span>
+                    <span className="text-xs font-semibold flex-1 truncate" style={{ color: "var(--text-primary)" }}>{statusLabels[v] ?? v}</span>
                     <span className="material-symbols-outlined text-[14px]" style={{ color: "var(--text-muted)" }}>arrow_forward</span>
                     <select
                       value={statusMapping[v] ?? ""}
@@ -466,7 +497,7 @@ export default function LeadsSheetPanel({
               <div className="space-y-2 mb-3">
                 {resultStatusValues.map((v) => (
                   <div key={v} className="flex items-center gap-2">
-                    <span className="text-xs font-semibold flex-1 truncate" style={{ color: "var(--text-primary)" }}>{v}</span>
+                    <span className="text-xs font-semibold flex-1 truncate" style={{ color: "var(--text-primary)" }}>{resultStatusLabels[v] ?? v}</span>
                     <span className="material-symbols-outlined text-[14px]" style={{ color: "var(--text-muted)" }}>arrow_forward</span>
                     <select
                       value={resultStatusMapping[v] ?? ""}
@@ -510,10 +541,48 @@ export default function LeadsSheetPanel({
                     : { background: "var(--surface-hover)", color: "var(--text-primary)", border: "1px solid var(--border)" }
                 }
               >
-                {v} · {statusCounts[v] ?? 0}
+                {statusLabels[v] ?? v} · {statusCounts[v] ?? 0}
               </button>
             );
           })}
+        </div>
+      )}
+
+      {!hasOptInDateColumn && (
+        <div className="mb-3 p-3 rounded-lg text-xs flex items-start gap-2" style={{ background: "var(--danger-tint)", color: "var(--danger)" }}>
+          <span className="material-symbols-outlined text-[16px]">warning</span>
+          <span>No opt-in date column — lead dates will be the sync date and conversion times will be wrong. Add a "Date Opt In" column to the sheet.</span>
+        </div>
+      )}
+
+      {unmappedEntries.length > 0 && (
+        <div className="mb-3 p-3 rounded-lg" style={{ background: "var(--danger-tint)" }}>
+          <p className="text-xs font-bold mb-2 flex items-center gap-1.5" style={{ color: "var(--danger)" }}>
+            <span className="material-symbols-outlined text-[16px]">warning</span>
+            {unmappedEntries.length} status value{unmappedEntries.length === 1 ? "" : "s"} not mapped — those leads are counted as New Lead
+          </p>
+          <div className="space-y-1.5">
+            {unmappedEntries.map((u) => (
+              <div key={`${u.column}:${u.value}`} className="flex items-center gap-2">
+                <span className="text-xs font-semibold flex-1 truncate" style={{ color: "var(--text-primary)" }}>
+                  "{u.value}" <span style={{ color: "var(--text-muted)" }}>in {u.name ?? u.column} · {u.count} lead{u.count === 1 ? "" : "s"}</span>
+                </span>
+                <select
+                  value=""
+                  onChange={(e) => e.target.value && quickMap(u.column, u.value, e.target.value as LeadStatusValue)}
+                  className="px-2 py-1.5 rounded-lg text-xs font-bold outline-none"
+                  style={selectStyle}
+                >
+                  <option value="">Map to…</option>
+                  {LEAD_STATUSES.map((s) => (
+                    <option key={s} value={s}>
+                      {LEAD_STATUS_LABELS[s]}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
