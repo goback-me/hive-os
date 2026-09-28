@@ -23,16 +23,19 @@ export type ParsedNote = { at: Date; who: string; event: NoteEventValue; rawText
 
 export const NOTES_KEYWORDS = ["feedback", "notes"];
 
-// First match wins. Short tokens (np, vm, lt, dnd) need word boundaries so
-// they don't fire inside other words.
+// First match wins, most specific first: one entry often logs two things
+// ("no pickup from jake, email handover") and the outcome matters more than
+// the failed call, so call attempts are checked last. Short tokens (np, vm,
+// lt, dnd) need word boundaries so they don't fire inside other words.
 const RULES: [RegExp, NoteEventValue][] = [
-  [/\bnp\b|no pick ?up|\bvm\b|voicemail|txt sent|\bbusy\b|\bdnd\b/i, "CALL_ATTEMPT"],
   [/wrong num|disconnected|invalid|incorrect number|test lead/i, "DQ_SPAM"],
   [/live to|\blt to\b|live transfer|\blt\b/i, "HANDOVER_LIVE"],
   [/live att|email handover|txt handover|text handover|handover/i, "HANDOVER_TEXT"],
   [/self ?booked|booked (in|for)/i, "CONSULT_BOOKED"],
   [/site visit done|inspection done/i, "CONSULT_ATTENDED"],
   [/quote provided|quoted/i, "QUOTE_SENT"],
+  // "no pickup" as actually typed: "nopicup", "no picukp", "no pick up"
+  [/\bnp\b|\bno ?pi[a-z]{0,4}p\b|no pick ?up|\bvm\b|voicemail|txt sent|\bbusy\b|\bdnd\b/i, "CALL_ATTEMPT"],
 ];
 
 export function classifyNoteText(text: string): NoteEventValue {
@@ -42,6 +45,16 @@ export function classifyNoteText(text: string): NoteEventValue {
 
 // "<who> <d/m>[>] <text>" — who is any word (hs, maddy, mddy, al, ...).
 const ENTRY = /^\s*([a-z]+)\s+(\d{1,2})\s*\/\s*(\d{1,2})\s*>?\s*(.*)$/i;
+// Sometimes typed the other way round: "number disconnected hs 20/7".
+const ENTRY_TRAILING = /^\s*(.*?)\s+([a-z]+)\s+(\d{1,2})\s*\/\s*(\d{1,2})\s*$/i;
+
+function matchEntry(fragment: string) {
+  const m = fragment.match(ENTRY);
+  if (m) return { who: m[1], day: Number(m[2]), month: Number(m[3]), text: m[4] };
+  const t = fragment.match(ENTRY_TRAILING);
+  if (t) return { who: t[2], day: Number(t[3]), month: Number(t[4]), text: t[1] };
+  return null;
+}
 
 function sydneyYearMonth(d: Date) {
   const parts = new Intl.DateTimeFormat("en-AU", { timeZone: SHEET_TZ, year: "numeric", month: "numeric" }).formatToParts(d);
@@ -56,11 +69,9 @@ export function parseNotes(cell: string, optIn: Date): ParsedNote[] {
   const entries: { who: string; day: number; month: number; text: string }[] = [];
 
   for (const fragment of cell.split(/[,\n\r]+/)) {
-    const m = fragment.match(ENTRY);
-    const day = m ? Number(m[2]) : NaN;
-    const month = m ? Number(m[3]) : NaN;
-    if (m && day >= 1 && day <= 31 && month >= 1 && month <= 12) {
-      entries.push({ who: m[1].toLowerCase(), day, month, text: m[4].trim() });
+    const m = matchEntry(fragment);
+    if (m && m.day >= 1 && m.day <= 31 && m.month >= 1 && m.month <= 12) {
+      entries.push({ who: m.who.toLowerCase(), day: m.day, month: m.month, text: m.text.trim() });
     } else if (entries.length && fragment.trim()) {
       const last = entries[entries.length - 1];
       last.text = last.text ? `${last.text}, ${fragment.trim()}` : fragment.trim();

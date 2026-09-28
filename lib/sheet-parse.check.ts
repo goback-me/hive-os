@@ -1,6 +1,6 @@
 // Run: npx tsx lib/sheet-parse.check.ts — throws on the first failure.
 import assert from "node:assert/strict";
-import { findColumn, findHeaderIndex, normalizePhone, normalizeStatus, parseSheetDate, serialToDate } from "./sheet-parse";
+import { detectStatusColumns, findColumn, findHeaderIndex, normalizePhone, normalizeStatus, parseSheetDate, serialToDate } from "./sheet-parse";
 
 // Status normalization
 assert.equal(normalizeStatus("DISQUALIFIED "), "disqualified");
@@ -26,6 +26,14 @@ assert.equal(findHeaderIndex(["Name", "Hive\nStatus "], "HIVE STATUS"), 1);
 assert.equal(findHeaderIndex(["Name", "HIVE STATUS"], "HIVE STATUS"), 1);
 assert.equal(findHeaderIndex(["Name", "Prospect Status"], "HIVE STATUS"), -1);
 assert.equal(findHeaderIndex(["Name"], null), -1);
+
+// Status columns auto-detected from a real client's headers
+assert.deepEqual(detectStatusColumns(["Name", "Campaign Name", "HIVE STATUS", "Prospect Status", "Quote Value", "Pospect Status / Feedback "]), {
+  statusColumn: "HIVE STATUS",
+  resultStatusColumn: "Prospect Status",
+});
+assert.deepEqual(detectStatusColumns(["Name", "Status"]), { statusColumn: "Status", resultStatusColumn: null });
+assert.deepEqual(detectStatusColumns(["Name", "Feedback / Status"]), { statusColumn: null, resultStatusColumn: null });
 
 // Dates — Sydney local, dd/mm first, never mm/dd
 const iso = (d: Date | null) => d?.toISOString();

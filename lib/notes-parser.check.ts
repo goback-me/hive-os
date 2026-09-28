@@ -22,6 +22,13 @@ const rules: [string, string][] = [
   ["site visit done", "CONSULT_ATTENDED"],
   ["quote provided $12k", "QUOTE_SENT"],
   ["wants a price for a 3 bed", "NOTE"],
+  // real entries from a client sheet
+  ["no pickup from jake, email handover.", "HANDOVER_TEXT"],
+  ["email handover, no pickup from jake, call bck today before 6", "HANDOVER_TEXT"],
+  ["nopicup", "CALL_ATTEMPT"],
+  ["no picukp", "CALL_ATTEMPT"],
+  ["live attmpted, email handover to jake", "HANDOVER_TEXT"],
+  ["just goes to a busy dialtone.", "CALL_ATTEMPT"],
   // short tokens don't fire inside other words
   ["inpection pending", "NOTE"],
   ["salt water pool", "NOTE"],
@@ -44,6 +51,10 @@ assert.deepEqual(
 const lateOptIn = parseSheetDate("20/11/2025")!;
 const rolled = parseNotes("al 28/11 NP, al 3/1 booked in for Friday", lateOptIn);
 assert.deepEqual(rolled.map((n) => formatSheetDate(n.at)), ["28/11/2025", "03/01/2026"]);
+
+// Date typed after the text
+const trailing = parseNotes("number disconnected hs 20/7", parseSheetDate("14/07/2026")!);
+assert.deepEqual(trailing.map((n) => [formatSheetDate(n.at), n.who, n.event]), [["20/07/2026", "hs", "DQ_SPAM"]]);
 
 // Junk: leading undated text dropped, impossible dates skipped, empty cell
 assert.deepEqual(parseNotes("called twice, HS 31/2 np", optIn), []);

@@ -32,6 +32,20 @@ export function normalizeHeaderName(h: string) {
   return h.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
+// Best guess at the two status columns when none have been picked yet —
+// "HIVE STATUS" (outreach stage) and "Prospect Status" (outcome). Feedback/
+// notes columns are excluded even when their header says "status"
+// ("Pospect Status / Feedback"). Returns header names, or null.
+export function detectStatusColumns(headers: string[]) {
+  const notNotes = ["feedback", "notes", "note", "comment", "comments"];
+  const result = findColumn(headers, ["prospect status", "result status", "outcome"], notNotes);
+  const status = findColumn(headers, ["hive status", "lead status", "status"], [...notNotes, "prospect", "result"]);
+  return {
+    statusColumn: status !== -1 && status !== result ? headers[status] : null,
+    resultStatusColumn: result !== -1 ? headers[result] : null,
+  };
+}
+
 export function findHeaderIndex(headers: string[], name: string | null | undefined): number {
   if (!name) return -1;
   const exact = headers.indexOf(name);

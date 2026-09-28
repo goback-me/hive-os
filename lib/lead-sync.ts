@@ -17,6 +17,7 @@ import {
 } from "@/lib/lead-status";
 import {
   DATE_OPT_IN_KEYWORDS,
+  detectStatusColumns,
   findColumn,
   findHeaderIndex,
   formatSheetDate,
@@ -103,8 +104,18 @@ export async function clearClientLeads(clientId: string) {
 // every other field still refreshes normally. The outcome (time or error) is
 // recorded on ClientSheet so the Leads tab can show it.
 export async function syncLeadsFromSheet(clientId: string): Promise<SyncSummary> {
-  const sheet = await prisma.clientSheet.findUnique({ where: { clientId } });
+  let sheet = await prisma.clientSheet.findUnique({ where: { clientId } });
   if (!sheet) throw new Error("No Google Sheet assigned to this client yet — connect one on the Leads page first.");
+
+  // No status column picked yet → every lead would sit on one stage. Pick
+  // the obvious ones ("HIVE STATUS" / "Prospect Status") and save them, so
+  // they also show up selected on the Leads page.
+  if (!sheet.statusColumn && !sheet.resultStatusColumn) {
+    const detected = detectStatusColumns(sheet.allColumns);
+    if (detected.statusColumn || detected.resultStatusColumn) {
+      sheet = await prisma.clientSheet.update({ where: { clientId }, data: detected });
+    }
+  }
 
   try {
     const { summary, unmapped } = await runSync(clientId, sheet);
