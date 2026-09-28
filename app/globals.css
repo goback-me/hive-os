@@ -222,3 +222,48 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .chart-draw, .chart-dot { animation: none; stroke-dashoffset: 0; transform: none; }
 }
+
+/* Native <select> popups: the option list inherits a coloured badge's
+   background (e.g. the blue "Won" pill) unless told otherwise. Give it the
+   normal card colours, and tell the browser which theme to draw it in. */
+:root { color-scheme: light; }
+.dark { color-scheme: dark; }
+select option,
+select optgroup {
+  background-color: var(--surface-card);
+  color: var(--text-primary);
+}
+
+/* Loading placeholders — a soft shimmer instead of a bare "Loading…". */
+.skeleton {
+  display: inline-block;
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--surface-hover) 25%, color-mix(in srgb, var(--surface-hover) 55%, var(--border)) 50%, var(--surface-hover) 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.2s ease-in-out infinite;
+}
+@keyframes skeleton-shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+
+/* Content arriving after a load eases in rather than popping. */
+.fade-in { animation: fade-in 0.25s ease-out both; }
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Funnel bars grow from the left on load. */
+.bar-grow {
+  transform-origin: left center;
+  animation: bar-grow 0.6s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes bar-grow {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton, .fade-in, .bar-grow { animation: none; }
+}

@@ -1,4 +1,5 @@
 import { prisma } from "./prisma";
+import { getRevenueByMonth, revenueInMonth } from "./revenue";
 
 // ── Hive OS — agency-wide ad spend / lead / ROAS reporting ──────────────
 // Brought in alongside the original coaching app's own getRevenueTrend below (which the
@@ -114,22 +115,19 @@ export async function getLeadFunnel(clientId: string) {
   return stages.map((stage, i) => ({ stage, count: counts[i] }));
 }
 
-// Main dashboard revenue trend (page.tsx uses this one). Reads RevenueMonthly —
-// the same table the client pages/awards use — so the agency chart always
-// equals the sum of what each client's own page shows.
+// Main dashboard revenue trend (page.tsx uses this one). Same source as the
+// client pages/awards (lib/revenue.ts), so the agency chart always equals the
+// sum of what each client's own page shows.
 export async function getRevenueTrend(months = 12) {
   const now = new Date();
+  const revenue = await getRevenueByMonth();
   const points: { label: string; revenue: number }[] = [];
 
   for (let i = months - 1; i >= 0; i--) {
     const start = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    const agg = await prisma.revenueMonthly.aggregate({
-      _sum: { amount: true },
-      where: { month: start, client: { archivedAt: null } },
-    });
     points.push({
       label: start.toLocaleDateString("en-US", { month: "short", year: "2-digit" }),
-      revenue: Number(agg._sum.amount ?? 0),
+      revenue: revenueInMonth(revenue, start),
     });
   }
 

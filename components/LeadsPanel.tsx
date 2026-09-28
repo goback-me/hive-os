@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import {
   DQ_PHASE_LABELS,
@@ -118,7 +118,6 @@ export default function LeadsPanel({
   clientSlug,
   lastSyncedAt: initialLastSyncedAt,
   lastSyncError,
-  funnel: initialFunnel,
   onSync,
   onUpdateStage,
   onUnlockStage,
@@ -130,7 +129,6 @@ export default function LeadsPanel({
   clientSlug: string;
   lastSyncedAt: string | null;
   lastSyncError: string | null;
-  funnel: ClientFunnel;
   onSync: (clientId: string) => Promise<{ summary: SyncSummary } | { error: string }>;
   onUpdateStage: (leadId: string, target: string, value?: number) => Promise<void>;
   onUnlockStage: (leadId: string) => Promise<{ ok: true } | { error: string }>;
@@ -141,7 +139,7 @@ export default function LeadsPanel({
   const [activeSubTab, setActiveSubTab] = useState<"leads" | "campaigns">("leads");
 
   const [dateRange, setDateRange] = useState<DateRangePreset>("maximum");
-  const [funnel, setFunnel] = useState(initialFunnel);
+  const [funnel, setFunnel] = useState<ClientFunnel | null>(null);
   const [loadingFunnel, setLoadingFunnel] = useState(false);
   const [series, setSeries] = useState<TimeSeriesPoint[]>([]);
   const [loadingSeries, setLoadingSeries] = useState(false);
@@ -157,6 +155,7 @@ export default function LeadsPanel({
   const [sheetStatusCounts, setSheetStatusCounts] = useState<Record<string, number>>({});
   const [campaignFilter, setCampaignFilter] = useState<string | null>(null);
   const [loadingLeads, setLoadingLeads] = useState(false);
+  const [leadsLoaded, setLeadsLoaded] = useState(false); // false until the first page arrives
 
   const [syncing, setSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
@@ -195,8 +194,12 @@ export default function LeadsPanel({
     return [...notes, ...statuses, ...events, ...created].sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
   }, [detailLead, notesByLead, activityByLead, eventsByLead]);
 
+  // Each load stamps a request number; a response that isn't the latest is
+  // dropped, so quick filter/page clicks can never paint stale rows.
+  const leadsReq = useRef(0);
   function loadLeads() {
     if (!hasSheet) return;
+    const req = ++leadsReq.current;
     setLoadingLeads(true);
     const params = new URLSearchParams({ clientId, page: String(page), pageSize: String(PAGE_SIZE), range: dateRange });
     if (statusFilter) params.set("stage", statusFilter);
@@ -205,27 +208,32 @@ export default function LeadsPanel({
     fetch(`/api/leads?${params.toString()}`)
       .then((r) => r.json())
       .then((data) => {
+        if (req !== leadsReq.current) return;
         if (data.error) throw new Error(data.error);
         setLeads(data.leads);
         setTotal(data.total);
         if (data.stageCounts) setStageCounts(data.stageCounts);
         if (data.sheetStatusCounts) setSheetStatusCounts(data.sheetStatusCounts);
+        setLeadsLoaded(true);
       })
-      .catch((e) => setError(e.message))
-      .finally(() => setLoadingLeads(false));
+      .catch((e) => req === leadsReq.current && setError(e.message))
+      .finally(() => req === leadsReq.current && setLoadingLeads(false));
   }
 
+  const funnelReq = useRef(0);
   function loadFunnel() {
     if (!hasSheet) return;
+    const req = ++funnelReq.current;
     setLoadingFunnel(true);
     fetch(`/api/leads/funnel?clientId=${clientId}&range=${dateRange}`)
       .then((r) => r.json())
       .then((data) => {
+        if (req !== funnelReq.current) return;
         if (data.error) throw new Error(data.error);
         setFunnel(data.funnel);
       })
-      .catch((e) => setError(e.message))
-      .finally(() => setLoadingFunnel(false));
+      .catch((e) => req === funnelReq.current && setError(e.message))
+      .finally(() => req === funnelReq.current && setLoadingFunnel(false));
   }
 
   function loadSeries() {
@@ -241,18 +249,29 @@ export default function LeadsPanel({
       .finally(() => setLoadingSeries(false));
   }
 
+  // `reloadKey` bumps after a sync or a stage change to refetch everything.
+  const [reloadKey, setReloadKey] = useState(0);
+  const reload = () => setReloadKey((k) => k + 1);
+
+  // One fetch per change (this used to fire twice on open).
   useEffect(() => {
     loadLeads();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, statusFilter, sheetStatusFilter, campaignFilter, hasSheet]);
+  }, [page, statusFilter, sheetStatusFilter, campaignFilter, hasSheet, dateRange, reloadKey]);
 
+  // The funnel (incl. a live Meta spend call) and chart only load when the
+  // Campaign performance tab is actually open.
   useEffect(() => {
-    setPage(1);
-    loadLeads();
+    if (activeSubTab !== "campaigns") return;
     loadFunnel();
     loadSeries();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dateRange]);
+  }, [activeSubTab, dateRange, reloadKey]);
+
+  function changeDateRange(range: DateRangePreset) {
+    setDateRange(range);
+    setPage(1);
+  }
 
   // Auto-sync on open when the Lead table is stale (never synced, or >10 min
   // old) — the tab reads the synced table, not the sheet, so without this it
@@ -263,9 +282,7 @@ export default function LeadsPanel({
   }, []);
 
   function refreshAfterChange(leadId: string) {
-    loadLeads();
-    loadFunnel();
-    loadSeries();
+    reload();
     if (activityByLead[leadId]) loadActivity(leadId);
   }
 
@@ -280,9 +297,7 @@ export default function LeadsPanel({
         setLastSynced(new Date().toISOString());
         setSyncMessage(`Synced ${summary.leads} leads — ${summary.created} new, ${summary.updated} updated${summary.restored ? `, ${summary.restored} restored` : ""}${summary.removed ? `, ${summary.removed} removed (no longer in sheet)` : ""}.`);
         setPage(1);
-        loadLeads();
-        loadFunnel();
-        loadSeries();
+        reload();
       })
       .catch((e) => setError(e.message))
       .finally(() => setSyncing(false));
@@ -412,7 +427,7 @@ export default function LeadsPanel({
           {error && <p className="text-xs mt-0.5" style={{ color: "var(--danger)" }}>{error}</p>}
         </div>
         <div className="flex items-center gap-2">
-          <DateRangeDropdown value={dateRange} onChange={setDateRange} />
+          <DateRangeDropdown value={dateRange} onChange={changeDateRange} />
           {isCoach && (
             <button
               onClick={sync}
@@ -448,7 +463,14 @@ export default function LeadsPanel({
       {activeSubTab === "leads" && (
         <div className="card rounded-2xl p-5 overflow-x-auto">
           <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
-            <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{total.toLocaleString()} leads</p>
+            {leadsLoaded ? (
+              <p className="text-sm font-semibold flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
+                {total.toLocaleString()} leads
+                {loadingLeads && <span className="material-symbols-outlined text-[16px] animate-spin" style={{ color: "var(--text-muted)" }}>progress_activity</span>}
+              </p>
+            ) : (
+              <span className="skeleton h-4 w-24" />
+            )}
             {campaignFilter && (
               <button
                 onClick={() => setCampaignFilter(null)}
@@ -461,8 +483,14 @@ export default function LeadsPanel({
             )}
           </div>
 
-          {sheetStatusValues.length > 0 && (
-            <div className="mb-4">
+          {!leadsLoaded && (
+            <div className="flex gap-1.5 mb-4">
+              {[48, 72, 64, 88, 56].map((w, i) => <span key={i} className="skeleton h-7 rounded-full" style={{ width: w }} />)}
+            </div>
+          )}
+
+          {leadsLoaded && sheetStatusValues.length > 0 && (
+            <div className="mb-4 fade-in">
               <p className="text-[10px] font-bold tracking-wide mb-1.5" style={{ color: "var(--text-muted)" }}>SHEET STATUS</p>
               <div className="flex items-center gap-1.5 flex-wrap">
                 <TabButton active={sheetStatusFilter === null} label="All" count={allStatusCount} onClick={() => { setSheetStatusFilter(null); setPage(1); }} />
@@ -487,7 +515,7 @@ export default function LeadsPanel({
             </div>
           )}
 
-          <div className="mb-4">
+          {leadsLoaded && <div className="mb-4 fade-in">
             <p className="text-[10px] font-bold tracking-wide mb-1.5" style={{ color: "var(--text-muted)" }}>PIPELINE STATUS</p>
             <div className="flex items-center gap-1.5 flex-wrap">
               <TabButton active={statusFilter === ""} label="All" count={allStatusCount} onClick={() => { setStatusFilter(""); setPage(1); }} />
@@ -502,17 +530,18 @@ export default function LeadsPanel({
                 />
               ))}
             </div>
-          </div>
+          </div>}
 
-          {loadingLeads ? (
-            <p className="text-sm py-6 text-center" style={{ color: "var(--text-secondary)" }}>Loading…</p>
+          {!leadsLoaded ? (
+            <SkeletonRows />
           ) : leads.length === 0 ? (
             <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
               {total === 0 ? "No leads yet." : "No leads match this filter."}
             </p>
           ) : (
             <>
-              <table className="w-full text-left text-sm min-w-[760px]">
+              {/* Rows stay up (dimmed) while the next page/filter loads — no blank flash. */}
+              <table className="w-full text-left text-sm min-w-[760px] fade-in transition-opacity" style={{ opacity: loadingLeads ? 0.5 : 1 }}>
                 <thead>
                   <tr style={{ borderBottom: "1px solid var(--border)" }}>
                     {["Name", "Phone", "Email", "Source", "Campaign", "Status", "Value", ""].map((h, i) => (
@@ -805,6 +834,25 @@ export default function LeadsPanel({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// First-load placeholder in the table's shape, so the tab never shows "0 leads".
+function SkeletonRows() {
+  return (
+    <div className="space-y-2" aria-label="Loading leads" role="status">
+      {Array.from({ length: 8 }).map((_, i) => (
+        <div key={i} className="flex items-center gap-4 py-2" style={{ borderBottom: "1px solid var(--border)", opacity: 1 - i * 0.09 }}>
+          <span className="skeleton h-4 w-28" />
+          <span className="skeleton h-4 w-24" />
+          <span className="skeleton h-4 w-40" />
+          <span className="skeleton h-4 w-16" />
+          <span className="skeleton h-4 flex-1" />
+          <span className="skeleton h-6 w-24 rounded-full" />
+          <span className="skeleton h-4 w-14" />
+        </div>
+      ))}
     </div>
   );
 }

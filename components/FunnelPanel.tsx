@@ -26,7 +26,21 @@ const STEPS: { key: keyof FunnelCounts; label: string }[] = [
   { key: "won", label: "Won" },
 ];
 
-export default function FunnelPanel({ funnel, loading, onViewCampaign }: { funnel: ClientFunnel; loading: boolean; onViewCampaign: (campaign: string) => void }) {
+export default function FunnelPanel({ funnel, loading, onViewCampaign }: { funnel: ClientFunnel | null; loading: boolean; onViewCampaign: (campaign: string) => void }) {
+  // Not loaded yet — placeholder in the funnel's shape.
+  if (!funnel) {
+    return (
+      <div className="card rounded-2xl p-5 space-y-3" role="status" aria-label="Loading funnel">
+        <span className="skeleton h-4 w-56 block mb-4" />
+        {STEPS.map((s, i) => (
+          <div key={s.key} className="flex items-center gap-3">
+            <span className="skeleton h-3 w-28" />
+            <span className="skeleton h-6 rounded-md" style={{ width: `${Math.max(90 - i * 11, 8)}%` }} />
+          </div>
+        ))}
+      </div>
+    );
+  }
   const { overall, campaigns } = funnel;
   const c = overall.counts;
   const drop = biggestDrop(c);
@@ -40,7 +54,7 @@ export default function FunnelPanel({ funnel, loading, onViewCampaign }: { funne
   }
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5 fade-in">
       {/* Funnel bar with step conversion */}
       <div className="card rounded-2xl p-5">
         <div className="flex items-center justify-between mb-4">
@@ -63,8 +77,8 @@ export default function FunnelPanel({ funnel, loading, onViewCampaign }: { funne
                   <span className="w-28 shrink-0 text-xs font-semibold text-right" style={{ color: "var(--text-secondary)" }}>{step.label}</span>
                   <div className="flex-1 h-6 rounded-md overflow-hidden" style={{ background: "var(--surface-hover)" }}>
                     <div
-                      className="h-full rounded-md flex items-center px-2 text-[11px] font-bold"
-                      style={{ width: `${width}%`, background: step.key === "won" ? "var(--primary)" : "var(--primary-tint)", color: step.key === "won" ? "#fff" : "var(--primary)" }}
+                      className="h-full rounded-md flex items-center px-2 text-[11px] font-bold bar-grow"
+                      style={{ animationDelay: `${i * 60}ms`, width: `${width}%`, background: step.key === "won" ? "var(--primary)" : "var(--primary-tint)", color: step.key === "won" ? "#fff" : "var(--primary)" }}
                     >
                       {n.toLocaleString()}
                     </div>

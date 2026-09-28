@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "crypto";
 import { Prisma } from "@prisma/client";
+import { unstable_cache } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { getValidAccessToken, getSheetValues } from "@/lib/google-sheets";
 import { getMetaCampaignInsights } from "@/lib/meta-ads";
@@ -146,7 +147,11 @@ function leadChanged(existing: ExistingLead, data: Record<string, unknown>) {
   for (const [k, v] of Object.entries(data)) {
     const cur = (existing as Record<string, unknown>)[k];
     if (k === "raw") {
-      if (JSON.stringify(cur ?? {}) !== JSON.stringify(v ?? {})) return true;
+      // Postgres jsonb stores keys in its own order, so compare key-by-key —
+      // a string compare saw every lead as changed on every sync.
+      const a = (cur ?? {}) as Record<string, unknown>;
+      const b = (v ?? {}) as Record<string, unknown>;
+      if (Object.keys(a).length !== Object.keys(b).length || Object.keys(b).some((key) => a[key] !== b[key])) return true;
     } else if (k === "value") {
       if ((cur == null ? null : Number(cur)) !== (v == null ? null : Number(v))) return true;
     } else if (cur instanceof Date || v instanceof Date) {
@@ -293,14 +298,11 @@ async function runSync(
     // only when there's no status column configured at all is it New Lead.
     const { final, prior } = combineTargets(statusTarget, resultTarget, hasStatusColumn ? "CHASE_UP" : "NEW_LEAD");
 
-    // Revenue is only ever counted once the deal resolves to Won — a bare
-    // "quoted" value (not yet accepted) never counts, even though the Quote
-    // Value cell already has a dollar figure in it. Quote Value takes
-    // priority over Revenue Generated when both are set.
-    const value =
-      final.stage === "WON"
-        ? parseMoney(quoteIdx !== -1 ? row[quoteIdx] : undefined) ?? parseMoney(revenueIdx !== -1 ? row[revenueIdx] : undefined)
-        : null;
+    // The deal's value is stored whatever the stage, so quoted leads show
+    // their quote. It only counts as REVENUE once the lead is Won — that
+    // filter lives in lib/revenue.ts. Quote Value takes priority over
+    // Revenue Generated when both are set.
+    const value = parseMoney(quoteIdx !== -1 ? row[quoteIdx] : undefined) ?? parseMoney(revenueIdx !== -1 ? row[revenueIdx] : undefined);
 
     // The real-world date this lead came in — NOT when our app happened to
     // sync it. Without this, a bulk first-time sync of months-old leads
@@ -359,7 +361,10 @@ async function runSync(
       // Respect a manual override — the sheet's stage (and its events) only
       // apply while nobody has manually set this lead's stage.
       if (existing.statusManuallySetAt) {
-        pending.set(existing.id, { lead: existing, data: baseData, value, events: [], noteJob });
+        // A value typed in with the manual stage change survives until the
+        // sheet has one of its own.
+        const { value: _sheetValue, ...keepValue } = baseData;
+        pending.set(existing.id, { lead: existing, data: value == null ? keepValue : baseData, value, events: [], noteJob });
         return;
       }
       const plan = planStageEvents({
@@ -478,7 +483,17 @@ async function runSync(
   };
 }
 
-export type ClientFunnel = { overall: FunnelGroup; campaigns: FunnelGroup[] };
+// Meta's per-campaign spend is a slow network call and only has day
+// granularity — cache it for 5 min, keyed by day, so reopening the funnel or
+// switching ranges back and forth is instant.
+const cachedCampaignInsights = unstable_cache(
+  (adAccountId: string, token: string, since?: string, until?: string) =>
+    getMetaCampaignInsights(adAccountId, token, { from: since ? new Date(since) : undefined, to: until ? new Date(until) : undefined }),
+  ["meta-campaign-insights"],
+  { revalidate: 300 }
+);
+
+export type ClientFunnel ={ overall: FunnelGroup; campaigns: FunnelGroup[] };
 
 function campaignKey(campaign: string | null) {
   return campaign?.trim() || "Unattributed";
@@ -619,7 +634,8 @@ export async function getClientFunnel(clientId: string, dateRange?: { from?: Dat
   let metaSpendByName: Map<string, number> | null = null;
   if (client?.metaAdAccountId && client.metaAccessToken) {
     try {
-      const rows = await getMetaCampaignInsights(client.metaAdAccountId, client.metaAccessToken, dateRange);
+      const day = (d?: Date) => d?.toISOString().slice(0, 10);
+      const rows = await cachedCampaignInsights(client.metaAdAccountId, client.metaAccessToken, day(dateRange?.from), day(dateRange?.to));
       metaSpendByName = new Map<string, number>();
       for (const r of rows) {
         const k = r.campaignName.toLowerCase().trim();

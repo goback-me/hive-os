@@ -2,6 +2,7 @@ import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { createClient, bulkUpdateClientStatus, archiveClient, unarchiveClient, deleteClientPermanently } from "@/lib/actions";
 import { requireCoach } from "@/lib/auth";
+import { getRevenueByMonth, revenueInMonth } from "@/lib/revenue";
 import AddClientModal from "./AddClientModal";
 import ClientsGrid from "./ClientsGrid";
 
@@ -37,14 +38,8 @@ export default async function ClientsPage({
     orderBy: { name: "asc" },
   });
 
-  const revenueByClient = await Promise.all(
-    clients.map((c) =>
-      prisma.revenueMonthly.aggregate({
-        _sum: { amount: true },
-        where: { clientId: c.id, month: monthStart },
-      })
-    )
-  );
+  const revenue = await getRevenueByMonth(clients.map((c) => c.id));
+  const revenueByClient = clients.map((c) => revenueInMonth(revenue, monthStart, c.id));
 
   return (
     <div className="p-10 max-w-[1500px] mx-auto">
@@ -87,7 +82,7 @@ export default async function ClientsPage({
           description: client.description,
           status: client.status,
           scope: client.scope,
-          revenue: Number(revenueByClient[i]._sum.amount ?? 0),
+          revenue: revenueByClient[i],
         }))}
         onBulkUpdateStatus={bulkUpdateClientStatus}
         onArchive={archiveClient}

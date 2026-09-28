@@ -5,6 +5,7 @@ import { requireUser } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import RevenueChart from "@/components/RevenueChart";
+import { getRevenueByMonth, revenueInMonth } from "@/lib/revenue";
 
 export const dynamic = "force-dynamic";
 
@@ -48,10 +49,8 @@ export default async function DashboardPage() {
     take: 12,
   });
   const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
-  const clientRevenue = await prisma.revenueMonthly.findMany({
-    where: { month: monthStart, clientId: { in: clients.map((c) => c.id) } },
-  });
-  const revenueByClientId = new Map(clientRevenue.map((r) => [r.clientId, Number(r.amount)]));
+  const clientRevenue = await getRevenueByMonth(clients.map((c) => c.id));
+  const revenueByClientId = new Map(clients.map((c) => [c.id, revenueInMonth(clientRevenue, monthStart, c.id)]));
 
   const lastMonth = trend.at(-2)?.revenue ?? 0;
   const delta = lastMonth > 0 ? Math.round(((kpis.revenueThisMonth - lastMonth) / lastMonth) * 100) : null;

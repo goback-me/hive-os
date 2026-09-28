@@ -18,8 +18,8 @@ import {
 import { requireClientAccess } from "@/lib/auth";
 import { checkAndGrantAwards } from "@/lib/awards";
 import { STAGE_LABELS, STAGE_STYLE } from "@/lib/lead-status";
-import { getClientFunnel } from "@/lib/lead-sync";
 import { getMetaAllCampaigns } from "@/lib/meta-ads";
+import { getRevenueByMonth, lifetimeRevenue as lifetimeRevenueOf, revenueInMonth } from "@/lib/revenue";
 import LeadsPanel from "@/components/LeadsPanel";
 import ClientTabsShell from "@/components/ClientTabsShell";
 import OnboardingChecklist from "@/components/OnboardingChecklist";
@@ -46,17 +46,17 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
   // slug) if they try to view anyone else's page. A coach can view any client.
   const viewer = await requireClientAccess(client.id);
 
-  // Re-checks revenue/module thresholds against award tiers on every visit —
-  // not just when a lesson gets toggled — so editing a tier's threshold or a
-  // payment landing doesn't require an unrelated action to unlock it.
-  await checkAndGrantAwards(client.id);
-
   const now = new Date();
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
 
+  // Everything below is independent, so it all runs at once — the page used
+  // to wait on each step (awards, then queries, then the funnel, then Meta)
+  // in turn. The Leads tab loads its own funnel client-side, so the page
+  // doesn't compute one here any more.
   const [
-    revenueThisMonth,
-    lifetimeRevenueAgg,
+    ,
+    revenue,
+    referralLink,
+    metaCampaigns,
     onboardingTemplates,
     onboardingProgress,
     modules,
@@ -68,8 +68,21 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
     progressNotes,
     clientSheet,
   ] = await Promise.all([
-    prisma.revenueMonthly.aggregate({ _sum: { amount: true }, where: { clientId: client.id, month: monthStart } }),
-    prisma.revenueMonthly.aggregate({ _sum: { amount: true }, where: { clientId: client.id } }),
+    // Re-checks revenue/module thresholds against award tiers on every visit —
+    // not just when a lesson gets toggled — so editing a tier's threshold or a
+    // payment landing doesn't require an unrelated action to unlock it.
+    checkAndGrantAwards(client.id),
+    getRevenueByMonth([client.id]),
+    // Lazily provisions a referral link for clients that existed before this
+    // feature — new clients already get one at creation (see createClient).
+    getOrCreateClientReferralLink(client.id, client.name),
+    // Once Meta's connected, its live campaign list (active + paused/ended,
+    // all-time spend) replaces the old manually-typed AdCampaign rows on the
+    // Ads tab. Falls back to the manual rows if the call fails (e.g. an
+    // expired token).
+    client.metaAdAccountId && client.metaAccessToken
+      ? getMetaAllCampaigns(client.metaAdAccountId, client.metaAccessToken).catch(() => null)
+      : Promise.resolve(null),
     prisma.onboardingStepTemplate.findMany({ orderBy: { order: "asc" } }),
     prisma.clientOnboardingStep.findMany({ where: { clientId: client.id } }),
     prisma.module.findMany({ orderBy: { order: "asc" }, include: { lessons: { orderBy: { order: "asc" } } } }),
@@ -87,24 +100,11 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
     prisma.clientSheet.findUnique({ where: { clientId: client.id } }),
   ]);
 
-  const campaignFunnel = await getClientFunnel(client.id);
-
-  // Lazily provisions a referral link for clients that existed before this
-  // feature — new clients already get one at creation (see createClient).
-  const referralLink = await getOrCreateClientReferralLink(client.id, client.name);
   const referrals = await prisma.referral.findMany({ where: { referralLinkId: referralLink.id }, orderBy: { createdAt: "desc" } });
 
-  // Once Meta's connected, its live campaign list (active + paused/ended,
-  // all-time spend) replaces the old manually-typed AdCampaign rows on the
-  // Ads tab — one source of truth instead of two numbers that never agree.
-  // Falls back to the manual rows if the call fails (e.g. an expired token).
-  const metaCampaigns =
-    client.metaAdAccountId && client.metaAccessToken
-      ? await getMetaAllCampaigns(client.metaAdAccountId, client.metaAccessToken).catch(() => null)
-      : null;
-
-  const revThisMonth = Number(revenueThisMonth._sum.amount ?? 0);
-  const lifetimeRevenue = Number(lifetimeRevenueAgg._sum.amount ?? 0);
+  // Manual/Stripe revenue where entered, otherwise won leads' values (lib/revenue.ts).
+  const revThisMonth = revenueInMonth(revenue, now, client.id);
+  const lifetimeRevenue = lifetimeRevenueOf(revenue, client.id);
   // Same source as the Ads tab: Meta's live all-time spend when connected,
   // otherwise the manually tracked campaigns.
   const totalSpend = metaCampaigns
@@ -297,7 +297,6 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
       clientSlug={client.slug}
       lastSyncedAt={clientSheet?.lastSyncedAt?.toISOString() ?? null}
       lastSyncError={clientSheet?.lastSyncError ?? null}
-      funnel={campaignFunnel}
       onSync={syncClientLeads}
       onUpdateStage={updateLeadStage}
       onUnlockStage={unlockLeadStatus}

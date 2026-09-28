@@ -1,5 +1,6 @@
 import { unstable_cache } from "next/cache";
 import { prisma } from "./prisma";
+import { getRevenueByMonth, revenueInMonth } from "./revenue";
 
 const UPCOMING_SESSION_WINDOW_DAYS = 3;
 const NO_CONTACT_DAYS = 14;
@@ -214,15 +215,12 @@ export async function getDashboardKpis() {
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
 
-  const [activeClients, totalClients, revenueAgg, sessionsThisMonth, spendAgg] = await Promise.all([
+  const [activeClients, totalClients, revenue, sessionsThisMonth, spendAgg] = await Promise.all([
     prisma.client.count({ where: { isActive: true, archivedAt: null } }),
     prisma.client.count({ where: { archivedAt: null } }),
-    // RevenueMonthly, same as the client pages — keeps this KPI equal to the
-    // sum of every client's "Revenue this month" card.
-    prisma.revenueMonthly.aggregate({
-      _sum: { amount: true },
-      where: { month: monthStart, client: { archivedAt: null } },
-    }),
+    // Same source as the client pages (lib/revenue.ts) — keeps this KPI equal
+    // to the sum of every client's "Revenue this month" card.
+    getRevenueByMonth(),
     prisma.session.count({
       where: { status: "COMPLETED", scheduledAt: { gte: monthStart } },
     }),
@@ -232,7 +230,7 @@ export async function getDashboardKpis() {
     }),
   ]);
 
-  const revenueThisMonth = Number(revenueAgg._sum.amount ?? 0);
+  const revenueThisMonth = revenueInMonth(revenue, monthStart);
   const totalAdSpend = Number(spendAgg._sum.spend ?? 0);
 
   return {

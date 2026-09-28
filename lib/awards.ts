@@ -1,19 +1,15 @@
 import { prisma } from "./prisma";
+import { getRevenueByMonth, lifetimeRevenue as lifetimeRevenueOf } from "./revenue";
 
 export async function checkAndGrantAwards(clientId: string) {
   const tiers = await prisma.awardTier.findMany({ orderBy: { order: "asc" } });
   const existing = await prisma.clientAward.findMany({ where: { clientId } });
   const earnedTierIds = new Set(existing.map((e) => e.awardTierId));
 
-  // Lifetime revenue the CLIENT's own business has generated (synced from
-  // Stripe or entered manually) — not what they've paid Hive in coaching
-  // fees. Awards celebrate the client's growth, so they must be keyed off
-  // the client's results, not their invoice history.
-  const revenueAgg = await prisma.revenueMonthly.aggregate({
-    _sum: { amount: true },
-    where: { clientId },
-  });
-  const lifetimeRevenue = Number(revenueAgg._sum.amount ?? 0);
+  // Lifetime revenue the CLIENT's own business has generated (manual/Stripe
+  // entries, or won leads from their sheet — lib/revenue.ts) — not what
+  // they've paid Hive. Awards celebrate the client's results.
+  const lifetimeRevenue = lifetimeRevenueOf(await getRevenueByMonth([clientId]), clientId);
 
   for (const tier of tiers) {
     if (earnedTierIds.has(tier.id)) continue;
