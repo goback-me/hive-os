@@ -2,10 +2,11 @@
 
 import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
+import { headers } from "next/headers";
 import { requireCoach, requireClientAccess } from "@/lib/auth";
 import { getClerkAdminClient } from "@/lib/clerk-admin";
 import { syncLeadsFromSheet, type SyncSummary } from "@/lib/lead-sync";
-import { stageTimestampPatch } from "@/lib/lead-status";
+import { LEAD_STATUSES, stageTimestampPatch, type LeadStatusValue } from "@/lib/lead-status";
 
 function slugify(name: string) {
   return name
@@ -16,12 +17,17 @@ function slugify(name: string) {
 }
 
 // ── Referral pipeline ──────────────────────────────────────────────────
+const REFERRAL_STAGES = ["INTRODUCED", "REACHED_OUT", "IN_CONVERSATION", "CALL_BOOKED", "CALL_DONE", "WON"];
+
 export async function updateReferralStage(id: string, stage: string) {
+  await requireCoach();
+  if (!REFERRAL_STAGES.includes(stage)) throw new Error("Invalid referral stage");
   await prisma.referral.update({ where: { id }, data: { stage: stage as never } });
   revalidatePath("/referrals");
 }
 
 export async function createReferral(formData: FormData) {
+  await requireCoach();
   const name = String(formData.get("name") || "").trim();
   const source = String(formData.get("source") || "").trim();
   const note = String(formData.get("note") || "").trim();
@@ -39,6 +45,7 @@ function randomCode(len = 8) {
 }
 
 export async function createReferralLink(formData: FormData) {
+  await requireCoach();
   const label = String(formData.get("label") || "").trim();
   if (!label) throw new Error("Label is required");
 
@@ -56,6 +63,7 @@ export async function createReferralLink(formData: FormData) {
 // before this feature) — @unique on ReferralLink.clientId means calling
 // this twice for the same client is safe and returns the existing one.
 export async function getOrCreateClientReferralLink(clientId: string, clientLabel: string) {
+  await requireClientAccess(clientId);
   const existing = await prisma.referralLink.findUnique({ where: { clientId } });
   if (existing) return existing;
 
@@ -66,22 +74,49 @@ export async function getOrCreateClientReferralLink(clientId: string, clientLabe
   return prisma.referralLink.create({ data: { clientId, label: `${clientLabel} referrals`, code } });
 }
 
+// ponytail: in-memory, per-process rate limit — resets on restart and isn't
+// shared across replicas. Move to Redis/Postgres if we ever run >1 instance.
+const REFERRAL_LIMIT = 5;
+const REFERRAL_WINDOW_MS = 10 * 60 * 1000;
+const referralHits = new Map<string, number[]>();
+
+function referralRateLimited(ip: string) {
+  const now = Date.now();
+  const hits = (referralHits.get(ip) ?? []).filter((t) => now - t < REFERRAL_WINDOW_MS);
+  if (hits.length >= REFERRAL_LIMIT) {
+    referralHits.set(ip, hits);
+    return true;
+  }
+  hits.push(now);
+  referralHits.set(ip, hits);
+  if (referralHits.size > 10_000) referralHits.clear(); // crude memory cap
+  return false;
+}
+
 // Public submission — used by the /refer/[code] page, no auth required
 export async function submitPublicReferral(code: string, formData: FormData) {
+  // Honeypot: real users never see or fill this field — bots do. Drop silently.
+  if (String(formData.get("website") || "").trim()) return;
+
+  const h = headers();
+  const ip = h.get("x-forwarded-for")?.split(",")[0].trim() || h.get("x-real-ip") || "unknown";
+  if (referralRateLimited(ip)) throw new Error("Too many submissions — try again in a few minutes");
+
   const name = String(formData.get("name") || "").trim();
   const source = String(formData.get("source") || "").trim();
   const note = String(formData.get("note") || "").trim();
   if (!name) throw new Error("Name is required");
 
   const link = await prisma.referralLink.findUnique({ where: { code } });
+  if (!link) throw new Error("Invalid referral link");
 
   await prisma.referral.create({
     data: {
-      name,
-      source: source || null,
-      note: note || null,
+      name: name.slice(0, 200),
+      source: source.slice(0, 200) || null,
+      note: note.slice(0, 2000) || null,
       stage: "INTRODUCED",
-      referralLinkId: link?.id ?? null,
+      referralLinkId: link.id,
     },
   });
 }
@@ -169,6 +204,7 @@ export async function syncClientLeads(clientId: string): Promise<{ summary: Sync
 // lib/lead-sync.ts) — statusManuallySetAt marks that this lead is now
 // coach/client-owned, not sheet-owned, for its status field only.
 export async function updateLeadStatus(leadId: string, status: string, value?: number) {
+  if (!LEAD_STATUSES.includes(status as LeadStatusValue)) throw new Error("Invalid lead status");
   const lead = await prisma.lead.findUnique({ where: { id: leadId } });
   if (!lead) throw new Error("Lead not found");
   const user = await requireClientAccess(lead.clientId);

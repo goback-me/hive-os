@@ -13,8 +13,11 @@ function requireEnv(name: string): string {
   return v;
 }
 
-export function getGoogleAuthUrl() {
+export const GOOGLE_OAUTH_STATE_COOKIE = "google_oauth_state";
+
+export function getGoogleAuthUrl(state: string) {
   const params = new URLSearchParams({
+    state,
     client_id: requireEnv("GOOGLE_CLIENT_ID"),
     redirect_uri: requireEnv("GOOGLE_REDIRECT_URI"),
     response_type: "code",

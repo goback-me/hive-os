@@ -28,6 +28,15 @@ export default async function PublicReferralPage({ params }: { params: { code: s
         </p>
 
         <form action={action} className="space-y-4">
+          {/* Honeypot — hidden from humans, bots fill it and get silently dropped. */}
+          <input
+            type="text"
+            name="website"
+            tabIndex={-1}
+            autoComplete="off"
+            aria-hidden="true"
+            style={{ position: "absolute", left: "-9999px", width: 1, height: 1, opacity: 0 }}
+          />
           <div>
             <label className="text-xs font-semibold block mb-1" style={{ color: "var(--text-secondary, #A1A1A6)" }}>
               Their name
