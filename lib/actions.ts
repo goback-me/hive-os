@@ -392,6 +392,15 @@ export async function createClient(_prev: CreateClientState, formData: FormData)
   }
 
   try {
+    // Double-submit guard: the same name created seconds ago is the same
+    // click twice (or a retry), not a second client — hand back the first.
+    // ponytail: time-window heuristic, not a true idempotency key; a real
+    // second client with an identical name just needs to wait 30s.
+    const justCreated = await prisma.client.findFirst({
+      where: { name: { equals: name, mode: "insensitive" }, joinedAt: { gte: new Date(Date.now() - 30_000) } },
+    });
+    if (justCreated) return { slug: justCreated.slug };
+
     let slug = slugify(name);
     const existingSlug = await prisma.client.findUnique({ where: { slug } });
     if (existingSlug) slug = `${slug}-${Date.now().toString(36)}`;
