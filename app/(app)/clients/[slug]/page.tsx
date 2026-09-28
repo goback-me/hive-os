@@ -19,7 +19,8 @@ import { requireClientAccess } from "@/lib/auth";
 import { checkAndGrantAwards } from "@/lib/awards";
 import { STAGE_LABELS, STAGE_STYLE } from "@/lib/lead-status";
 import { getMetaAllCampaigns } from "@/lib/meta-ads";
-import { getRevenueByMonth, lifetimeRevenue as lifetimeRevenueOf, revenueInMonth } from "@/lib/revenue";
+import { getClientStats } from "@/lib/client-stats";
+import DashboardStats from "@/components/DashboardStats";
 import LeadsPanel from "@/components/LeadsPanel";
 import ClientTabsShell from "@/components/ClientTabsShell";
 import OnboardingChecklist from "@/components/OnboardingChecklist";
@@ -54,7 +55,7 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
   // doesn't compute one here any more.
   const [
     ,
-    revenue,
+    stats,
     referralLink,
     metaCampaigns,
     onboardingTemplates,
@@ -72,7 +73,8 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
     // not just when a lesson gets toggled — so editing a tier's threshold or a
     // payment landing doesn't require an unrelated action to unlock it.
     checkAndGrantAwards(client.id),
-    getRevenueByMonth([client.id]),
+    // Dashboard cards' first paint (This month); the range picker refetches.
+    getClientStats(client.id, "this_month"),
     // Lazily provisions a referral link for clients that existed before this
     // feature — new clients already get one at creation (see createClient).
     getOrCreateClientReferralLink(client.id, client.name),
@@ -102,15 +104,7 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
 
   const referrals = await prisma.referral.findMany({ where: { referralLinkId: referralLink.id }, orderBy: { createdAt: "desc" } });
 
-  // Manual/Stripe revenue where entered, otherwise won leads' values (lib/revenue.ts).
-  const revThisMonth = revenueInMonth(revenue, now, client.id);
-  const lifetimeRevenue = lifetimeRevenueOf(revenue, client.id);
-  // Same source as the Ads tab: Meta's live all-time spend when connected,
-  // otherwise the manually tracked campaigns.
-  const totalSpend = metaCampaigns
-    ? metaCampaigns.reduce((s, c) => s + c.spend, 0)
-    : campaigns.reduce((s, c) => s + Number(c.spend), 0);
-  const profit = revThisMonth - totalSpend;
+  const lifetimeRevenue = stats.lifetimeRevenue;
 
   const earnedTierIds = new Set(clientAwards.map((a) => a.awardTierId));
   const nextTier = awardTiers.find((t) => !earnedTierIds.has(t.id) && t.thresholdRevenue);
@@ -118,12 +112,7 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
 
   const dashboardContent = (
     <div className="space-y-5">
-      <div className="grid grid-cols-4 gap-4">
-        <StatCard icon="payments" label="Revenue this month" value={`$${revThisMonth.toLocaleString()}`} />
-        <StatCard icon="ads_click" label="Ad spend" value={`$${totalSpend.toLocaleString("en-US", { maximumFractionDigits: 2 })}`} />
-        <StatCard icon="trending_up" label="Profit" value={`$${profit.toLocaleString("en-US", { maximumFractionDigits: 2 })}`} />
-        <StatCard icon="account_balance_wallet" label="Lifetime revenue" value={`$${lifetimeRevenue.toLocaleString()}`} />
-      </div>
+      <DashboardStats clientId={client.id} initial={stats} />
 
       <div className="grid grid-cols-3 gap-5">
         {/* Main column — the day-to-day, coaching-relevant activity */}
@@ -348,20 +337,6 @@ function DetailRow({ icon, label, value }: { icon: string; label: string; value:
         <dt className="text-xs" style={{ color: "var(--text-muted)" }}>{label}</dt>
         <dd className="font-medium truncate" style={{ color: "var(--text-primary)" }}>{value}</dd>
       </div>
-    </div>
-  );
-}
-
-function StatCard({ icon, label, value, big }: { icon: string; label: string; value: string; big?: boolean }) {
-  return (
-    <div className="card rounded-2xl p-5">
-      <div className="flex justify-between items-start mb-3">
-        <p className="text-sm" style={{ color: "var(--text-secondary)" }}>{label}</p>
-        <span className="icon-chip w-8 h-8" style={{ background: "var(--primary-tint)" }}>
-          <span className="material-symbols-outlined text-[16px]" style={{ color: "var(--primary)" }}>{icon}</span>
-        </span>
-      </div>
-      <p className={`font-heading font-bold ${big ? "text-3xl" : "text-2xl"}`} style={{ color: "var(--text-primary)" }}>{value}</p>
     </div>
   );
 }

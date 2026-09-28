@@ -11,9 +11,10 @@ import { prisma } from "./prisma";
 export const monthStartOf = (d: Date) => new Date(d.getFullYear(), d.getMonth(), 1);
 const key = (d: Date) => monthStartOf(d).getTime();
 
-export type RevenueByMonth = Map<string, Map<number, number>>; // clientId → month start (ms) → amount
+// One dated amount: a manual month (dated the 1st) or a won lead (dated won).
+export type RevenueEntry = { clientId: string; at: Date; amount: number };
 
-export async function getRevenueByMonth(clientIds?: string[]): Promise<RevenueByMonth> {
+export async function getRevenueEntries(clientIds?: string[]): Promise<RevenueEntry[]> {
   const clientFilter = clientIds ? { clientId: { in: clientIds } } : { client: { archivedAt: null } };
   const [manual, won] = await Promise.all([
     prisma.revenueMonthly.findMany({ where: clientFilter, select: { clientId: true, month: true, amount: true } }),
@@ -28,18 +29,38 @@ export async function getRevenueByMonth(clientIds?: string[]): Promise<RevenueBy
     }),
   ]);
 
-  const out: RevenueByMonth = new Map();
-  const add = (clientId: string, month: number, amount: number) => {
-    if (!out.has(clientId)) out.set(clientId, new Map());
-    const m = out.get(clientId)!;
-    m.set(month, (m.get(month) ?? 0) + amount);
-  };
-
   const manualMonths = new Set(manual.map((r) => `${r.clientId}:${key(r.month)}`));
-  for (const r of manual) add(r.clientId, key(r.month), Number(r.amount));
+  const entries: RevenueEntry[] = manual.map((r) => ({ clientId: r.clientId, at: r.month, amount: Number(r.amount) }));
   for (const l of won) {
-    const month = key(l.stageEvents[0]?.at ?? l.createdAt);
-    if (!manualMonths.has(`${l.clientId}:${month}`)) add(l.clientId, month, Number(l.value));
+    const at = l.stageEvents[0]?.at ?? l.createdAt;
+    if (!manualMonths.has(`${l.clientId}:${key(at)}`)) entries.push({ clientId: l.clientId, at, amount: Number(l.value) });
+  }
+  return entries;
+}
+
+// Sum for a date range (either bound optional). A manual month counts when
+// its 1st falls in the range.
+// ponytail: manual entries are monthly, so a sub-month range (e.g. last 7
+// days) includes or excludes a whole manual month; lead revenue is exact.
+export function revenueBetween(entries: RevenueEntry[], range: { from?: Date; to?: Date }, clientId?: string) {
+  let total = 0;
+  for (const e of entries) {
+    if (clientId && e.clientId !== clientId) continue;
+    if (range.from && e.at < range.from) continue;
+    if (range.to && e.at >= range.to) continue;
+    total += e.amount;
+  }
+  return total;
+}
+
+export type RevenueByMonth = Map<string, Map<number, number>>; // clientId → month start (ms) → amount
+
+export async function getRevenueByMonth(clientIds?: string[]): Promise<RevenueByMonth> {
+  const out: RevenueByMonth = new Map();
+  for (const e of await getRevenueEntries(clientIds)) {
+    if (!out.has(e.clientId)) out.set(e.clientId, new Map());
+    const m = out.get(e.clientId)!;
+    m.set(key(e.at), (m.get(key(e.at)) ?? 0) + e.amount);
   }
   return out;
 }

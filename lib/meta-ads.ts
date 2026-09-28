@@ -1,3 +1,4 @@
+import { unstable_cache } from "next/cache";
 import { decryptToken } from "@/lib/crypto";
 
 export type MetaInsights = {
@@ -139,4 +140,19 @@ export async function getMetaAllCampaigns(adAccountId: string, encryptedAccessTo
       clicks: insight?.clicks ?? 0,
     };
   });
+}
+
+// Meta's per-campaign spend is a slow network call and only has day
+// granularity — cached for 5 min, keyed by day, so reopening the funnel or
+// dashboard, or flipping between date ranges, doesn't wait on Meta again.
+const cachedInsights = unstable_cache(
+  (adAccountId: string, token: string, since?: string, until?: string) =>
+    getMetaCampaignInsights(adAccountId, token, { from: since ? new Date(since) : undefined, to: until ? new Date(until) : undefined }),
+  ["meta-campaign-insights"],
+  { revalidate: 300 }
+);
+
+export function getCachedCampaignInsights(adAccountId: string, encryptedAccessToken: string, dateRange?: { from?: Date; to?: Date }) {
+  const day = (d?: Date) => (d ? toMetaDate(d) : undefined);
+  return cachedInsights(adAccountId, encryptedAccessToken, day(dateRange?.from), day(dateRange?.to));
 }

@@ -1,0 +1,19 @@
+import { NextRequest, NextResponse } from "next/server";
+import { requireUser } from "@/lib/auth";
+import { getClientStats } from "@/lib/client-stats";
+import { DATE_RANGE_PRESETS, type DateRangePreset } from "@/lib/date-range";
+
+// Client Dashboard cards for a date range (components/DashboardStats.tsx).
+export async function GET(req: NextRequest) {
+  const clientId = req.nextUrl.searchParams.get("clientId");
+  if (!clientId) return NextResponse.json({ error: "clientId is required" }, { status: 400 });
+
+  const user = await requireUser();
+  if (user.role === "CLIENT" && clientId !== user.clientId) {
+    return NextResponse.json({ error: "Not authorized for this client" }, { status: 403 });
+  }
+
+  const param = req.nextUrl.searchParams.get("range");
+  const preset: DateRangePreset = DATE_RANGE_PRESETS.includes(param as DateRangePreset) ? (param as DateRangePreset) : "this_month";
+  return NextResponse.json(await getClientStats(clientId, preset));
+}

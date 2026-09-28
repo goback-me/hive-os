@@ -1,9 +1,8 @@
 import { createHash, randomUUID } from "crypto";
 import { Prisma } from "@prisma/client";
-import { unstable_cache } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { getValidAccessToken, getSheetValues } from "@/lib/google-sheets";
-import { getMetaCampaignInsights } from "@/lib/meta-ads";
+import { getCachedCampaignInsights } from "@/lib/meta-ads";
 import { classifyStatus } from "@/lib/status-classifier";
 import { NOTES_KEYWORDS, parseNotes, type ParsedNote } from "@/lib/notes-parser";
 import { classifyNotesWithAI } from "@/lib/notes-ai";
@@ -483,16 +482,6 @@ async function runSync(
   };
 }
 
-// Meta's per-campaign spend is a slow network call and only has day
-// granularity — cache it for 5 min, keyed by day, so reopening the funnel or
-// switching ranges back and forth is instant.
-const cachedCampaignInsights = unstable_cache(
-  (adAccountId: string, token: string, since?: string, until?: string) =>
-    getMetaCampaignInsights(adAccountId, token, { from: since ? new Date(since) : undefined, to: until ? new Date(until) : undefined }),
-  ["meta-campaign-insights"],
-  { revalidate: 300 }
-);
-
 export type ClientFunnel ={ overall: FunnelGroup; campaigns: FunnelGroup[] };
 
 function campaignKey(campaign: string | null) {
@@ -634,8 +623,7 @@ export async function getClientFunnel(clientId: string, dateRange?: { from?: Dat
   let metaSpendByName: Map<string, number> | null = null;
   if (client?.metaAdAccountId && client.metaAccessToken) {
     try {
-      const day = (d?: Date) => d?.toISOString().slice(0, 10);
-      const rows = await cachedCampaignInsights(client.metaAdAccountId, client.metaAccessToken, day(dateRange?.from), day(dateRange?.to));
+      const rows = await getCachedCampaignInsights(client.metaAdAccountId, client.metaAccessToken, dateRange);
       metaSpendByName = new Map<string, number>();
       for (const r of rows) {
         const k = r.campaignName.toLowerCase().trim();
