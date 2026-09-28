@@ -96,7 +96,7 @@ export async function getReportSummary(clientId?: string) {
 
   const [totalLeads, wonLeads, spendAgg] = await Promise.all([
     prisma.lead.count({ where: { ...where, deletedAt: null, createdAt: { gte: monthStart } } }),
-    prisma.lead.count({ where: { ...where, deletedAt: null, status: "WON", createdAt: { gte: monthStart } } }),
+    prisma.lead.count({ where: { ...where, deletedAt: null, stage: "WON", createdAt: { gte: monthStart } } }),
     prisma.adSpendDaily.aggregate({ _sum: { spend: true }, where: { ...where, date: { gte: monthStart } } }),
   ]);
 
@@ -109,9 +109,9 @@ export async function getReportSummary(clientId?: string) {
 
 // Lead funnel counts by stage for a client
 export async function getLeadFunnel(clientId: string) {
-  const statuses = ["NEW_LEAD", "CHASE_UP", "CLIENT_CONTACTED", "WON"] as const;
-  const counts = await Promise.all(statuses.map((status) => prisma.lead.count({ where: { clientId, deletedAt: null, status } })));
-  return statuses.map((status, i) => ({ status, count: counts[i] }));
+  const stages = ["NEW_LEAD", "CONTACTED", "CLIENT_CONTACTED", "CONSULT_BOOKED", "WON"] as const;
+  const counts = await Promise.all(stages.map((stage) => prisma.lead.count({ where: { clientId, deletedAt: null, stage } })));
+  return stages.map((stage, i) => ({ stage, count: counts[i] }));
 }
 
 // Main dashboard revenue trend (page.tsx uses this one). Reads RevenueMonthly —

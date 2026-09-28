@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/auth";
-import { LEAD_STATUSES } from "@/lib/lead-status";
+import { LEAD_STAGES, type LeadStageValue } from "@/lib/lead-status";
 import { DATE_RANGE_PRESETS, resolveDateRange, type DateRangePreset } from "@/lib/date-range";
 
 // Paginated — the Leads tab can have 1000+ rows once a real sheet is synced,
@@ -18,8 +18,8 @@ export async function GET(req: NextRequest) {
 
   const page = Math.max(1, Number(req.nextUrl.searchParams.get("page") ?? "1") || 1);
   const pageSize = Math.min(100, Math.max(1, Number(req.nextUrl.searchParams.get("pageSize") ?? "25") || 25));
-  const statusParam = req.nextUrl.searchParams.get("status");
-  const status = statusParam && LEAD_STATUSES.includes(statusParam as never) ? statusParam : undefined;
+  const stageParam = req.nextUrl.searchParams.get("stage");
+  const stage = stageParam && LEAD_STAGES.includes(stageParam as LeadStageValue) ? (stageParam as LeadStageValue) : undefined;
 
   // "Unattributed" is the display label for a blank/missing campaign (see
   // displayCampaignName in LeadsPanel) — matched here as null-or-empty since
@@ -34,7 +34,7 @@ export async function GET(req: NextRequest) {
 
   // The literal, unmapped status text from the sheet (see sheetStatus on the
   // Lead model) — filterable on its own, independent of whether the client
-  // has configured a statusMapping into the fixed 6-stage pipeline yet.
+  // has configured a statusMapping into the funnel yet.
   const sheetStatusParam = req.nextUrl.searchParams.get("sheetStatus");
   const sheetStatusWhere =
     sheetStatusParam === "__none__"
@@ -50,11 +50,11 @@ export async function GET(req: NextRequest) {
   const { from, to } = resolveDateRange(preset);
   const createdAt = from || to ? { ...(from ? { gte: from } : {}), ...(to ? { lt: to } : {}) } : undefined;
 
-  const where = { clientId, deletedAt: null, ...(status ? { status: status as never } : {}), ...(createdAt ? { createdAt } : {}), ...campaignWhere, ...sheetStatusWhere };
-  // Same filter minus `status`/`sheetStatus` — powers each tab's own count
+  const where = { clientId, deletedAt: null, ...(stage ? { stage } : {}), ...(createdAt ? { createdAt } : {}), ...campaignWhere, ...sheetStatusWhere };
+  // Same filter minus `stage`/`sheetStatus` — powers each tab's own count
   // regardless of which tab is currently selected.
   const whereForStatusCounts = { clientId, deletedAt: null, ...(createdAt ? { createdAt } : {}), ...campaignWhere, ...sheetStatusWhere };
-  const whereForSheetStatusCounts = { clientId, deletedAt: null, ...(createdAt ? { createdAt } : {}), ...campaignWhere, ...(status ? { status: status as never } : {}) };
+  const whereForSheetStatusCounts = { clientId, deletedAt: null, ...(createdAt ? { createdAt } : {}), ...campaignWhere, ...(stage ? { stage } : {}) };
 
   const [total, leads, statusGroups, sheetStatusGroups] = await Promise.all([
     prisma.lead.count({ where }),
@@ -64,12 +64,12 @@ export async function GET(req: NextRequest) {
       skip: (page - 1) * pageSize,
       take: pageSize,
     }),
-    prisma.lead.groupBy({ by: ["status"], where: whereForStatusCounts, _count: true }),
+    prisma.lead.groupBy({ by: ["stage"], where: whereForStatusCounts, _count: true }),
     prisma.lead.groupBy({ by: ["sheetStatus"], where: whereForSheetStatusCounts, _count: true }),
   ]);
 
-  const statusCounts = Object.fromEntries(LEAD_STATUSES.map((s) => [s, 0])) as Record<string, number>;
-  for (const g of statusGroups) statusCounts[g.status] = g._count;
+  const stageCounts = Object.fromEntries(LEAD_STAGES.map((s) => [s, 0])) as Record<string, number>;
+  for (const g of statusGroups) stageCounts[g.stage] = g._count;
 
   // Keyed by the literal sheet value; a null sheetStatus (no status column
   // configured, or that row's cell was blank) is bucketed under "__none__".
@@ -80,7 +80,7 @@ export async function GET(req: NextRequest) {
     total,
     page,
     pageSize,
-    statusCounts,
+    stageCounts,
     sheetStatusCounts,
     leads: leads.map((l) => ({
       id: l.id,
@@ -89,7 +89,12 @@ export async function GET(req: NextRequest) {
       email: l.email,
       source: l.source,
       campaign: l.campaign,
-      status: l.status,
+      stage: l.stage,
+      dqReason: l.dqReason,
+      dqPhase: l.dqPhase,
+      lostReason: l.lostReason,
+      callAttempts: l.callAttempts,
+      stageLocked: !!l.statusManuallySetAt,
       sheetStatus: l.sheetStatus,
       value: l.value ? Number(l.value) : null,
       raw: l.raw,

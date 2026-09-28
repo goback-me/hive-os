@@ -10,13 +10,13 @@ import {
   createLesson,
   createProgressNote,
   syncClientLeads,
-  updateLeadStatus,
+  updateLeadStage,
   addLeadNote,
   getOrCreateClientReferralLink,
 } from "@/lib/actions";
 import { requireClientAccess } from "@/lib/auth";
 import { checkAndGrantAwards } from "@/lib/awards";
-import { LEAD_STATUS_LABELS, LEAD_STATUS_STYLE } from "@/lib/lead-status";
+import { STAGE_LABELS, STAGE_STYLE } from "@/lib/lead-status";
 import { getClientCampaignFunnel } from "@/lib/lead-sync";
 import { getMetaAllCampaigns } from "@/lib/meta-ads";
 import LeadsPanel from "@/components/LeadsPanel";
@@ -137,7 +137,7 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
             ) : (
               <div className="space-y-1">
                 {recentLeads.map((l) => {
-                  const st = LEAD_STATUS_STYLE[l.status];
+                  const st = STAGE_STYLE[l.stage];
                   return (
                     <div key={l.id} className="flex items-center justify-between py-2" style={{ borderBottom: "1px solid var(--border)" }}>
                       <div className="flex items-center gap-3">
@@ -159,7 +159,7 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
                         </div>
                       </div>
                       <span className="text-[10px] font-bold px-2 py-1 rounded-full" style={{ background: st.bg, color: st.color }}>
-                        {LEAD_STATUS_LABELS[l.status]}
+                        {STAGE_LABELS[l.stage]}
                       </span>
                     </div>
                   );
@@ -298,7 +298,7 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
       lastSyncError={clientSheet?.lastSyncError ?? null}
       funnel={campaignFunnel}
       onSync={syncClientLeads}
-      onUpdateStatus={updateLeadStatus}
+      onUpdateStage={updateLeadStage}
       onAddNote={addLeadNote}
     />
   );

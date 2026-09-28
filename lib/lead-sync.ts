@@ -1,9 +1,20 @@
+import { randomUUID } from "crypto";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getValidAccessToken, getSheetValues } from "@/lib/google-sheets";
 import { getMetaCampaignInsights } from "@/lib/meta-ads";
-import type { LeadStatusValue } from "@/lib/lead-status";
-import { LEAD_STATUSES, moreConclusive, stageTimestampPatch } from "@/lib/lead-status";
+import {
+  DEFAULT_RESULT_MAPPING,
+  DEFAULT_STATUS_MAPPING,
+  STAGE_RANK,
+  combineTargets,
+  parseTarget,
+  planStageEvents,
+  type DqPhaseValue,
+  type LeadStageValue,
+  type PlannedEvent,
+  type StageTarget,
+} from "@/lib/lead-status";
 import {
   DATE_OPT_IN_KEYWORDS,
   findColumn,
@@ -28,6 +39,16 @@ function normalizeName(v: string | null | undefined) {
 export function normalizeMappingKeys<T>(mapping: unknown): Record<string, T> {
   if (!mapping || typeof mapping !== "object") return {};
   return Object.fromEntries(Object.entries(mapping as Record<string, T>).map(([k, v]) => [normalizeStatus(k), v]));
+}
+
+// Stored mapping JSON → {normalized value: target}; invalid entries dropped.
+export function parseMapping(mapping: unknown): Record<string, StageTarget> {
+  const out: Record<string, StageTarget> = {};
+  for (const [k, v] of Object.entries(normalizeMappingKeys<unknown>(mapping))) {
+    const t = parseTarget(v);
+    if (t) out[k] = t;
+  }
+  return out;
 }
 
 export type UnmappedStatuses = { status: Record<string, number>; result: Record<string, number> };
@@ -100,10 +121,33 @@ function leadChanged(existing: ExistingLead, data: Record<string, unknown>) {
 type PendingUpdate = {
   lead: ExistingLead;
   data: Record<string, unknown>;
-  statusFrom?: LeadStatusValue;
-  statusTo?: LeadStatusValue;
+  stageFrom?: LeadStageValue;
+  stageTo?: LeadStageValue;
   value: number | null;
+  events: PlannedEvent[];
 };
+
+type StageEventRow = { id: string; leadId: string; stage: LeadStageValue; at: Date; source: "SYNC" | "IMPORT" | "INFERRED" };
+
+// Planned events → rows. A brand-new lead's stages are IMPORT (we don't know
+// when they happened); a change seen on an existing lead is SYNC.
+function eventRows(leadId: string, planned: PlannedEvent[], isNew: boolean, at: Date): StageEventRow[] {
+  return planned.map((e) => ({
+    id: randomUUID(),
+    leadId,
+    stage: e.stage,
+    at,
+    source: e.kind === "inferred" ? "INFERRED" : isNew ? "IMPORT" : "SYNC",
+  }));
+}
+
+function reasonFields(target: StageTarget & { stage: LeadStageValue }, dqPhase: DqPhaseValue | null) {
+  return {
+    dqReason: target.stage === "DISQUALIFIED" ? target.dqReason ?? "UNKNOWN" : null,
+    dqPhase: target.stage === "DISQUALIFIED" ? dqPhase : null,
+    lostReason: target.stage === "LOST" ? target.lostReason ?? "UNKNOWN" : null,
+  };
+}
 
 async function runSync(
   clientId: string,
@@ -112,9 +156,10 @@ async function runSync(
   const accessToken = await getValidAccessToken();
   const { headers, rows, cells } = await getSheetValues(accessToken, sheet.spreadsheetId, sheet.sheetName, { unformatted: true });
 
-  const statusMapping = normalizeMappingKeys<LeadStatusValue>(sheet.statusMapping);
+  // Client's own mapping first, then the built-in defaults.
+  const statusMapping = { ...DEFAULT_STATUS_MAPPING, ...parseMapping(sheet.statusMapping) };
   const statusColIdx = sheet.statusColumn ? headers.indexOf(sheet.statusColumn) : -1;
-  const resultStatusMapping = normalizeMappingKeys<LeadStatusValue>(sheet.resultStatusMapping);
+  const resultStatusMapping = { ...DEFAULT_RESULT_MAPPING, ...parseMapping(sheet.resultStatusMapping) };
   const resultStatusColIdx = sheet.resultStatusColumn ? headers.indexOf(sheet.resultStatusColumn) : -1;
 
   const nameIdx = findColumn(headers, ["name", "full name"], ["campaign", "ad", "adset", "ad set", "business"]);
@@ -126,6 +171,7 @@ async function runSync(
   const revenueIdx = findColumn(headers, ["revenue generated", "revenue"]);
   const quoteIdx = findColumn(headers, ["quote value", "quote"]);
   const dateOptInIdx = findColumn(headers, DATE_OPT_IN_KEYWORDS);
+  const attemptsIdx = findColumn(headers, ["attempt"]);
   // Other date-ish columns only go into `raw` for display — turn serials
   // back into dd/mm/yyyy so they don't show as "46000.5".
   const dateLikeIdx = new Set(headers.map((h, i) => (normalizeHeader(h).split(" ").includes("date") ? i : -1)).filter((i) => i !== -1));
@@ -134,7 +180,16 @@ async function runSync(
   // Every lead this client has ever had from a sheet, soft-deleted included —
   // a row that reappears restores its old lead (notes + history intact)
   // instead of creating a duplicate.
-  const existingLeads = await prisma.lead.findMany({ where: { clientId, externalKey: { not: null } } });
+  const [existingLeads, existingEvents] = await Promise.all([
+    prisma.lead.findMany({ where: { clientId, externalKey: { not: null } } }),
+    prisma.leadStageEvent.findMany({ where: { lead: { clientId } }, select: { leadId: true, stage: true } }),
+  ]);
+  const eventStagesByLead = new Map<string, Set<LeadStageValue>>();
+  for (const e of existingEvents) {
+    if (!eventStagesByLead.has(e.leadId)) eventStagesByLead.set(e.leadId, new Set());
+    eventStagesByLead.get(e.leadId)!.add(e.stage);
+  }
+
   const byEmail = new Map<string, ExistingLead>();
   const byPhone = new Map<string, ExistingLead>();
   const byName = new Map<string, ExistingLead>();
@@ -156,7 +211,7 @@ async function runSync(
   // same name when neither has a matching email/phone. Fine at our volumes.
   const claimed = new Map<string, number>(); // leadId -> row index that claimed it
   const pending = new Map<string, PendingUpdate>();
-  const creates = new Map<string, Record<string, unknown>>(); // externalKey -> data (dedupes identical rows)
+  const creates = new Map<string, { data: Record<string, unknown>; events: PlannedEvent[] }>(); // externalKey -> new lead
   let identifiedRows = 0;
 
   rows.forEach((row, rowIdx) => {
@@ -166,7 +221,7 @@ async function runSync(
     const phone = /^4\d{8}$/.test(phoneText) ? "0" + phoneText : phoneText;
     const email = emailIdx !== -1 ? row[emailIdx].trim() : "";
     // Every row needs SOME identity to match across syncs — skip fully blank rows.
-    if (!(email || phone || name)?.trim()) return;
+    if (!(email || phone || name)) return;
     identifiedRows++;
     const externalKey = normalizeIdentity(`${email}|${phone}|${name}`);
 
@@ -176,29 +231,27 @@ async function runSync(
     const free = (l: ExistingLead | undefined) => (l && (!claimed.has(l.id) || claimed.get(l.id) === rowIdx) ? l : undefined);
     const existing = (e && byEmail.get(e)) || free(p ? byPhone.get(p) : undefined) || free(n ? byName.get(n) : undefined) || undefined;
 
+    // Hive/outreach column + Prospect/result column → one stage (the
+    // higher-ranked wins, see combineTargets). Values nothing maps to are
+    // reported back to the Leads tab instead of silently becoming New Lead.
     const rawStatus = statusColIdx !== -1 ? row[statusColIdx] ?? "" : "";
     const statusKey = normalizeStatus(rawStatus);
-    const statusHit = LEAD_STATUSES.includes(statusMapping[statusKey] as LeadStatusValue);
-    if (statusKey && !statusHit) unmapped.status[statusKey] = (unmapped.status[statusKey] ?? 0) + 1;
-    const baseMappedStatus: LeadStatusValue = statusHit ? statusMapping[statusKey] : "NEW_LEAD";
+    const statusTarget = statusColIdx !== -1 ? statusMapping[statusKey] : undefined;
+    if (statusKey && !statusTarget) unmapped.status[statusKey] = (unmapped.status[statusKey] ?? 0) + 1;
 
-    // The result column (e.g. "Prospect Status": did it actually close?)
-    // overrides the outreach column above whenever it resolves to something
-    // more conclusive — a client typing "DISQUALIFIED" or "SOLD" here beats
-    // whatever the team's internal outreach-stage column still says.
     const rawResultStatus = resultStatusColIdx !== -1 ? row[resultStatusColIdx] ?? "" : "";
     const resultKey = normalizeStatus(rawResultStatus);
-    const resultHit = LEAD_STATUSES.includes(resultStatusMapping[resultKey] as LeadStatusValue);
-    if (resultKey && !resultHit) unmapped.result[resultKey] = (unmapped.result[resultKey] ?? 0) + 1;
-    const resultMappedStatus = resultHit ? resultStatusMapping[resultKey] : null;
-    const mappedStatus = resultMappedStatus ? moreConclusive(baseMappedStatus, resultMappedStatus) : baseMappedStatus;
+    const resultTarget = resultStatusColIdx !== -1 ? resultStatusMapping[resultKey] : undefined;
+    if (resultKey && !resultTarget) unmapped.result[resultKey] = (unmapped.result[resultKey] ?? 0) + 1;
 
-    // Revenue is only ever counted once the result column resolves the deal
-    // to Won — a bare "quoted" value (not yet accepted) never counts, even
-    // though the Quote Value cell already has a dollar figure in it.
-    // Quote Value takes priority over Revenue Generated when both are set.
+    const { final, prior } = combineTargets(statusTarget, resultTarget);
+
+    // Revenue is only ever counted once the deal resolves to Won — a bare
+    // "quoted" value (not yet accepted) never counts, even though the Quote
+    // Value cell already has a dollar figure in it. Quote Value takes
+    // priority over Revenue Generated when both are set.
     const value =
-      mappedStatus === "WON"
+      final.stage === "WON"
         ? parseMoney(quoteIdx !== -1 ? row[quoteIdx] : undefined) ?? parseMoney(revenueIdx !== -1 ? row[revenueIdx] : undefined)
         : null;
 
@@ -208,10 +261,11 @@ async function runSync(
     // month-attribution, the activity timeline, and time-to-convert. Only
     // set when the sheet actually has a parseable value — never invent one.
     const dateOptIn = dateOptInIdx !== -1 ? parseSheetDate(cells[rowIdx][dateOptInIdx]) : null;
+    const attempts = attemptsIdx !== -1 ? parseInt(row[attemptsIdx], 10) : NaN;
 
     // Everything else — every header not otherwise mapped — goes into `raw`
     // for display only, keyed by its actual header text.
-    const mappedIdx = new Set([nameIdx, phoneIdx, emailIdx, sourceIdx, campaignIdx, adsetIdx, revenueIdx, quoteIdx, statusColIdx, resultStatusColIdx, dateOptInIdx]);
+    const mappedIdx = new Set([nameIdx, phoneIdx, emailIdx, sourceIdx, campaignIdx, adsetIdx, revenueIdx, quoteIdx, statusColIdx, resultStatusColIdx, dateOptInIdx, attemptsIdx]);
     const raw: Record<string, string> = {};
     headers.forEach((h, i) => {
       if (mappedIdx.has(i) || !h) return;
@@ -228,6 +282,7 @@ async function runSync(
       source: sourceIdx !== -1 ? row[sourceIdx] || null : null,
       campaign: campaignIdx !== -1 ? row[campaignIdx] || null : null,
       adset: adsetIdx !== -1 ? row[adsetIdx] || null : null,
+      callAttempts: Number.isFinite(attempts) ? attempts : null,
       ...(dateOptIn ? { createdAt: dateOptIn } : {}),
       // Prefer the result column's value when present (it's the more
       // decisive signal — "SOLD" tells you more than "LIVE TRANSFER") —
@@ -240,20 +295,31 @@ async function runSync(
 
     if (existing) {
       claimed.set(existing.id, rowIdx);
-      // Respect a manual override — only apply the sheet's status (and the
-      // stage timestamps that come with it) if nobody has manually touched
-      // this lead's status yet.
-      const statusPatch = existing.statusManuallySetAt ? {} : { status: mappedStatus, ...stageTimestampPatch(existing, mappedStatus) };
-      const statusChanging = !existing.statusManuallySetAt && mappedStatus !== existing.status;
+      // Respect a manual override — the sheet's stage (and its events) only
+      // apply while nobody has manually set this lead's stage.
+      if (existing.statusManuallySetAt) {
+        pending.set(existing.id, { lead: existing, data: baseData, value, events: [] });
+        return;
+      }
+      const plan = planStageEvents({
+        oldStage: existing.stage,
+        newStage: final.stage,
+        prior,
+        eventStages: eventStagesByLead.get(existing.id) ?? new Set(),
+      });
       pending.set(existing.id, {
         lead: existing,
-        data: { ...baseData, ...statusPatch },
-        ...(statusChanging ? { statusFrom: existing.status, statusTo: mappedStatus } : {}),
+        data: { ...baseData, stage: final.stage, ...reasonFields(final, plan.dqPhase) },
+        ...(final.stage !== existing.stage ? { stageFrom: existing.stage, stageTo: final.stage } : {}),
         value,
+        events: plan.events,
       });
     } else {
-      const emptyStages = { chaseUpAt: null, contactedAt: null, closedAt: null };
-      creates.set(externalKey, { clientId, status: mappedStatus, ...stageTimestampPatch(emptyStages, mappedStatus), ...baseData });
+      const plan = planStageEvents({ oldStage: null, newStage: final.stage, prior, eventStages: new Set() });
+      creates.set(externalKey, {
+        data: { id: randomUUID(), clientId, stage: final.stage, ...reasonFields(final, plan.dqPhase), ...baseData },
+        events: plan.events,
+      });
     }
   });
 
@@ -271,25 +337,33 @@ async function runSync(
     throw new Error(`Sync aborted: would remove ${removing} of ${activeLeads.length} leads — check the sheet/tab`);
   }
 
-  const updates = Array.from(pending.values()).filter((u) => leadChanged(u.lead, u.data));
+  const updates = Array.from(pending.values()).filter((u) => u.events.length > 0 || leadChanged(u.lead, u.data));
   const restored = updates.filter((u) => u.lead.deletedAt).length;
   const now = new Date();
+
+  const newLeads = Array.from(creates.values());
+  const events: StageEventRow[] = [
+    ...newLeads.flatMap((c) => eventRows(c.data.id as string, c.events, true, now)),
+    ...updates.flatMap((u) => eventRows(u.lead.id, u.events, false, now)),
+  ];
 
   // All-or-nothing: a sync that fails halfway leaves the previous state intact.
   await prisma.$transaction(
     async (tx) => {
-      for (const batch of chunks(Array.from(creates.values()))) {
-        await tx.lead.createMany({ data: batch.map((d) => ({ ...d, lastSyncedAt: now })) as Prisma.LeadCreateManyInput[] });
+      for (const batch of chunks(newLeads)) {
+        await tx.lead.createMany({ data: batch.map((c) => ({ ...c.data, lastSyncedAt: now })) as Prisma.LeadCreateManyInput[] });
       }
       for (const batch of chunks(updates)) {
         await Promise.all(batch.map((u) => tx.lead.update({ where: { id: u.lead.id }, data: { ...u.data, lastSyncedAt: now } })));
-        // A re-sync moving an existing lead to a new stage IS a real status
-        // transition worth a history entry — only the very first status a
-        // lead gets on creation is routine ingestion, not a "change".
+        // A re-sync moving an existing lead to a new stage IS a real change
+        // worth an audit entry — a new lead's first stage is just ingestion.
         const activity = batch
-          .filter((u) => u.statusTo)
-          .map((u) => ({ leadId: u.lead.id, fromStatus: u.statusFrom!, toStatus: u.statusTo!, value: u.value, changedBy: "Sheet sync" }));
+          .filter((u) => u.stageTo)
+          .map((u) => ({ leadId: u.lead.id, fromStatus: u.stageFrom!, toStatus: u.stageTo!, value: u.value, changedBy: "Sheet sync" }));
         if (activity.length) await tx.leadActivity.createMany({ data: activity });
+      }
+      for (const batch of chunks(events)) {
+        await tx.leadStageEvent.createMany({ data: batch });
       }
       for (const batch of chunks(staleIds)) {
         await tx.lead.updateMany({ where: { id: { in: batch } }, data: { deletedAt: now } });
@@ -307,7 +381,7 @@ async function runSync(
 export type CampaignFunnelRow = {
   campaign: string;
   total: number;
-  contacted: number; // CLIENT_CONTACTED or later (WON/LOST/DISQUALIFIED all imply contact happened)
+  contacted: number; // CONTACTED or later on the funnel (WON/LOST/DISQUALIFIED included)
   won: number;
   lost: number;
   disqualified: number;
@@ -316,7 +390,7 @@ export type CampaignFunnelRow = {
   winRate: number | null; // % of CLOSED leads that were won (null when nothing's closed yet)
   lossRate: number | null;
   disqualifiedRate: number | null;
-  avgDaysToConvert: number | null; // avg calendar days from createdAt to closedAt, WON leads only
+  avgDaysToConvert: number | null; // avg calendar days from createdAt to the first WON event
   spend: number | null;
   spendSource: "meta" | "manual" | null;
 };
@@ -332,14 +406,15 @@ async function getCampaignAvgDaysToConvert(
   clientId: string,
   dateRange?: { from?: Date; to?: Date }
 ): Promise<Map<string, number>> {
-  const fromClause = dateRange?.from ? Prisma.sql`AND "createdAt" >= ${dateRange.from}` : Prisma.empty;
-  const toClause = dateRange?.to ? Prisma.sql`AND "createdAt" < ${dateRange.to}` : Prisma.empty;
+  const fromClause = dateRange?.from ? Prisma.sql`AND l."createdAt" >= ${dateRange.from}` : Prisma.empty;
+  const toClause = dateRange?.to ? Prisma.sql`AND l."createdAt" < ${dateRange.to}` : Prisma.empty;
 
   const rows = await prisma.$queryRaw<{ campaign: string; avg_days: number | null }[]>`
-    SELECT COALESCE(NULLIF(TRIM(campaign), ''), 'Unattributed') AS campaign,
-           AVG(EXTRACT(EPOCH FROM ("closedAt" - "createdAt")) / 86400) AS avg_days
-    FROM "Lead"
-    WHERE "clientId" = ${clientId} AND "deletedAt" IS NULL AND status = 'WON' AND "closedAt" IS NOT NULL
+    SELECT COALESCE(NULLIF(TRIM(l.campaign), ''), 'Unattributed') AS campaign,
+           AVG(EXTRACT(EPOCH FROM (w.at - l."createdAt")) / 86400) AS avg_days
+    FROM "Lead" l
+    JOIN (SELECT "leadId", MIN(at) AS at FROM "LeadStageEvent" WHERE stage = 'WON' GROUP BY "leadId") w ON w."leadId" = l.id
+    WHERE l."clientId" = ${clientId} AND l."deletedAt" IS NULL AND l.stage = 'WON'
       ${fromClause}
       ${toClause}
     GROUP BY 1
@@ -367,7 +442,7 @@ export async function getClientCampaignFunnel(
       : undefined;
 
   const [grouped, client, adCampaigns, avgDaysByCampaign] = await Promise.all([
-    prisma.lead.groupBy({ by: ["campaign", "status"], where: { clientId, deletedAt: null, ...(createdAt ? { createdAt } : {}) }, _count: true }),
+    prisma.lead.groupBy({ by: ["campaign", "stage"], where: { clientId, deletedAt: null, ...(createdAt ? { createdAt } : {}) }, _count: true }),
     prisma.client.findUnique({ where: { id: clientId } }),
     prisma.adCampaign.findMany({ where: { clientId } }),
     getCampaignAvgDaysToConvert(clientId, dateRange),
@@ -391,10 +466,10 @@ export async function getClientCampaignFunnel(
     if (!byCampaign.has(key)) byCampaign.set(key, { campaign: key, total: 0, contacted: 0, won: 0, lost: 0, disqualified: 0 });
     const row = byCampaign.get(key)!;
     row.total += g._count;
-    if (g.status !== "NEW_LEAD" && g.status !== "CHASE_UP") row.contacted += g._count;
-    if (g.status === "WON") row.won += g._count;
-    if (g.status === "LOST") row.lost += g._count;
-    if (g.status === "DISQUALIFIED") row.disqualified += g._count;
+    if (STAGE_RANK[g.stage] >= STAGE_RANK.CONTACTED) row.contacted += g._count;
+    if (g.stage === "WON") row.won += g._count;
+    if (g.stage === "LOST") row.lost += g._count;
+    if (g.stage === "DISQUALIFIED") row.disqualified += g._count;
   }
 
   return Array.from(byCampaign.values()).map((row) => {
@@ -419,47 +494,50 @@ export async function getClientCampaignFunnel(
 export type LeadTimeSeriesPoint = {
   date: string;
   received: number;
-  chaseUp: number;
   contacted: number;
+  handover: number;
+  consult: number;
   won: number;
   lostOrDisqualified: number;
 };
 
-type StageField = "createdAt" | "chaseUpAt" | "contactedAt" | "closedAt";
+type Granularity = "day" | "week" | "month";
 
-async function bucketCounts(
-  clientId: string,
-  field: StageField,
-  granularity: "day" | "week" | "month",
-  from: Date,
-  to: Date,
-  statuses?: LeadStatusValue[]
-): Promise<{ bucket: Date; count: number }[]> {
-  const col = Prisma.raw(`"${field}"`);
-  const statusClause = statuses?.length ? Prisma.sql`AND status::text IN (${Prisma.join(statuses)})` : Prisma.empty;
-
+// Leads that reached any of `stages` per bucket, by the event's own time —
+// so the chart shows when each stage actually happened, not when the lead
+// arrived. INFERRED events are excluded (their timestamp is a guess).
+async function eventBucketCounts(clientId: string, stages: LeadStageValue[], granularity: Granularity, from: Date, to: Date) {
   const rows = await prisma.$queryRaw<{ bucket: Date; count: bigint }[]>`
-    SELECT date_trunc(${granularity}, ${col}) AS bucket, COUNT(*)::bigint AS count
-    FROM "Lead"
-    WHERE "clientId" = ${clientId}
-      AND "deletedAt" IS NULL
-      AND ${col} IS NOT NULL
-      AND ${col} >= ${from}
-      AND ${col} < ${to}
-      ${statusClause}
+    SELECT date_trunc(${granularity}, e.at) AS bucket, COUNT(DISTINCT e."leadId")::bigint AS count
+    FROM "LeadStageEvent" e
+    JOIN "Lead" l ON l.id = e."leadId"
+    WHERE l."clientId" = ${clientId}
+      AND l."deletedAt" IS NULL
+      AND e.source <> 'INFERRED'
+      AND e.stage::text IN (${Prisma.join(stages)})
+      AND e.at >= ${from}
+      AND e.at < ${to}
     GROUP BY bucket
     ORDER BY bucket
   `;
   return rows.map((r) => ({ bucket: r.bucket, count: Number(r.count) }));
 }
 
-// Each series buckets by ITS OWN relevant date field (received by createdAt,
-// contacted by contactedAt, etc.) — not all by createdAt — so the chart
-// shows when each stage actually happened, not just when the lead first
-// arrived. Granularity adapts to the window so a "Maximum" view doesn't try
-// to plot years of daily points; "Maximum" itself has no lower bound, so it
-// looks back 2 years for the chart specifically (the funnel/lead list still
-// show truly all-time totals — this cap is chart-readability only).
+async function receivedBucketCounts(clientId: string, granularity: Granularity, from: Date, to: Date) {
+  const rows = await prisma.$queryRaw<{ bucket: Date; count: bigint }[]>`
+    SELECT date_trunc(${granularity}, "createdAt") AS bucket, COUNT(*)::bigint AS count
+    FROM "Lead"
+    WHERE "clientId" = ${clientId} AND "deletedAt" IS NULL AND "createdAt" >= ${from} AND "createdAt" < ${to}
+    GROUP BY bucket
+    ORDER BY bucket
+  `;
+  return rows.map((r) => ({ bucket: r.bucket, count: Number(r.count) }));
+}
+
+// Granularity adapts to the window so a "Maximum" view doesn't try to plot
+// years of daily points; "Maximum" itself has no lower bound, so it looks
+// back 2 years for the chart specifically (the funnel/lead list still show
+// truly all-time totals — this cap is chart-readability only).
 export async function getClientLeadTimeSeries(
   clientId: string,
   dateRange?: { from?: Date; to?: Date }
@@ -469,25 +547,27 @@ export async function getClientLeadTimeSeries(
   const from = dateRange?.from ?? twoYearsBack;
 
   const spanDays = (to.getTime() - from.getTime()) / 86400000;
-  const granularity: "day" | "week" | "month" = spanDays <= 31 ? "day" : spanDays <= 180 ? "week" : "month";
+  const granularity: Granularity = spanDays <= 31 ? "day" : spanDays <= 180 ? "week" : "month";
 
-  const [received, chaseUp, contacted, won, lost] = await Promise.all([
-    bucketCounts(clientId, "createdAt", granularity, from, to),
-    bucketCounts(clientId, "chaseUpAt", granularity, from, to),
-    bucketCounts(clientId, "contactedAt", granularity, from, to),
-    bucketCounts(clientId, "closedAt", granularity, from, to, ["WON"]),
-    bucketCounts(clientId, "closedAt", granularity, from, to, ["LOST", "DISQUALIFIED"]),
+  const [received, contacted, handover, consult, won, lost] = await Promise.all([
+    receivedBucketCounts(clientId, granularity, from, to),
+    eventBucketCounts(clientId, ["CONTACTED"], granularity, from, to),
+    eventBucketCounts(clientId, ["HANDOVER_ATTEMPTED", "HANDOVER_LIVE", "HANDOVER_TEXT"], granularity, from, to),
+    eventBucketCounts(clientId, ["CONSULT_BOOKED"], granularity, from, to),
+    eventBucketCounts(clientId, ["WON"], granularity, from, to),
+    eventBucketCounts(clientId, ["LOST", "DISQUALIFIED"], granularity, from, to),
   ]);
 
   const byDate = new Map<string, LeadTimeSeriesPoint>();
   function ensure(d: Date) {
     const k = d.toISOString();
-    if (!byDate.has(k)) byDate.set(k, { date: k, received: 0, chaseUp: 0, contacted: 0, won: 0, lostOrDisqualified: 0 });
+    if (!byDate.has(k)) byDate.set(k, { date: k, received: 0, contacted: 0, handover: 0, consult: 0, won: 0, lostOrDisqualified: 0 });
     return byDate.get(k)!;
   }
   for (const r of received) ensure(r.bucket).received = r.count;
-  for (const r of chaseUp) ensure(r.bucket).chaseUp = r.count;
   for (const r of contacted) ensure(r.bucket).contacted = r.count;
+  for (const r of handover) ensure(r.bucket).handover = r.count;
+  for (const r of consult) ensure(r.bucket).consult = r.count;
   for (const r of won) ensure(r.bucket).won = r.count;
   for (const r of lost) ensure(r.bucket).lostOrDisqualified = r.count;
 

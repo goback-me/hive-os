@@ -5,16 +5,18 @@ import { useState } from "react";
 export type TimeSeriesPoint = {
   date: string;
   received: number;
-  chaseUp: number;
   contacted: number;
+  handover: number;
+  consult: number;
   won: number;
   lostOrDisqualified: number;
 };
 
 const SERIES = [
   { key: "received", label: "Received", color: "var(--text-muted)" },
-  { key: "chaseUp", label: "Chase Up", color: "var(--text-secondary)" },
-  { key: "contacted", label: "Client Contacted", color: "var(--text-primary)" },
+  { key: "contacted", label: "Contacted", color: "var(--text-primary)" },
+  { key: "handover", label: "Handover", color: "var(--tag-indigo-fg)" },
+  { key: "consult", label: "Consult booked", color: "var(--tag-teal-fg)" },
   { key: "won", label: "Won", color: "var(--primary)" },
   { key: "lostOrDisqualified", label: "Lost / DQ", color: "var(--danger)" },
 ] as const;

@@ -2,7 +2,20 @@
 
 import { useEffect, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
-import { LEAD_STATUSES, LEAD_STATUS_LABELS, LEAD_STATUS_STYLE, type LeadStatusValue } from "@/lib/lead-status";
+import {
+  DQ_PHASE_LABELS,
+  DQ_REASON_LABELS,
+  LEAD_STAGES,
+  LOST_REASON_LABELS,
+  STAGE_LABELS,
+  STAGE_STYLE,
+  TARGET_OPTIONS,
+  encodeTarget,
+  type DqPhaseValue,
+  type DqReasonValue,
+  type LeadStageValue,
+  type LostReasonValue,
+} from "@/lib/lead-status";
 import type { SyncSummary, CampaignFunnelRow } from "@/lib/lead-sync";
 import type { DateRangePreset } from "@/lib/date-range";
 import DateRangeDropdown from "@/components/DateRangeDropdown";
@@ -15,7 +28,12 @@ type LeadRow = {
   email: string | null;
   source: string | null;
   campaign: string | null;
-  status: LeadStatusValue;
+  stage: LeadStageValue;
+  dqReason: DqReasonValue | null;
+  dqPhase: DqPhaseValue | null;
+  lostReason: LostReasonValue | null;
+  callAttempts: number | null;
+  stageLocked: boolean;
   sheetStatus: string | null;
   value: number | null;
   raw: Record<string, string> | null;
@@ -25,12 +43,14 @@ type LeadRow = {
 
 type ActivityRow = {
   id: string;
-  fromStatus: LeadStatusValue;
-  toStatus: LeadStatusValue;
+  fromStatus: LeadStageValue;
+  toStatus: LeadStageValue;
   value: number | null;
   changedBy: string;
   changedAt: string;
 };
+
+type StageEventRow = { id: string; stage: LeadStageValue; source: "IMPORT" | "INFERRED"; at: string };
 
 type NoteRow = {
   id: string;
@@ -42,7 +62,18 @@ type NoteRow = {
 type JourneyEntry =
   | { kind: "created"; at: string }
   | { kind: "note"; id: string; at: string; note: string; by: string }
-  | { kind: "status"; id: string; at: string; from: LeadStatusValue; to: LeadStatusValue; value: number | null; by: string };
+  | { kind: "status"; id: string; at: string; from: LeadStageValue; to: LeadStageValue; value: number | null; by: string }
+  | { kind: "event"; id: string; at: string; stage: LeadStageValue; source: "IMPORT" | "INFERRED" };
+
+// "Disqualified · Budget (after handover)" etc.
+function stageText(lead: Pick<LeadRow, "stage" | "dqReason" | "dqPhase" | "lostReason">) {
+  if (lead.stage === "DISQUALIFIED") {
+    const reason = DQ_REASON_LABELS[lead.dqReason ?? "UNKNOWN"];
+    return `DQ · ${reason}${lead.dqPhase ? ` (${DQ_PHASE_LABELS[lead.dqPhase].toLowerCase()})` : ""}`;
+  }
+  if (lead.stage === "LOST") return `Lost · ${LOST_REASON_LABELS[lead.lostReason ?? "UNKNOWN"]}`;
+  return STAGE_LABELS[lead.stage];
+}
 
 const PAGE_SIZE = 25;
 
@@ -81,7 +112,7 @@ export default function LeadsPanel({
   lastSyncError,
   funnel: initialFunnel,
   onSync,
-  onUpdateStatus,
+  onUpdateStage,
   onAddNote,
 }: {
   clientId: string;
@@ -92,7 +123,7 @@ export default function LeadsPanel({
   lastSyncError: string | null;
   funnel: CampaignFunnelRow[];
   onSync: (clientId: string) => Promise<{ summary: SyncSummary } | { error: string }>;
-  onUpdateStatus: (leadId: string, status: string, value?: number) => Promise<void>;
+  onUpdateStage: (leadId: string, target: string, value?: number) => Promise<void>;
   onAddNote: (leadId: string, formData: FormData) => Promise<void>;
 }) {
   const isCoach = viewerRole === "COACH";
@@ -107,11 +138,11 @@ export default function LeadsPanel({
 
   const [leads, setLeads] = useState<LeadRow[]>([]);
   const [total, setTotal] = useState(0);
-  const [statusCounts, setStatusCounts] = useState<Record<LeadStatusValue, number>>(
-    () => Object.fromEntries(LEAD_STATUSES.map((s) => [s, 0])) as Record<LeadStatusValue, number>
+  const [stageCounts, setStageCounts] = useState<Record<LeadStageValue, number>>(
+    () => Object.fromEntries(LEAD_STAGES.map((s) => [s, 0])) as Record<LeadStageValue, number>
   );
   const [page, setPage] = useState(1);
-  const [statusFilter, setStatusFilter] = useState<LeadStatusValue | "">("");
+  const [statusFilter, setStatusFilter] = useState<LeadStageValue | "">("");
   const [sheetStatusFilter, setSheetStatusFilter] = useState<string | null>(null);
   const [sheetStatusCounts, setSheetStatusCounts] = useState<Record<string, number>>({});
   const [campaignFilter, setCampaignFilter] = useState<string | null>(null);
@@ -124,18 +155,19 @@ export default function LeadsPanel({
 
   const [detailLeadId, setDetailLeadId] = useState<string | null>(null);
   const [activityByLead, setActivityByLead] = useState<Record<string, ActivityRow[]>>({});
+  const [eventsByLead, setEventsByLead] = useState<Record<string, StageEventRow[]>>({});
   const [loadingActivity, setLoadingActivity] = useState<string | null>(null);
   const [notesByLead, setNotesByLead] = useState<Record<string, NoteRow[]>>({});
   const [loadingNotes, setLoadingNotes] = useState<string | null>(null);
   const [noteDraft, setNoteDraft] = useState("");
   const [savingNote, setSavingNote] = useState(false);
 
-  const [pendingChange, setPendingChange] = useState<{ lead: LeadRow; status: LeadStatusValue } | null>(null);
+  const [pendingChange, setPendingChange] = useState<{ lead: LeadRow; target: string } | null>(null);
   const [pendingValue, setPendingValue] = useState("");
   const [, startTransition] = useTransition();
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  const allStatusCount = useMemo(() => Object.values(statusCounts).reduce((a, b) => a + b, 0), [statusCounts]);
+  const allStatusCount = useMemo(() => Object.values(stageCounts).reduce((a, b) => a + b, 0), [stageCounts]);
   // Every distinct raw value the sheet's status column has for this client —
   // "__none__" (no status column configured, or a blank cell) sorts last.
   const sheetStatusValues = useMemo(
@@ -149,9 +181,10 @@ export default function LeadsPanel({
     if (!detailLead) return [];
     const notes: JourneyEntry[] = (notesByLead[detailLead.id] ?? []).map((n) => ({ kind: "note", id: n.id, at: n.createdAt, note: n.note, by: n.createdBy }));
     const statuses: JourneyEntry[] = (activityByLead[detailLead.id] ?? []).map((a) => ({ kind: "status", id: a.id, at: a.changedAt, from: a.fromStatus, to: a.toStatus, value: a.value, by: a.changedBy }));
+    const events: JourneyEntry[] = (eventsByLead[detailLead.id] ?? []).map((e) => ({ kind: "event", id: e.id, at: e.at, stage: e.stage, source: e.source }));
     const created: JourneyEntry[] = [{ kind: "created", at: detailLead.createdAt }];
-    return [...notes, ...statuses, ...created].sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
-  }, [detailLead, notesByLead, activityByLead]);
+    return [...notes, ...statuses, ...events, ...created].sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
+  }, [detailLead, notesByLead, activityByLead, eventsByLead]);
 
   // Client-level rollup of every campaign's numbers — avg time-to-convert is
   // weighted by each campaign's won count so one small campaign with a single
@@ -178,7 +211,7 @@ export default function LeadsPanel({
     if (!hasSheet) return;
     setLoadingLeads(true);
     const params = new URLSearchParams({ clientId, page: String(page), pageSize: String(PAGE_SIZE), range: dateRange });
-    if (statusFilter) params.set("status", statusFilter);
+    if (statusFilter) params.set("stage", statusFilter);
     if (campaignFilter) params.set("campaign", campaignFilter);
     if (sheetStatusFilter) params.set("sheetStatus", sheetStatusFilter);
     fetch(`/api/leads?${params.toString()}`)
@@ -187,7 +220,7 @@ export default function LeadsPanel({
         if (data.error) throw new Error(data.error);
         setLeads(data.leads);
         setTotal(data.total);
-        if (data.statusCounts) setStatusCounts(data.statusCounts);
+        if (data.stageCounts) setStageCounts(data.stageCounts);
         if (data.sheetStatusCounts) setSheetStatusCounts(data.sheetStatusCounts);
       })
       .catch((e) => setError(e.message))
@@ -267,19 +300,26 @@ export default function LeadsPanel({
       .finally(() => setSyncing(false));
   }
 
-  function requestStatusChange(lead: LeadRow, status: LeadStatusValue) {
+  function requestStatusChange(lead: LeadRow, target: string) {
     setPendingValue(lead.value ? String(lead.value) : "");
-    setPendingChange({ lead, status });
+    setPendingChange({ lead, target });
   }
 
   function confirmStatusChange(skipValue: boolean) {
     if (!pendingChange) return;
-    const { lead, status } = pendingChange;
+    const { lead, target } = pendingChange;
     const value = !skipValue && pendingValue.trim() ? Number(pendingValue) : undefined;
-    setLeads((prev) => prev.map((l) => (l.id === lead.id ? { ...l, status } : l))); // optimistic
+    const [stage, reason] = target.split(":") as [LeadStageValue, string | undefined];
+    const optimistic = {
+      stage,
+      dqReason: stage === "DISQUALIFIED" ? ((reason ?? "UNKNOWN") as DqReasonValue) : null,
+      lostReason: stage === "LOST" ? ((reason ?? "UNKNOWN") as LostReasonValue) : null,
+      stageLocked: true,
+    };
+    setLeads((prev) => prev.map((l) => (l.id === lead.id ? { ...l, ...optimistic } : l)));
     setPendingChange(null);
     startTransition(() => {
-      onUpdateStatus(lead.id, status, Number.isFinite(value) ? value : undefined)
+      onUpdateStage(lead.id, target, Number.isFinite(value) ? value : undefined)
         .then(() => refreshAfterChange(lead.id))
         .catch((e) => setError(e.message));
     });
@@ -299,6 +339,7 @@ export default function LeadsPanel({
       .then((data) => {
         if (data.error) throw new Error(data.error);
         setActivityByLead((prev) => ({ ...prev, [leadId]: data.activity }));
+        setEventsByLead((prev) => ({ ...prev, [leadId]: data.events ?? [] }));
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoadingActivity(null));
@@ -517,13 +558,13 @@ export default function LeadsPanel({
             <p className="text-[10px] font-bold tracking-wide mb-1.5" style={{ color: "var(--text-muted)" }}>PIPELINE STATUS</p>
             <div className="flex items-center gap-1.5 flex-wrap">
               <TabButton active={statusFilter === ""} label="All" count={allStatusCount} onClick={() => { setStatusFilter(""); setPage(1); }} />
-              {LEAD_STATUSES.map((s) => (
+              {LEAD_STAGES.filter((s) => (stageCounts[s] ?? 0) > 0 || statusFilter === s).map((s) => (
                 <TabButton
                   key={s}
                   active={statusFilter === s}
-                  label={LEAD_STATUS_LABELS[s]}
-                  count={statusCounts[s] ?? 0}
-                  color={LEAD_STATUS_STYLE[s].color}
+                  label={STAGE_LABELS[s]}
+                  count={stageCounts[s] ?? 0}
+                  color={STAGE_STYLE[s].color}
                   onClick={() => { setStatusFilter(s); setPage(1); }}
                 />
               ))}
@@ -548,7 +589,7 @@ export default function LeadsPanel({
                 </thead>
                 <tbody>
                   {leads.map((lead) => {
-                    const st = LEAD_STATUS_STYLE[lead.status];
+                    const st = STAGE_STYLE[lead.stage];
                     return (
                       <tr key={lead.id} style={{ borderBottom: "1px solid var(--border)" }} className="cursor-pointer" onClick={() => openDetail(lead.id)}>
                         <td className="py-2 pr-4 font-medium whitespace-nowrap" style={{ color: "var(--text-primary)" }}>{lead.name || "—"}</td>
@@ -559,18 +600,19 @@ export default function LeadsPanel({
                         <td className="py-2 pr-4" onClick={(e) => e.stopPropagation()}>
                           {isCoach ? (
                             <select
-                              value={lead.status}
-                              onChange={(e) => requestStatusChange(lead, e.target.value as LeadStatusValue)}
+                              value={encodeTarget({ stage: lead.stage, dqReason: lead.dqReason ?? undefined, lostReason: lead.lostReason ?? undefined })}
+                              onChange={(e) => requestStatusChange(lead, e.target.value)}
                               className="px-2 py-1 rounded-full text-xs font-bold outline-none border-0"
                               style={{ background: st.bg, color: st.color }}
+                              title={lead.stageLocked ? "Set manually — the sheet no longer changes this lead's stage" : undefined}
                             >
-                              {LEAD_STATUSES.map((s) => (
-                                <option key={s} value={s}>{LEAD_STATUS_LABELS[s]}</option>
+                              {TARGET_OPTIONS.map((o) => (
+                                <option key={o.value} value={o.value}>{o.label}</option>
                               ))}
                             </select>
                           ) : (
-                            <span className="px-2 py-1 rounded-full text-xs font-bold" style={{ background: st.bg, color: st.color }}>
-                              {LEAD_STATUS_LABELS[lead.status]}
+                            <span className="px-2 py-1 rounded-full text-xs font-bold whitespace-nowrap" style={{ background: st.bg, color: st.color }}>
+                              {stageText(lead)}
                             </span>
                           )}
                         </td>
@@ -627,13 +669,13 @@ export default function LeadsPanel({
           <div className="card rounded-2xl w-full max-w-xl max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div
               className="p-6 rounded-t-2xl"
-              style={{ background: `linear-gradient(160deg, ${LEAD_STATUS_STYLE[detailLead.status].bg} 0%, var(--surface-card) 130%)` }}
+              style={{ background: `linear-gradient(160deg, ${STAGE_STYLE[detailLead.stage].bg} 0%, var(--surface-card) 130%)` }}
             >
               <div className="flex items-start justify-between gap-3 mb-4">
                 <div className="flex items-center gap-3 min-w-0">
                   <div
                     className="w-12 h-12 rounded-full flex items-center justify-center font-heading font-bold text-lg shrink-0"
-                    style={{ background: LEAD_STATUS_STYLE[detailLead.status].color, color: "#fff" }}
+                    style={{ background: STAGE_STYLE[detailLead.stage].color, color: "#fff" }}
                   >
                     {(detailLead.name || "?").trim().split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase()}
                   </div>
@@ -648,9 +690,18 @@ export default function LeadsPanel({
               </div>
 
               <div className="flex items-center gap-2 flex-wrap">
-                <span className="px-2.5 py-1 rounded-full text-xs font-bold" style={{ background: LEAD_STATUS_STYLE[detailLead.status].color, color: "#fff" }}>
-                  {LEAD_STATUS_LABELS[detailLead.status]}
+                <span className="px-2.5 py-1 rounded-full text-xs font-bold" style={{ background: STAGE_STYLE[detailLead.stage].color, color: "#fff" }}>
+                  {stageText(detailLead)}
                 </span>
+                {detailLead.stageLocked && (
+                  <span className="px-2.5 py-1 rounded-full text-xs font-bold flex items-center gap-1" style={{ background: "var(--surface-card)", color: "var(--text-secondary)" }}>
+                    <span className="material-symbols-outlined text-[12px]">lock</span>
+                    Set manually
+                  </span>
+                )}
+                {detailLead.callAttempts != null && (
+                  <span className="text-xs" style={{ color: "var(--text-secondary)" }}>{detailLead.callAttempts} call attempt{detailLead.callAttempts === 1 ? "" : "s"}</span>
+                )}
                 <SheetStatusBadge value={detailLead.sheetStatus} />
                 {detailLead.value != null && (
                   <span className="px-2.5 py-1 rounded-full text-xs font-bold" style={{ background: "var(--surface-card)", color: "var(--text-primary)" }}>
@@ -714,14 +765,29 @@ export default function LeadsPanel({
                             </div>
                           );
                         }
-                        const toStyle = LEAD_STATUS_STYLE[entry.to];
+                        if (entry.kind === "event") {
+                          const evStyle = STAGE_STYLE[entry.stage];
+                          return (
+                            <div key={entry.id} className="relative pl-5">
+                              <span className="absolute left-0 top-1 w-2.5 h-2.5 rounded-full" style={{ background: "var(--border)", border: `1px solid ${evStyle.color}` }} />
+                              <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+                                <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold" style={{ background: evStyle.bg, color: evStyle.color }}>
+                                  {STAGE_LABELS[entry.stage]}
+                                </span>{" "}
+                                {entry.source === "IMPORT" ? "already reached when first synced" : "inferred (skipped over)"}
+                                <span> · {when}</span>
+                              </p>
+                            </div>
+                          );
+                        }
+                        const toStyle = STAGE_STYLE[entry.to];
                         return (
                           <div key={entry.id} className="relative pl-5">
                             <span className="absolute left-0 top-1 w-2.5 h-2.5 rounded-full" style={{ background: toStyle.color }} />
                             <p className="text-xs" style={{ color: "var(--text-secondary)" }}>
                               <strong style={{ color: "var(--text-primary)" }}>{entry.by}</strong> moved this lead to{" "}
                               <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold" style={{ background: toStyle.bg, color: toStyle.color }}>
-                                {LEAD_STATUS_LABELS[entry.to]}
+                                {STAGE_LABELS[entry.to]}
                               </span>
                               {entry.value != null && <span> · ${entry.value.toLocaleString()}</span>}
                               <span style={{ color: "var(--text-muted)" }}> · {when}</span>
@@ -760,7 +826,7 @@ export default function LeadsPanel({
         >
           <div className="card rounded-2xl p-5 w-full max-w-sm" onClick={(e) => e.stopPropagation()}>
             <h3 className="font-heading font-bold text-lg mb-1" style={{ color: "var(--text-primary)" }}>
-              Move to {LEAD_STATUS_LABELS[pendingChange.status]}
+              Move to {TARGET_OPTIONS.find((o) => o.value === pendingChange.target)?.label ?? pendingChange.target}
             </h3>
             <p className="text-sm mb-4" style={{ color: "var(--text-secondary)" }}>
               {pendingChange.lead.name || "This lead"} — add a deal value or profit figure (optional).

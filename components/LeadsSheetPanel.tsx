@@ -2,7 +2,15 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { LEAD_STATUSES, LEAD_STATUS_LABELS, type LeadStatusValue } from "@/lib/lead-status";
+import { TARGET_OPTIONS, parseTarget, targetLabel } from "@/lib/lead-status";
+
+// Mapping values are dropdown-encoded: "WON", "DISQUALIFIED:BUDGET",
+// "__none__" (no outcome). "" = no entry → the built-in default applies.
+type Mapping = Record<string, string>;
+const defaultLabel = (defaults: Mapping, v: string, fallback: string) => {
+  const t = parseTarget(defaults[v]);
+  return t ? `Default: ${targetLabel(t)}` : fallback;
+};
 import { normalizeStatus } from "@/lib/sheet-parse";
 
 type DriveFile = { id: string; name: string; modifiedTime: string };
@@ -42,12 +50,14 @@ export default function LeadsSheetPanel({
   const [allColumns, setAllColumns] = useState<string[]>([]);
   const [visibleColumns, setVisibleColumns] = useState<string[]>([]);
   const [statusColumn, setStatusColumn] = useState<string | null>(null);
-  const [statusMapping, setStatusMapping] = useState<Record<string, LeadStatusValue>>({});
+  const [statusMapping, setStatusMapping] = useState<Mapping>({});
+  const [defaultStatusMapping, setDefaultStatusMapping] = useState<Mapping>({});
   // The "did it close" column (e.g. "Prospect Status") — separate from the
-  // outreach-stage column above (e.g. "HIVE STATUS"). Whichever resolves to
-  // a more conclusive status wins — see moreConclusive() in lib/lead-status.ts.
+  // outreach-stage column above (e.g. "HIVE STATUS"). Whichever is further
+  // along the funnel wins — see combineTargets() in lib/lead-status.ts.
   const [resultStatusColumn, setResultStatusColumn] = useState<string | null>(null);
-  const [resultStatusMapping, setResultStatusMapping] = useState<Record<string, LeadStatusValue>>({});
+  const [resultStatusMapping, setResultStatusMapping] = useState<Mapping>({});
+  const [defaultResultStatusMapping, setDefaultResultStatusMapping] = useState<Mapping>({});
   const [showColumnPicker, setShowColumnPicker] = useState(false);
   // From the last sync: normalized status values nothing maps to yet.
   const [unmapped, setUnmapped] = useState<{ status: Record<string, number>; result: Record<string, number> }>({ status: {}, result: {} });
@@ -76,8 +86,10 @@ export default function LeadsSheetPanel({
         setVisibleColumns(data.visibleColumns);
         setStatusColumn(data.statusColumn);
         setStatusMapping(data.statusMapping ?? {});
+        setDefaultStatusMapping(data.defaultStatusMapping ?? {});
         setResultStatusColumn(data.resultStatusColumn);
         setResultStatusMapping(data.resultStatusMapping ?? {});
+        setDefaultResultStatusMapping(data.defaultResultStatusMapping ?? {});
         setUnmapped(data.unmappedStatuses ?? { status: {}, result: {} });
         setHasOptInDateColumn(data.hasOptInDateColumn ?? true);
         setCurrentSpreadsheetName(data.spreadsheetName);
@@ -230,7 +242,7 @@ export default function LeadsSheetPanel({
       .catch((e) => setError(e.message));
   }
 
-  function setMappingFor(sheetValue: string, ourStatus: LeadStatusValue | "") {
+  function setMappingFor(sheetValue: string, ourStatus: string) {
     setStatusMapping((prev) => {
       const next = { ...prev };
       if (ourStatus) next[sheetValue] = ourStatus;
@@ -239,7 +251,7 @@ export default function LeadsSheetPanel({
     });
   }
 
-  function setResultMappingFor(sheetValue: string, ourStatus: LeadStatusValue | "") {
+  function setResultMappingFor(sheetValue: string, ourStatus: string) {
     setResultStatusMapping((prev) => {
       const next = { ...prev };
       if (ourStatus) next[sheetValue] = ourStatus;
@@ -249,7 +261,7 @@ export default function LeadsSheetPanel({
   }
 
   // One-click fix from the "unmapped values" warning: save + re-sync straight away.
-  function quickMap(column: "status" | "result", value: string, ourStatus: LeadStatusValue) {
+  function quickMap(column: "status" | "result", value: string, ourStatus: string) {
     const next = {
       statusMapping: column === "status" ? { ...statusMapping, [value]: ourStatus } : statusMapping,
       resultStatusMapping: column === "result" ? { ...resultStatusMapping, [value]: ourStatus } : resultStatusMapping,
@@ -444,7 +456,7 @@ export default function LeadsSheetPanel({
           {statusColumn && statusValues.length > 0 && (
             <>
               <p className="text-xs mb-2" style={{ color: "var(--text-secondary)" }}>
-                Map "{statusColumn}" values to the Leads tab's 6 statuses (unmapped values default to New Lead)
+                Map "{statusColumn}" values to funnel stages. Leave on "Default" to use the built-in mapping; values with no default count as New Lead and show a warning.
               </p>
               <div className="space-y-2 mb-3">
                 {statusValues.map((v) => (
@@ -453,14 +465,15 @@ export default function LeadsSheetPanel({
                     <span className="material-symbols-outlined text-[14px]" style={{ color: "var(--text-muted)" }}>arrow_forward</span>
                     <select
                       value={statusMapping[v] ?? ""}
-                      onChange={(e) => setMappingFor(v, e.target.value as LeadStatusValue | "")}
+                      onChange={(e) => setMappingFor(v, e.target.value)}
                       className="px-2 py-1.5 rounded-lg text-xs font-bold outline-none"
                       style={selectStyle}
                     >
-                      <option value="">New Lead (default)</option>
-                      {LEAD_STATUSES.map((s) => (
-                        <option key={s} value={s}>
-                          {LEAD_STATUS_LABELS[s]}
+                      <option value="">{defaultLabel(defaultStatusMapping, v, "Unmapped (New Lead)")}</option>
+                      <option value="__none__">No outcome (ignore)</option>
+                      {TARGET_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
                         </option>
                       ))}
                     </select>
@@ -490,9 +503,9 @@ export default function LeadsSheetPanel({
           {resultStatusColumn && resultStatusValues.length > 0 && (
             <>
               <p className="text-xs mb-2" style={{ color: "var(--text-secondary)" }}>
-                Map "{resultStatusColumn}" values — these OVERRIDE the outreach status above whenever they're more
-                conclusive (e.g. "SOLD" beats "Live Transfer"). Revenue (Quote Value/Revenue Generated) is only
-                counted on a lead once it's mapped to Won here.
+                Map "{resultStatusColumn}" values — whichever of the two columns is further along the funnel wins
+                (a tie between two final outcomes goes to this column). Revenue (Quote Value/Revenue Generated) is
+                only counted once a lead is Won.
               </p>
               <div className="space-y-2 mb-3">
                 {resultStatusValues.map((v) => (
@@ -501,14 +514,15 @@ export default function LeadsSheetPanel({
                     <span className="material-symbols-outlined text-[14px]" style={{ color: "var(--text-muted)" }}>arrow_forward</span>
                     <select
                       value={resultStatusMapping[v] ?? ""}
-                      onChange={(e) => setResultMappingFor(v, e.target.value as LeadStatusValue | "")}
+                      onChange={(e) => setResultMappingFor(v, e.target.value)}
                       className="px-2 py-1.5 rounded-lg text-xs font-bold outline-none"
                       style={selectStyle}
                     >
-                      <option value="">Not conclusive (ignored)</option>
-                      {LEAD_STATUSES.map((s) => (
-                        <option key={s} value={s}>
-                          {LEAD_STATUS_LABELS[s]}
+                      <option value="">{defaultLabel(defaultResultStatusMapping, v, "Unmapped (ignored)")}</option>
+                      <option value="__none__">No outcome (ignore)</option>
+                      {TARGET_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
                         </option>
                       ))}
                     </select>
@@ -559,7 +573,7 @@ export default function LeadsSheetPanel({
         <div className="mb-3 p-3 rounded-lg" style={{ background: "var(--danger-tint)" }}>
           <p className="text-xs font-bold mb-2 flex items-center gap-1.5" style={{ color: "var(--danger)" }}>
             <span className="material-symbols-outlined text-[16px]">warning</span>
-            {unmappedEntries.length} status value{unmappedEntries.length === 1 ? "" : "s"} not mapped — those leads are counted as New Lead
+            {unmappedEntries.length} status value{unmappedEntries.length === 1 ? "" : "s"} not mapped — those rows fall back to New Lead / no outcome
           </p>
           <div className="space-y-1.5">
             {unmappedEntries.map((u) => (
@@ -569,14 +583,15 @@ export default function LeadsSheetPanel({
                 </span>
                 <select
                   value=""
-                  onChange={(e) => e.target.value && quickMap(u.column, u.value, e.target.value as LeadStatusValue)}
+                  onChange={(e) => e.target.value && quickMap(u.column, u.value, e.target.value)}
                   className="px-2 py-1.5 rounded-lg text-xs font-bold outline-none"
                   style={selectStyle}
                 >
                   <option value="">Map to…</option>
-                  {LEAD_STATUSES.map((s) => (
-                    <option key={s} value={s}>
-                      {LEAD_STATUS_LABELS[s]}
+                  <option value="__none__">No outcome (ignore)</option>
+                  {TARGET_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
                     </option>
                   ))}
                 </select>

@@ -16,8 +16,14 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Not authorized for this client" }, { status: 403 });
   }
 
-  const activity = await prisma.leadActivity.findMany({ where: { leadId }, orderBy: { changedAt: "desc" } });
+  // Real changes (who/value) come from the audit log; imported and inferred
+  // stages only exist as events, so those are returned separately.
+  const [activity, events] = await Promise.all([
+    prisma.leadActivity.findMany({ where: { leadId }, orderBy: { changedAt: "desc" } }),
+    prisma.leadStageEvent.findMany({ where: { leadId, source: { in: ["IMPORT", "INFERRED"] } }, orderBy: { at: "desc" } }),
+  ]);
   return NextResponse.json({
+    events: events.map((e) => ({ id: e.id, stage: e.stage, source: e.source, at: e.at.toISOString() })),
     activity: activity.map((a) => ({
       id: a.id,
       fromStatus: a.fromStatus,

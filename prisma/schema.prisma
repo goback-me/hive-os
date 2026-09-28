@@ -89,12 +89,12 @@ model OnboardingStepTemplate {
 }
 
 model ClientOnboardingStep {
-  id           String                  @id @default(cuid())
-  clientId     String
-  client       Client                  @relation(fields: [clientId], references: [id])
-  templateId   String
-  template     OnboardingStepTemplate  @relation(fields: [templateId], references: [id])
-  completedAt  DateTime?
+  id          String                 @id @default(cuid())
+  clientId    String
+  client      Client                 @relation(fields: [clientId], references: [id])
+  templateId  String
+  template    OnboardingStepTemplate @relation(fields: [templateId], references: [id])
+  completedAt DateTime?
 
   @@unique([clientId, templateId])
 }
@@ -108,14 +108,14 @@ model Module {
 }
 
 model Lesson {
-  id          String   @id @default(cuid())
-  moduleId    String
-  module      Module   @relation(fields: [moduleId], references: [id])
-  title       String
-  videoUrl    String?
-  content     String?
-  order       Int      @default(0)
-  createdAt   DateTime @default(now())
+  id        String   @id @default(cuid())
+  moduleId  String
+  module    Module   @relation(fields: [moduleId], references: [id])
+  title     String
+  videoUrl  String?
+  content   String?
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
 
   completions ClientLessonProgress[]
 }
@@ -155,13 +155,13 @@ model AdCampaign {
 
 // ── Awards — auto-granted on revenue milestones or course completion ───
 model AwardTier {
-  id                 String   @id @default(cuid())
-  name               String
-  subtitle           String?
-  thresholdRevenue   Decimal? @db.Decimal(10, 2)
-  requiredModuleId   String?
-  order              Int      @default(0)
-  clientAwards       ClientAward[]
+  id               String        @id @default(cuid())
+  name             String
+  subtitle         String?
+  thresholdRevenue Decimal?      @db.Decimal(10, 2)
+  requiredModuleId String?
+  order            Int           @default(0)
+  clientAwards     ClientAward[]
 }
 
 model ClientAward {
@@ -180,7 +180,7 @@ model IntegrationSettings {
   id             String   @id @default("singleton")
   clickupApiKey  String?
   clickupTeamId  String?
-  crmType        String?  // "ghl" | "spreadsheet"
+  crmType        String? // "ghl" | "spreadsheet"
   crmApiKeyOrUrl String?
   updatedAt      DateTime @updatedAt
 }
@@ -190,10 +190,10 @@ model IntegrationSettings {
 // replaced on connect. Not per-client OAuth.
 model GoogleAccountConnection {
   id           String   @id @default(cuid())
-  accessToken  String   // encrypted at rest (see lib/crypto.ts)
-  refreshToken String   // encrypted at rest
+  accessToken  String // encrypted at rest (see lib/crypto.ts)
+  refreshToken String // encrypted at rest
   expiresAt    DateTime
-  googleEmail  String?  // shown in the UI so you know which account is connected
+  googleEmail  String? // shown in the UI so you know which account is connected
   connectedAt  DateTime @default(now())
 }
 
@@ -201,22 +201,22 @@ model GoogleAccountConnection {
 // Sticks until changed — no token here, just points at a sheet and is read
 // using the single GoogleAccountConnection above.
 model ClientSheet {
-  id              String   @id @default(cuid())
-  clientId        String   @unique
-  client          Client   @relation(fields: [clientId], references: [id])
+  id       String @id @default(cuid())
+  clientId String @unique
+  client   Client @relation(fields: [clientId], references: [id])
 
   spreadsheetId   String
   spreadsheetName String?
   sheetName       String
 
-  allColumns      String[]
-  visibleColumns  String[]
-  statusColumn    String?
+  allColumns     String[]
+  visibleColumns String[]
+  statusColumn   String?
   // Maps the sheet's own free-text status values (whatever the team has
   // been typing into statusColumn) to our fixed 6-status funnel — e.g.
   // {"New": "NEW_LEAD", "Called": "CHASE_UP"}. Unmapped values default to
   // NEW_LEAD on sync (see lib/lead-sync.ts).
-  statusMapping   Json?
+  statusMapping  Json?
 
   // The "did it close" column (e.g. a client's "Prospect Status") — separate
   // from statusColumn (e.g. "HIVE STATUS", the team's internal outreach
@@ -230,47 +230,96 @@ model ClientSheet {
 
   // Outcome of the last sheet → Lead table sync (see lib/lead-sync.ts) —
   // shown on the client's Leads tab so a failed sync is visible, not silent.
-  lastSyncedAt    DateTime?
-  lastSyncError   String?
+  lastSyncedAt     DateTime?
+  lastSyncError    String?
   // Normalized status values seen in the last sync that had no mapping —
   // {status: {value: count}, result: {value: count}} — shown as a warning
   // with a quick-map dropdown on the Leads tab.
   unmappedStatuses Json?
 
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
-enum LeadStatus {
+// The real sales funnel, in order (see STAGE_RANK in lib/lead-status.ts).
+// WON / LOST / DISQUALIFIED are terminal.
+enum LeadStage {
   NEW_LEAD
   CHASE_UP
+  CONTACTED
+  NURTURE
+  HANDOVER_ATTEMPTED
+  HANDOVER_LIVE
+  HANDOVER_TEXT
   CLIENT_CONTACTED
+  CONSULT_BOOKED
+  CONSULT_NO_SHOW
+  CONSULT_ATTENDED
+  QUOTE_SENT
   WON
   LOST
   DISQUALIFIED
 }
 
+enum DqReason {
+  GHOSTED
+  SPAM
+  NOT_INTERESTED
+  BUDGET
+  LOCATION
+  UNKNOWN
+}
+
+// How far the lead got before being disqualified.
+enum DqPhase {
+  PRE_CONTACT
+  POST_CONTACT
+  POST_HANDOVER
+}
+
+enum LostReason {
+  GHOSTED
+  WENT_ELSEWHERE
+  BUDGET
+  UNKNOWN
+}
+
+// SYNC / MANUAL events carry a real timestamp and feed the duration medians.
+// IMPORT (lead first seen already at that stage) and INFERRED (a skipped
+// stage filled in on a jump) only count toward "reached", never durations.
+enum StageEventSource {
+  SYNC
+  MANUAL
+  IMPORT
+  INFERRED
+}
+
 // ── Leads (Hive OS) — synced from each client's assigned Google Sheet ───
 // (see lib/lead-sync.ts). The sheet is read-only forever: syncing refreshes
-// every field except `status` once a lead has been manually touched
-// (statusManuallySetAt set) — a manual status change never gets clobbered
+// every field except the stage once a lead has been manually touched
+// (statusManuallySetAt set) — a manual stage change never gets clobbered
 // by the next sync.
 model Lead {
-  id        String     @id @default(cuid())
-  clientId  String
-  client    Client     @relation(fields: [clientId], references: [id])
-  name      String?
-  phone     String?
-  email     String?
-  source    String?
-  campaign  String?
-  adset     String?
-  status    LeadStatus @default(NEW_LEAD)
-  value     Decimal?   @db.Decimal(10, 2)
+  id           String      @id @default(cuid())
+  clientId     String
+  client       Client      @relation(fields: [clientId], references: [id])
+  name         String?
+  phone        String?
+  email        String?
+  source       String?
+  campaign     String?
+  adset        String?
+  stage        LeadStage   @default(NEW_LEAD)
+  dqReason     DqReason?
+  dqPhase      DqPhase?
+  lostReason   LostReason?
+  // From a sheet column whose header contains "attempt", if there is one.
+  callAttempts Int?
+  value        Decimal?    @db.Decimal(10, 2)
 
   // The literal, unmapped status text straight from the sheet's status
   // column (e.g. "LIVE TRANSFER", "Self booked") — kept separately from
-  // `status` (our fixed 6-stage pipeline) so leads are filterable by
+  // `stage` (our fixed funnel) so leads are filterable by
   // whatever the sheet actually says even before (or without) a client
   // configuring the statusMapping on ClientSheet.
   sheetStatus String?
@@ -285,21 +334,15 @@ model Lead {
   statusManuallySetAt DateTime?
   lastSyncedAt        DateTime?
 
-  // First time this lead ever reached that stage (set once, never moved
-  // back or overwritten — see lib/lead-status.ts's stageTimestampPatch) —
-  // powers the per-lead timeline and the aggregate time-series chart.
-  chaseUpAt   DateTime?
-  contactedAt DateTime?
-  closedAt    DateTime? // first time it reached WON, LOST, or DISQUALIFIED
-
   // Soft delete — set when the lead's sheet row disappears (or the sheet is
   // unassigned). Every read filters deletedAt: null; a row that reappears
   // restores the same lead, notes and history intact.
   deletedAt DateTime?
 
-  createdAt DateTime @default(now())
-  activity  LeadActivity[]
-  notes     LeadNote[]
+  createdAt   DateTime         @default(now())
+  activity    LeadActivity[]
+  notes       LeadNote[]
+  stageEvents LeadStageEvent[]
 
   @@index([clientId, createdAt])
   @@index([clientId, externalKey])
@@ -327,16 +370,31 @@ model LeadNote {
 // very first status on creation — that's routine ingestion, not a "change".
 // Powers the "Activity" list in a lead's expanded detail row.
 model LeadActivity {
-  id         String     @id @default(cuid())
+  id         String    @id @default(cuid())
   leadId     String
-  lead       Lead       @relation(fields: [leadId], references: [id])
-  fromStatus LeadStatus
-  toStatus   LeadStatus
-  value      Decimal?   @db.Decimal(10, 2)
+  lead       Lead      @relation(fields: [leadId], references: [id])
+  fromStatus LeadStage
+  toStatus   LeadStage
+  value      Decimal?  @db.Decimal(10, 2)
   changedBy  String
-  changedAt  DateTime   @default(now())
+  changedAt  DateTime  @default(now())
 
   @@index([leadId, changedAt])
+}
+
+// Every stage a lead has reached, with when and how we know — the source of
+// truth for funnel "reached" counts, time-between-stages medians and the
+// time-series chart. LeadActivity above is the human-readable audit log.
+model LeadStageEvent {
+  id        String           @id @default(cuid())
+  leadId    String
+  lead      Lead             @relation(fields: [leadId], references: [id])
+  stage     LeadStage
+  at        DateTime
+  source    StageEventSource
+  createdAt DateTime         @default(now())
+
+  @@index([leadId, stage])
 }
 
 // ── Contracts / renewals (Hive OS) — drives "renewal" needs-action cards ─
@@ -360,7 +418,7 @@ model ContactLog {
   clientId    String
   client      Client   @relation(fields: [clientId], references: [id])
   contactedAt DateTime
-  method      String   // "call", "email", "meeting"
+  method      String // "call", "email", "meeting"
   notes       String?
   loggedBy    String
   createdAt   DateTime @default(now())
@@ -385,12 +443,12 @@ model AdSpendDaily {
 
 // ── Revenue, synced from Stripe or manual entry (Hive OS) ────────────────
 model RevenueMonthly {
-  id        String   @id @default(cuid())
-  clientId  String
-  client    Client   @relation(fields: [clientId], references: [id])
-  month     DateTime
-  amount    Decimal  @db.Decimal(10, 2)
-  source    String   @default("manual")
+  id       String   @id @default(cuid())
+  clientId String
+  client   Client   @relation(fields: [clientId], references: [id])
+  month    DateTime
+  amount   Decimal  @db.Decimal(10, 2)
+  source   String   @default("manual")
 
   @@unique([clientId, month])
 }
@@ -477,33 +535,33 @@ model Client {
   joinedAt    DateTime     @default(now())
 
   // ── Original coaching app — coaching-business relations ──────────────────────────
-  users            User[]
-  sessions         Session[]
-  progressNotes    ProgressNote[]
-  payments         Payment[]
-  needsActionItems NeedsActionItem[]
-  tasks            Task[]
-  onboardingSteps  ClientOnboardingStep[]
-  lessonProgress   ClientLessonProgress[]
-  adCampaigns      AdCampaign[]
-  awards           ClientAward[]
+  users             User[]
+  sessions          Session[]
+  progressNotes     ProgressNote[]
+  payments          Payment[]
+  needsActionItems  NeedsActionItem[]
+  tasks             Task[]
+  onboardingSteps   ClientOnboardingStep[]
+  lessonProgress    ClientLessonProgress[]
+  adCampaigns       AdCampaign[]
+  awards            ClientAward[]
   gameplanFigmaLink String?
 
   // ── Hive OS — agency connections / reporting relations ───────────────
   logoUrl          String?
-  metaAdAccountId  String?          // "act_XXXXXXXXX" — not secret, safe to store plain
-  metaAccessToken  String?          // encrypted at rest (see lib/crypto.ts)
-  clickupListId    String?          // ClickUp list to embed for this client's tasks
-  claritySlug      String?          // Microsoft Clarity project slug
+  metaAdAccountId  String? // "act_XXXXXXXXX" — not secret, safe to store plain
+  metaAccessToken  String? // encrypted at rest (see lib/crypto.ts)
+  clickupListId    String? // ClickUp list to embed for this client's tasks
+  claritySlug      String? // Microsoft Clarity project slug
   stripeCustomerId String?
 
-  contracts        Contract[]
-  contactLogs      ContactLog[]
-  adSpendDaily     AdSpendDaily[]
-  revenueMonthly   RevenueMonthly[]
-  leads            Lead[]
-  clientSheet      ClientSheet?
-  referralLink     ReferralLink?
+  contracts      Contract[]
+  contactLogs    ContactLog[]
+  adSpendDaily   AdSpendDaily[]
+  revenueMonthly RevenueMonthly[]
+  leads          Lead[]
+  clientSheet    ClientSheet?
+  referralLink   ReferralLink?
 }
 
 model Session {
@@ -536,7 +594,7 @@ model Payment {
   id              String        @id @default(cuid())
   clientId        String
   client          Client        @relation(fields: [clientId], references: [id])
-  type            PaymentType?  // optional — rows from the original coaching app won't have one
+  type            PaymentType? // optional — rows from the original coaching app won't have one
   label           String
   amountDue       Decimal       @db.Decimal(10, 2)
   amountPaid      Decimal?      @db.Decimal(10, 2)

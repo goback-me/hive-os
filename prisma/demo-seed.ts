@@ -65,12 +65,13 @@ function history(d: Demo, seed: number) {
 
 const LEAD_NAMES = ["Liam Carter", "Olivia Nguyen", "Noah Williams", "Ava Thompson", "Jack Robinson", "Mia Kelly"];
 const LEAD_SOURCES = ["Facebook Ads", "Instagram Ads", "Google Search", "Referral", "Facebook Ads"];
-const LEAD_STATUSES = ["WON", "CLIENT_CONTACTED", "CHASE_UP", "NEW_LEAD", "NEW_LEAD"] as const;
+const LEAD_STAGES = ["WON", "CONSULT_BOOKED", "CONTACTED", "CHASE_UP", "NEW_LEAD"] as const;
 
 async function wipe(clientId: string, keepLeads: boolean) {
   await prisma.needsActionItem.deleteMany({ where: { clientId } });
   if (!keepLeads) {
     await prisma.leadActivity.deleteMany({ where: { lead: { clientId } } });
+    await prisma.leadStageEvent.deleteMany({ where: { lead: { clientId } } });
     await prisma.leadNote.deleteMany({ where: { lead: { clientId } } });
     await prisma.lead.deleteMany({ where: { clientId } });
   }
@@ -156,12 +157,12 @@ async function main() {
     });
 
     await prisma.lead.createMany({
-      data: LEAD_STATUSES.map((status, j) => ({
+      data: LEAD_STAGES.map((stage, j) => ({
         clientId: client.id,
         name: LEAD_NAMES[(i + j) % LEAD_NAMES.length],
         source: LEAD_SOURCES[j],
-        status,
-        value: status === "WON" ? Math.round(d.revenueNow * 0.08) : null,
+        stage,
+        value: stage === "WON" ? Math.round(d.revenueNow * 0.08) : null,
         createdAt: new Date(now.getTime() - (j + 1) * DAY),
       })),
     });

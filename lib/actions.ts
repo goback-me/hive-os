@@ -6,7 +6,7 @@ import { headers } from "next/headers";
 import { requireCoach, requireClientAccess } from "@/lib/auth";
 import { getClerkAdminClient } from "@/lib/clerk-admin";
 import { syncLeadsFromSheet, type SyncSummary } from "@/lib/lead-sync";
-import { LEAD_STATUSES, stageTimestampPatch, type LeadStatusValue } from "@/lib/lead-status";
+import { parseTarget, planStageEvents } from "@/lib/lead-status";
 
 function slugify(name: string) {
   return name
@@ -200,34 +200,44 @@ export async function syncClientLeads(clientId: string): Promise<{ summary: Sync
   }
 }
 
-// A manual status change never gets clobbered by a later sync (see
+// A manual stage change never gets clobbered by a later sync (see
 // lib/lead-sync.ts) — statusManuallySetAt marks that this lead is now
 // coach/client-owned, not sheet-owned, for its status field only.
-export async function updateLeadStatus(leadId: string, status: string, value?: number) {
-  if (!LEAD_STATUSES.includes(status as LeadStatusValue)) throw new Error("Invalid lead status");
+// `target` is a stage, optionally with a reason: "WON", "DISQUALIFIED:BUDGET",
+// "LOST:GHOSTED" (same encoding as the mapping dropdowns).
+export async function updateLeadStage(leadId: string, target: string, value?: number) {
+  const parsed = parseTarget(target);
+  if (!parsed?.stage) throw new Error("Invalid lead stage");
+  const stage = parsed.stage;
   const lead = await prisma.lead.findUnique({ where: { id: leadId } });
   if (!lead || lead.deletedAt) throw new Error("Lead not found");
   const user = await requireClientAccess(lead.clientId);
 
-  await prisma.leadActivity.create({
-    data: {
-      leadId,
-      fromStatus: lead.status,
-      toStatus: status as never,
-      value: value ?? null,
-      changedBy: user.name,
-    },
-  });
+  const eventStages = new Set(
+    (await prisma.leadStageEvent.findMany({ where: { leadId }, select: { stage: true } })).map((e) => e.stage)
+  );
+  const plan = planStageEvents({ oldStage: lead.stage, newStage: stage, prior: null, eventStages });
+  const now = new Date();
 
-  await prisma.lead.update({
-    where: { id: leadId },
-    data: {
-      status: status as never,
-      statusManuallySetAt: new Date(),
-      ...stageTimestampPatch(lead, status as never),
-      ...(value !== undefined ? { value } : {}),
-    },
-  });
+  await prisma.$transaction([
+    prisma.leadActivity.create({
+      data: { leadId, fromStatus: lead.stage, toStatus: stage, value: value ?? null, changedBy: user.name },
+    }),
+    prisma.leadStageEvent.createMany({
+      data: plan.events.map((e) => ({ leadId, stage: e.stage, at: now, source: e.kind === "inferred" ? ("INFERRED" as const) : ("MANUAL" as const) })),
+    }),
+    prisma.lead.update({
+      where: { id: leadId },
+      data: {
+        stage,
+        dqReason: stage === "DISQUALIFIED" ? parsed.dqReason ?? "UNKNOWN" : null,
+        dqPhase: stage === "DISQUALIFIED" ? plan.dqPhase : null,
+        lostReason: stage === "LOST" ? parsed.lostReason ?? "UNKNOWN" : null,
+        statusManuallySetAt: now,
+        ...(value !== undefined ? { value } : {}),
+      },
+    }),
+  ]);
   revalidatePath(`/clients`);
 }
 
@@ -446,6 +456,7 @@ export async function deleteClientPermanently(clientId: string) {
       ? [
           prisma.leadActivity.deleteMany({ where: { leadId: { in: leadIds } } }),
           prisma.leadNote.deleteMany({ where: { leadId: { in: leadIds } } }),
+          prisma.leadStageEvent.deleteMany({ where: { leadId: { in: leadIds } } }),
         ]
       : []),
     prisma.lead.deleteMany({ where: { clientId } }),
