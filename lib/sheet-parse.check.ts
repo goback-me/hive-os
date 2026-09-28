@@ -1,6 +1,6 @@
 // Run: npx tsx lib/sheet-parse.check.ts — throws on the first failure.
 import assert from "node:assert/strict";
-import { findColumn, normalizePhone, normalizeStatus, parseSheetDate, serialToDate } from "./sheet-parse";
+import { findColumn, findHeaderIndex, normalizePhone, normalizeStatus, parseSheetDate, serialToDate } from "./sheet-parse";
 
 // Status normalization
 assert.equal(normalizeStatus("DISQUALIFIED "), "disqualified");
@@ -20,6 +20,12 @@ assert.equal(findColumn(["Campaign Name", "Ad Name", "Name"], ["name"], ["campai
 assert.equal(findColumn(["Campaign Name", "Full Name"], ["name"], ["campaign", "ad"]), 1);
 assert.equal(findColumn(["Business Name", "Address"], ["name"], ["business", "ad"]), -1);
 assert.equal(findColumn(["UTM Source", "Lead Source"], ["source"], ["utm"]), 1);
+
+// Saved column names survive spacing/case/newline drift in the header
+assert.equal(findHeaderIndex(["Name", "Hive\nStatus "], "HIVE STATUS"), 1);
+assert.equal(findHeaderIndex(["Name", "HIVE STATUS"], "HIVE STATUS"), 1);
+assert.equal(findHeaderIndex(["Name", "Prospect Status"], "HIVE STATUS"), -1);
+assert.equal(findHeaderIndex(["Name"], null), -1);
 
 // Dates — Sydney local, dd/mm first, never mm/dd
 const iso = (d: Date | null) => d?.toISOString();

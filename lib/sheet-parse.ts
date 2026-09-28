@@ -25,6 +25,21 @@ export function findColumn(headers: string[], keywords: string[], exclude: strin
 
 export const DATE_OPT_IN_KEYWORDS = ["date opt in", "opt in"];
 
+// A saved column name vs the live headers. Sheets headers pick up stray
+// spaces, line breaks and case changes over time — "HIVE STATUS" and
+// "Hive\nStatus " are the same column. Exact match first, then normalized.
+export function normalizeHeaderName(h: string) {
+  return h.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+export function findHeaderIndex(headers: string[], name: string | null | undefined): number {
+  if (!name) return -1;
+  const exact = headers.indexOf(name);
+  if (exact !== -1) return exact;
+  const target = normalizeHeaderName(name);
+  return headers.findIndex((h) => normalizeHeaderName(h) === target);
+}
+
 export function normalizeEmail(v: string | null | undefined) {
   return (v ?? "").trim().toLowerCase();
 }

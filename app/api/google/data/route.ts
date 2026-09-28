@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getValidAccessToken, getSheetValues } from "@/lib/google-sheets";
 import { requireUser } from "@/lib/auth";
-import { normalizeStatus } from "@/lib/sheet-parse";
+import { findHeaderIndex, normalizeStatus } from "@/lib/sheet-parse";
 
 // Fetches live rows for a client's assigned sheet. Only visibleColumns are
 // ever included in the response — hidden column data never leaves the
@@ -37,10 +37,15 @@ export async function GET(req: NextRequest) {
     if (JSON.stringify(liveHeaders) !== JSON.stringify(sheet.allColumns)) {
       visibleColumns = sheet.visibleColumns.filter((c) => liveHeaders.includes(c));
       if (visibleColumns.length === 0) visibleColumns = liveHeaders;
-      // Only drop a status column if it's gone from the sheet entirely —
-      // hiding it from the table must never break status mapping.
-      statusColumn = statusColumn && liveHeaders.includes(statusColumn) ? statusColumn : null;
-      resultStatusColumn = resultStatusColumn && liveHeaders.includes(resultStatusColumn) ? resultStatusColumn : null;
+      // Visibility never affects the status columns. A header that only
+      // changed spacing/case is re-pointed at its live spelling; a column is
+      // only dropped when no header matches it even after normalizing.
+      const relink = (name: string | null) => {
+        const idx = findHeaderIndex(liveHeaders, name);
+        return idx === -1 ? null : liveHeaders[idx];
+      };
+      statusColumn = relink(statusColumn);
+      resultStatusColumn = relink(resultStatusColumn);
       await prisma.clientSheet.update({
         where: { clientId },
         data: { allColumns: liveHeaders, visibleColumns, statusColumn, resultStatusColumn },
@@ -58,7 +63,7 @@ export async function GET(req: NextRequest) {
       if (!column) return null;
       // Read from the live sheet, not the visible subset — mapping works on
       // a status column even when it's hidden from the table.
-      const colIdx = liveHeaders.indexOf(column);
+      const colIdx = findHeaderIndex(liveHeaders, column);
       if (colIdx === -1) return null;
       const counts: Record<string, number> = {};
       const labels: Record<string, string> = {};

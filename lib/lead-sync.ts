@@ -17,6 +17,7 @@ import {
 import {
   DATE_OPT_IN_KEYWORDS,
   findColumn,
+  findHeaderIndex,
   formatSheetDate,
   normalizeEmail,
   normalizeHeader,
@@ -168,9 +169,15 @@ async function runSync(
 
   // Client's own mapping first, then the built-in defaults.
   const statusMapping = { ...DEFAULT_STATUS_MAPPING, ...parseMapping(sheet.statusMapping) };
-  const statusColIdx = sheet.statusColumn ? headers.indexOf(sheet.statusColumn) : -1;
+  const statusColIdx = findHeaderIndex(headers, sheet.statusColumn);
   const resultStatusMapping = { ...DEFAULT_RESULT_MAPPING, ...parseMapping(sheet.resultStatusMapping) };
-  const resultStatusColIdx = sheet.resultStatusColumn ? headers.indexOf(sheet.resultStatusColumn) : -1;
+  const resultStatusColIdx = findHeaderIndex(headers, sheet.resultStatusColumn);
+
+  // A configured status column that's missing from the sheet would quietly
+  // turn every lead into the fallback stage — stop instead and say why.
+  for (const [name, idx] of [[sheet.statusColumn, statusColIdx], [sheet.resultStatusColumn, resultStatusColIdx]] as const) {
+    if (name && idx === -1) throw new Error(`Status column '${name}' not found in sheet`);
+  }
 
   const nameIdx = findColumn(headers, ["name", "full name"], ["campaign", "ad", "adset", "ad set", "business"]);
   const phoneIdx = findColumn(headers, ["phone"]);

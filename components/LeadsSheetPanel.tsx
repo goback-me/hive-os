@@ -11,7 +11,7 @@ const defaultLabel = (defaults: Mapping, v: string, fallback: string) => {
   const t = parseTarget(defaults[v]);
   return t ? `Default: ${targetLabel(t)}` : fallback;
 };
-import { normalizeStatus } from "@/lib/sheet-parse";
+import { findHeaderIndex, normalizeStatus } from "@/lib/sheet-parse";
 
 type DriveFile = { id: string; name: string; modifiedTime: string };
 
@@ -384,7 +384,7 @@ export default function LeadsSheetPanel({
   }
 
   // ── Step 3: assigned + ready — table with column + status filters ────
-  const statusIdx = statusColumn ? headers.indexOf(statusColumn) : -1;
+  const statusIdx = findHeaderIndex(headers, statusColumn);
   const filteredRows =
     statusIdx !== -1 && statusFilter !== "__all__" ? rows.filter((r) => normalizeStatus(r[statusIdx]) === statusFilter) : rows;
   const unmappedEntries = [
