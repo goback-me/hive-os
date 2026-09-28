@@ -33,13 +33,28 @@ This one script does everything:
 3. `git pull` — **pulls whatever branch is currently checked out on the
    VPS.** Pushing to GitHub does NOT deploy anything by itself; someone
    has to run this script on the server afterward.
-4. Rebuilds the app image (`docker compose build --no-cache app`) and
-   starts both containers (`docker compose up -d`).
-5. Waits for Postgres to report healthy.
-6. Syncs the database schema — `npx prisma db push` (applies whatever's in
-   `prisma/schema.prisma` directly; it does not replay the numbered
-   migration files under `prisma/migrations/`, which exist for local dev
-   history rather than the deploy path).
+4. Rebuilds the app image (`docker compose build --no-cache app`).
+5. Starts Postgres alone and waits for it to report healthy.
+6. **Backs up the database** to `backups/pre-deploy-<timestamp>.sql.gz`
+   (`pg_dump`, on the VPS, not committed).
+7. **First run only:** if the DB has no migration history (it was
+   originally created with `prisma db push`), marks the ten migrations up to
+   `20260925120000_client_sheet_sync_status` as already applied. It checks
+   for `ClientSheet.lastSyncError` first and stops if the DB isn't at that
+   point.
+8. Applies pending migrations — `npx prisma migrate deploy`, run in a
+   one-off container **before** the new app starts, so new code never runs
+   against the old schema. If a migration fails, the script stops and the
+   old app keeps serving.
+9. Starts the new app (`docker compose up -d`).
+
+Migrations are the deploy path now, not `prisma db push` — several of them
+backfill data (e.g. `20260928120000_lead_stage_funnel` converts lead
+statuses into stages and history), which `db push` would silently skip or
+refuse to apply.
+
+To restore a backup: `gunzip -c backups/<file>.sql.gz | docker compose exec -T postgres psql -U coach -d coach_os`
+(into an empty database — drop and recreate `coach_os` first).
 
 ## `.env` — what has to be real before `deploy.sh` will proceed
 
