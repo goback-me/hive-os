@@ -6,7 +6,6 @@ import { getMetaCampaignInsights } from "@/lib/meta-ads";
 import {
   DEFAULT_RESULT_MAPPING,
   DEFAULT_STATUS_MAPPING,
-  STAGE_RANK,
   combineTargets,
   parseTarget,
   planStageEvents,
@@ -25,6 +24,17 @@ import {
   normalizeStatus,
   parseSheetDate,
 } from "@/lib/sheet-parse";
+import {
+  DURATION_KEYS,
+  addLead,
+  costPer,
+  emptyCounts,
+  funnelRates,
+  type Durations,
+  type FunnelCounts,
+  type FunnelGroup,
+  type FunnelLead,
+} from "@/lib/funnel";
 
 function normalizeIdentity(v: string) {
   return v.toLowerCase().replace(/[^a-z0-9]+/g, "");
@@ -379,117 +389,157 @@ async function runSync(
   };
 }
 
-export type CampaignFunnelRow = {
-  campaign: string;
-  total: number;
-  contacted: number; // CONTACTED or later on the funnel (WON/LOST/DISQUALIFIED included)
-  won: number;
-  lost: number;
-  disqualified: number;
-  lostOrDisqualified: number; // won + lost convenience total, kept for the existing "Lost/DQ" stat
-  closedTotal: number; // won + lost + disqualified — the denominator for the rates below
-  winRate: number | null; // % of CLOSED leads that were won (null when nothing's closed yet)
-  lossRate: number | null;
-  disqualifiedRate: number | null;
-  avgDaysToConvert: number | null; // avg calendar days from createdAt to the first WON event
-  spend: number | null;
-  spendSource: "meta" | "manual" | null;
-};
+export type ClientFunnel = { overall: FunnelGroup; campaigns: FunnelGroup[] };
 
 function campaignKey(campaign: string | null) {
   return campaign?.trim() || "Unattributed";
 }
 
-// Average days from lead creation to WON, grouped by campaign — a separate
-// raw-SQL aggregate (like getClientLeadTimeSeries's bucketCounts below)
-// since Prisma's groupBy can't average a computed date difference.
-async function getCampaignAvgDaysToConvert(
-  clientId: string,
-  dateRange?: { from?: Date; to?: Date }
-): Promise<Map<string, number>> {
-  const fromClause = dateRange?.from ? Prisma.sql`AND l."createdAt" >= ${dateRange.from}` : Prisma.empty;
-  const toClause = dateRange?.to ? Prisma.sql`AND l."createdAt" < ${dateRange.to}` : Prisma.empty;
+const ALL = "__all__";
 
-  const rows = await prisma.$queryRaw<{ campaign: string; avg_days: number | null }[]>`
-    SELECT COALESCE(NULLIF(TRIM(l.campaign), ''), 'Unattributed') AS campaign,
-           AVG(EXTRACT(EPOCH FROM (w.at - l."createdAt")) / 86400) AS avg_days
-    FROM "Lead" l
-    JOIN (SELECT "leadId", MIN(at) AS at FROM "LeadStageEvent" WHERE stage = 'WON' GROUP BY "leadId") w ON w."leadId" = l.id
-    WHERE l."clientId" = ${clientId} AND l."deletedAt" IS NULL AND l.stage = 'WON'
-      ${fromClause}
-      ${toClause}
-    GROUP BY 1
+// Median days between stages, per campaign plus client-wide (GROUPING SETS),
+// from SYNC/MANUAL events only — IMPORT/INFERRED timestamps are guesses.
+// "Lead" is the lead's createdAt (opt-in date). Negative gaps (bad dates)
+// are ignored. n = sample size behind each median.
+async function getFunnelDurations(clientId: string, dateRange?: { from?: Date; to?: Date }): Promise<Map<string, Durations>> {
+  const fromClause = dateRange?.from ? Prisma.sql`AND "createdAt" >= ${dateRange.from}` : Prisma.empty;
+  const toClause = dateRange?.to ? Prisma.sql`AND "createdAt" < ${dateRange.to}` : Prisma.empty;
+
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    WITH l AS (
+      SELECT id, "createdAt", COALESCE(NULLIF(TRIM(campaign), ''), 'Unattributed') AS campaign
+      FROM "Lead"
+      WHERE "clientId" = ${clientId} AND "deletedAt" IS NULL ${fromClause} ${toClause}
+    ), f AS (
+      SELECT e."leadId",
+        MIN(e.at) FILTER (WHERE e.stage = 'CONTACTED') AS contacted,
+        MIN(e.at) FILTER (WHERE e.stage IN ('HANDOVER_ATTEMPTED', 'HANDOVER_LIVE', 'HANDOVER_TEXT')) AS handover,
+        MIN(e.at) FILTER (WHERE e.stage = 'CONSULT_BOOKED') AS booked,
+        MIN(e.at) FILTER (WHERE e.stage = 'CONSULT_ATTENDED') AS attended,
+        MIN(e.at) FILTER (WHERE e.stage = 'QUOTE_SENT') AS quote,
+        MIN(e.at) FILTER (WHERE e.stage = 'WON') AS won
+      FROM "LeadStageEvent" e
+      JOIN l ON l.id = e."leadId"
+      WHERE e.source IN ('SYNC', 'MANUAL')
+      GROUP BY e."leadId"
+    ), d AS (
+      SELECT l.campaign,
+        EXTRACT(EPOCH FROM (f.contacted - l."createdAt")) / 86400 AS "leadToContacted",
+        EXTRACT(EPOCH FROM (f.handover - f.contacted)) / 86400 AS "contactedToHandover",
+        EXTRACT(EPOCH FROM (f.booked - f.handover)) / 86400 AS "handoverToBooked",
+        EXTRACT(EPOCH FROM (f.quote - f.attended)) / 86400 AS "consultToQuote",
+        EXTRACT(EPOCH FROM (f.won - f.quote)) / 86400 AS "quoteToWon",
+        EXTRACT(EPOCH FROM (f.won - l."createdAt")) / 86400 AS "leadToWon"
+      FROM l JOIN f ON f."leadId" = l.id
+    )
+    SELECT CASE WHEN GROUPING(campaign) = 1 THEN '__all__' ELSE campaign END AS campaign,
+      percentile_cont(0.5) WITHIN GROUP (ORDER BY "leadToContacted") FILTER (WHERE "leadToContacted" >= 0) AS "leadToContacted_med",
+      COUNT(*) FILTER (WHERE "leadToContacted" >= 0) AS "leadToContacted_n",
+      percentile_cont(0.5) WITHIN GROUP (ORDER BY "contactedToHandover") FILTER (WHERE "contactedToHandover" >= 0) AS "contactedToHandover_med",
+      COUNT(*) FILTER (WHERE "contactedToHandover" >= 0) AS "contactedToHandover_n",
+      percentile_cont(0.5) WITHIN GROUP (ORDER BY "handoverToBooked") FILTER (WHERE "handoverToBooked" >= 0) AS "handoverToBooked_med",
+      COUNT(*) FILTER (WHERE "handoverToBooked" >= 0) AS "handoverToBooked_n",
+      percentile_cont(0.5) WITHIN GROUP (ORDER BY "consultToQuote") FILTER (WHERE "consultToQuote" >= 0) AS "consultToQuote_med",
+      COUNT(*) FILTER (WHERE "consultToQuote" >= 0) AS "consultToQuote_n",
+      percentile_cont(0.5) WITHIN GROUP (ORDER BY "quoteToWon") FILTER (WHERE "quoteToWon" >= 0) AS "quoteToWon_med",
+      COUNT(*) FILTER (WHERE "quoteToWon" >= 0) AS "quoteToWon_n",
+      percentile_cont(0.5) WITHIN GROUP (ORDER BY "leadToWon") FILTER (WHERE "leadToWon" >= 0) AS "leadToWon_med",
+      COUNT(*) FILTER (WHERE "leadToWon" >= 0) AS "leadToWon_n"
+    FROM d
+    GROUP BY GROUPING SETS ((campaign), ())
   `;
-  return new Map(rows.filter((r) => r.avg_days != null).map((r) => [r.campaign, Number(r.avg_days)]));
+
+  return new Map(
+    rows.map((r) => [
+      String(r.campaign),
+      Object.fromEntries(
+        DURATION_KEYS.map((k) => [k, { medianDays: r[`${k}_med`] == null ? null : Number(r[`${k}_med`]), n: Number(r[`${k}_n`] ?? 0) }])
+      ) as Durations,
+    ])
+  );
 }
 
-// Groups this client's synced leads by campaign and joins in spend — Meta's
-// live per-campaign breakdown if connected, else the matching AdCampaign row
-// already in our DB (matched by name), so the funnel still shows a cost
-// figure even without a Meta connection.
-//
-// Uses groupBy (one small aggregate query, a few rows back) instead of
-// findMany (which was pulling every lead — including its `raw` JSON blob —
-// into Node just to count them; at 1000+ leads that's what was slowing the
-// page down and shipping a huge payload to the browser for zero reason,
-// since only the aggregated counts below ever reach the client).
-export async function getClientCampaignFunnel(
-  clientId: string,
-  dateRange?: { from?: Date; to?: Date }
-): Promise<CampaignFunnelRow[]> {
+const emptyDurations = (): Durations => Object.fromEntries(DURATION_KEYS.map((k) => [k, { medianDays: null, n: 0 }])) as Durations;
+
+function toGroup(campaign: string, counts: FunnelCounts, durations: Durations | undefined, spend: number | null, spendSource: FunnelGroup["spendSource"]): FunnelGroup {
+  return {
+    campaign,
+    counts,
+    rates: funnelRates(counts),
+    durations: durations ?? emptyDurations(),
+    spend,
+    spendSource,
+    costPerLead: costPer(spend, counts.leads),
+    costPerContacted: costPer(spend, counts.contacted),
+    costPerQualified: costPer(spend, counts.qualified),
+    costPerConsult: costPer(spend, counts.consultsBooked),
+    costPerWon: costPer(spend, counts.won),
+  };
+}
+
+// Cohort funnel for a client: leads whose opt-in date (createdAt) is in the
+// range, counted by how far each provably got (see lib/funnel.ts), per
+// campaign and overall, joined with spend — Meta's live per-campaign spend
+// if connected, else the manually tracked AdCampaign rows (matched by name).
+// Only the few columns the maths needs are selected — never `raw`.
+export async function getClientFunnel(clientId: string, dateRange?: { from?: Date; to?: Date }): Promise<ClientFunnel> {
   const createdAt =
     dateRange?.from || dateRange?.to
       ? { ...(dateRange.from ? { gte: dateRange.from } : {}), ...(dateRange.to ? { lt: dateRange.to } : {}) }
       : undefined;
 
-  const [grouped, client, adCampaigns, avgDaysByCampaign] = await Promise.all([
-    prisma.lead.groupBy({ by: ["campaign", "stage"], where: { clientId, deletedAt: null, ...(createdAt ? { createdAt } : {}) }, _count: true }),
+  const [leads, client, adCampaigns, durations] = await Promise.all([
+    prisma.lead.findMany({
+      where: { clientId, deletedAt: null, ...(createdAt ? { createdAt } : {}) },
+      select: { campaign: true, stage: true, dqPhase: true, dqReason: true, lostReason: true, stageEvents: { select: { stage: true } } },
+    }),
     prisma.client.findUnique({ where: { id: clientId } }),
     prisma.adCampaign.findMany({ where: { clientId } }),
-    getCampaignAvgDaysToConvert(clientId, dateRange),
+    getFunnelDurations(clientId, dateRange),
   ]);
 
   let metaSpendByName: Map<string, number> | null = null;
   if (client?.metaAdAccountId && client.metaAccessToken) {
     try {
       const rows = await getMetaCampaignInsights(client.metaAdAccountId, client.metaAccessToken, dateRange);
-      metaSpendByName = new Map(rows.map((r) => [r.campaignName.toLowerCase().trim(), r.spend]));
+      metaSpendByName = new Map<string, number>();
+      for (const r of rows) {
+        const k = r.campaignName.toLowerCase().trim();
+        metaSpendByName.set(k, (metaSpendByName.get(k) ?? 0) + r.spend);
+      }
     } catch {
       metaSpendByName = null; // Meta connected but the call failed — fall back silently
     }
   }
-
   const manualSpendByName = new Map(adCampaigns.map((c) => [c.name.toLowerCase().trim(), Number(c.spend)]));
 
-  const byCampaign = new Map<string, { campaign: string; total: number; contacted: number; won: number; lost: number; disqualified: number }>();
-  for (const g of grouped) {
-    const key = campaignKey(g.campaign);
-    if (!byCampaign.has(key)) byCampaign.set(key, { campaign: key, total: 0, contacted: 0, won: 0, lost: 0, disqualified: 0 });
-    const row = byCampaign.get(key)!;
-    row.total += g._count;
-    if (STAGE_RANK[g.stage] >= STAGE_RANK.CONTACTED) row.contacted += g._count;
-    if (g.stage === "WON") row.won += g._count;
-    if (g.stage === "LOST") row.lost += g._count;
-    if (g.stage === "DISQUALIFIED") row.disqualified += g._count;
+  const overall = emptyCounts();
+  const byCampaign = new Map<string, FunnelCounts>();
+  for (const l of leads) {
+    const lead: FunnelLead = { ...l, campaign: campaignKey(l.campaign), eventStages: l.stageEvents.map((e) => e.stage) };
+    if (!byCampaign.has(lead.campaign)) byCampaign.set(lead.campaign, emptyCounts());
+    addLead(byCampaign.get(lead.campaign)!, lead);
+    addLead(overall, lead);
   }
 
-  return Array.from(byCampaign.values()).map((row) => {
-    const key = row.campaign.toLowerCase().trim();
+  const campaigns = Array.from(byCampaign.entries()).map(([campaign, counts]) => {
+    const key = campaign.toLowerCase().trim();
     const metaSpend = metaSpendByName?.get(key);
     const manualSpend = manualSpendByName.get(key);
-    const closedTotal = row.won + row.lost + row.disqualified;
-    return {
-      ...row,
-      lostOrDisqualified: row.lost + row.disqualified,
-      closedTotal,
-      winRate: closedTotal > 0 ? (row.won / closedTotal) * 100 : null,
-      lossRate: closedTotal > 0 ? (row.lost / closedTotal) * 100 : null,
-      disqualifiedRate: closedTotal > 0 ? (row.disqualified / closedTotal) * 100 : null,
-      avgDaysToConvert: avgDaysByCampaign.get(row.campaign) ?? null,
-      spend: metaSpend ?? manualSpend ?? null,
-      spendSource: metaSpend !== undefined ? "meta" : manualSpend !== undefined ? "manual" : null,
-    };
+    const spend = metaSpend ?? manualSpend ?? null;
+    return toGroup(campaign, counts, durations.get(campaign), spend, metaSpend !== undefined ? "meta" : manualSpend !== undefined ? "manual" : null);
   });
+
+  // Client-wide spend is ALL spend in the range (campaigns with no leads
+  // still cost money), not just the campaigns that matched a lead.
+  const sum = (m: Map<string, number>) => Array.from(m.values()).reduce((a, b) => a + b, 0);
+  const overallSpend = metaSpendByName ? sum(metaSpendByName) : manualSpendByName.size ? sum(manualSpendByName) : null;
+  const overallSource = metaSpendByName ? "meta" : manualSpendByName.size ? "manual" : null;
+
+  return {
+    overall: toGroup(ALL, overall, durations.get(ALL), overallSpend, overallSource),
+    campaigns: campaigns.sort((a, b) => b.counts.leads - a.counts.leads),
+  };
 }
 
 export type LeadTimeSeriesPoint = {

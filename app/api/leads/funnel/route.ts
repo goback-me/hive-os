@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
-import { getClientCampaignFunnel } from "@/lib/lead-sync";
+import { getClientFunnel } from "@/lib/lead-sync";
 import { DATE_RANGE_PRESETS, resolveDateRange, type DateRangePreset } from "@/lib/date-range";
 
 export async function GET(req: NextRequest) {
@@ -17,6 +17,6 @@ export async function GET(req: NextRequest) {
     ? (presetParam as DateRangePreset)
     : "maximum";
 
-  const funnel = await getClientCampaignFunnel(clientId, resolveDateRange(preset));
+  const funnel = await getClientFunnel(clientId, resolveDateRange(preset));
   return NextResponse.json({ funnel });
 }

@@ -17,7 +17,8 @@ import {
   type LeadStageValue,
   type LostReasonValue,
 } from "@/lib/lead-status";
-import type { SyncSummary, CampaignFunnelRow } from "@/lib/lead-sync";
+import type { SyncSummary, ClientFunnel } from "@/lib/lead-sync";
+import FunnelPanel from "@/components/FunnelPanel";
 import type { DateRangePreset } from "@/lib/date-range";
 import DateRangeDropdown from "@/components/DateRangeDropdown";
 import LeadTimelineChart, { type TimeSeriesPoint } from "@/components/LeadTimelineChart";
@@ -129,7 +130,7 @@ export default function LeadsPanel({
   clientSlug: string;
   lastSyncedAt: string | null;
   lastSyncError: string | null;
-  funnel: CampaignFunnelRow[];
+  funnel: ClientFunnel;
   onSync: (clientId: string) => Promise<{ summary: SyncSummary } | { error: string }>;
   onUpdateStage: (leadId: string, target: string, value?: number) => Promise<void>;
   onUnlockStage: (leadId: string) => Promise<{ ok: true } | { error: string }>;
@@ -183,7 +184,6 @@ export default function LeadsPanel({
     () => Object.keys(sheetStatusCounts).filter((k) => k !== "__none__").sort(),
     [sheetStatusCounts]
   );
-  const sortedFunnel = useMemo(() => [...funnel].sort((a, b) => b.total - a.total), [funnel]);
   const detailLead = detailLeadId ? leads.find((l) => l.id === detailLeadId) ?? null : null;
 
   const journey = useMemo((): JourneyEntry[] => {
@@ -194,27 +194,6 @@ export default function LeadsPanel({
     const created: JourneyEntry[] = [{ kind: "created", at: detailLead.createdAt }];
     return [...notes, ...statuses, ...events, ...created].sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
   }, [detailLead, notesByLead, activityByLead, eventsByLead]);
-
-  // Client-level rollup of every campaign's numbers — avg time-to-convert is
-  // weighted by each campaign's won count so one small campaign with a single
-  // fast win can't skew the overall figure as much as a big one.
-  const overall = useMemo(() => {
-    const won = funnel.reduce((s, r) => s + r.won, 0);
-    const lost = funnel.reduce((s, r) => s + r.lost, 0);
-    const disqualified = funnel.reduce((s, r) => s + r.disqualified, 0);
-    const closedTotal = won + lost + disqualified;
-    const weightedDaysSum = funnel.reduce((s, r) => s + (r.avgDaysToConvert ?? 0) * r.won, 0);
-    return {
-      won,
-      lost,
-      disqualified,
-      closedTotal,
-      winRate: closedTotal > 0 ? (won / closedTotal) * 100 : null,
-      lossRate: closedTotal > 0 ? (lost / closedTotal) * 100 : null,
-      disqualifiedRate: closedTotal > 0 ? (disqualified / closedTotal) * 100 : null,
-      avgDaysToConvert: won > 0 ? weightedDaysSum / won : null,
-    };
-  }, [funnel]);
 
   function loadLeads() {
     if (!hasSheet) return;
@@ -462,75 +441,7 @@ export default function LeadsPanel({
             <LeadTimelineChart points={series} />
           </div>
 
-          {funnel.length > 0 && overall.closedTotal > 0 && (
-            <div className="card rounded-2xl p-4 flex items-center flex-wrap gap-x-6 gap-y-2">
-              <SummaryStat label="Win rate" value={`${Math.round(overall.winRate ?? 0)}%`} color="var(--primary)" />
-              <SummaryStat label="Loss rate" value={`${Math.round(overall.lossRate ?? 0)}%`} color="var(--danger)" />
-              <SummaryStat label="Disqualified rate" value={`${Math.round(overall.disqualifiedRate ?? 0)}%`} />
-              <SummaryStat
-                label="Avg. time to convert"
-                value={overall.avgDaysToConvert != null ? `${overall.avgDaysToConvert.toFixed(1)}d` : "—"}
-              />
-            </div>
-          )}
-
-          <div>
-            <div className="flex items-center justify-between mb-3">
-              <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{funnel.length} campaigns</p>
-              {loadingFunnel && <span className="text-xs" style={{ color: "var(--text-muted)" }}>Updating…</span>}
-            </div>
-            {funnel.length === 0 ? (
-              <div className="card rounded-2xl p-6 text-center text-sm" style={{ color: "var(--text-secondary)" }}>
-                No leads in this date range.
-              </div>
-            ) : (
-              <div className="card rounded-2xl overflow-x-auto">
-                <table className="w-full text-left text-sm min-w-[900px]">
-                  <thead>
-                    <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                      {["Campaign", "Leads", "Contacted", "Won", "Lost", "DQ", "Contact rate", "Win rate", "Avg. time to win", "Spend", "Cost/lead", ""].map((h) => (
-                        <th key={h} className="py-2 px-3 text-xs font-bold whitespace-nowrap" style={{ color: "var(--text-secondary)" }}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {sortedFunnel.map((row) => {
-                      const contactRate = row.total > 0 ? Math.round((row.contacted / row.total) * 100) : null;
-                      const costPerLead = row.spend != null && row.total > 0 ? row.spend / row.total : null;
-                      return (
-                        <tr key={row.campaign} style={{ borderBottom: "1px solid var(--border)" }}>
-                          <td className="py-2 px-3 font-medium max-w-[220px] truncate" title={row.campaign} style={{ color: "var(--text-primary)" }}>
-                            {displayCampaignName(row.campaign)}
-                          </td>
-                          <td className="py-2 px-3" style={{ color: "var(--text-primary)" }}>{row.total}</td>
-                          <td className="py-2 px-3" style={{ color: "var(--text-secondary)" }}>{row.contacted}</td>
-                          <td className="py-2 px-3 font-semibold" style={{ color: "var(--primary)" }}>{row.won}</td>
-                          <td className="py-2 px-3" style={{ color: "var(--danger)" }}>{row.lost}</td>
-                          <td className="py-2 px-3" style={{ color: "var(--text-secondary)" }}>{row.disqualified}</td>
-                          <td className="py-2 px-3" style={{ color: "var(--text-secondary)" }}>{contactRate != null ? `${contactRate}%` : "—"}</td>
-                          <td className="py-2 px-3" style={{ color: "var(--text-secondary)" }}>{row.winRate != null ? `${Math.round(row.winRate)}%` : "—"}</td>
-                          <td className="py-2 px-3" style={{ color: "var(--text-secondary)" }}>{row.avgDaysToConvert != null ? `${row.avgDaysToConvert.toFixed(1)}d` : "—"}</td>
-                          <td className="py-2 px-3 whitespace-nowrap" style={{ color: "var(--text-secondary)" }}>
-                            {row.spend != null ? `$${row.spend.toLocaleString()}${row.spendSource ? ` (${row.spendSource})` : ""}` : "—"}
-                          </td>
-                          <td className="py-2 px-3" style={{ color: "var(--text-secondary)" }}>{costPerLead != null ? `$${costPerLead.toFixed(2)}` : "—"}</td>
-                          <td className="py-2 px-3">
-                            <button
-                              onClick={() => viewCampaignLeads(row.campaign)}
-                              className="text-xs font-semibold whitespace-nowrap"
-                              style={{ color: "var(--primary)" }}
-                            >
-                              View leads
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
+          <FunnelPanel funnel={funnel} loading={loadingFunnel} onViewCampaign={viewCampaignLeads} />
         </div>
       )}
 
@@ -957,16 +868,5 @@ function SheetStatusTabButton({ active, label, count, onClick }: { active: boole
       {label}
       <span style={{ opacity: 0.75 }}>{count}</span>
     </button>
-  );
-}
-
-// Client-wide rollup stat (across every campaign) — same shape used in the
-// "Campaign performance" summary strip.
-function SummaryStat({ label, value, color }: { label: string; value: string; color?: string }) {
-  return (
-    <div className="flex items-baseline gap-1.5">
-      <span className="font-heading font-bold text-base" style={{ color: color ?? "var(--text-primary)" }}>{value}</span>
-      <span className="text-xs" style={{ color: "var(--text-muted)" }}>{label}</span>
-    </div>
   );
 }

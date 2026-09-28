@@ -18,7 +18,7 @@ import {
 import { requireClientAccess } from "@/lib/auth";
 import { checkAndGrantAwards } from "@/lib/awards";
 import { STAGE_LABELS, STAGE_STYLE } from "@/lib/lead-status";
-import { getClientCampaignFunnel } from "@/lib/lead-sync";
+import { getClientFunnel } from "@/lib/lead-sync";
 import { getMetaAllCampaigns } from "@/lib/meta-ads";
 import LeadsPanel from "@/components/LeadsPanel";
 import ClientTabsShell from "@/components/ClientTabsShell";
@@ -87,7 +87,7 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
     prisma.clientSheet.findUnique({ where: { clientId: client.id } }),
   ]);
 
-  const campaignFunnel = await getClientCampaignFunnel(client.id);
+  const campaignFunnel = await getClientFunnel(client.id);
 
   // Lazily provisions a referral link for clients that existed before this
   // feature — new clients already get one at creation (see createClient).
