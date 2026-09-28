@@ -4,10 +4,9 @@ import { requireCoach } from "@/lib/auth";
 import { LEAD_STATUSES } from "@/lib/lead-status";
 import { syncLeadsFromSheet } from "@/lib/lead-sync";
 
-// Saves which columns show, and (optionally) which visible column is the
-// "status" column used for the filter dropdown. A status column that isn't
-// in visibleColumns is rejected — hidden column data never leaves the server,
-// so it can't power a filter either. `statusMapping` (sheet value -> one of
+// Saves which columns show, and (optionally) which column is the "status"
+// column. The status/result columns don't have to be visible — mapping works
+// independently of what the table shows. `statusMapping` (sheet value -> one of
 // our 6 lead statuses) feeds the Leads tab's sync (lib/lead-sync.ts) — it's
 // independent of visibleColumns/the raw-table filter above.
 function validateMapping(mapping: unknown): string | null {
@@ -23,12 +22,6 @@ export async function POST(req: NextRequest) {
   const { clientId, visibleColumns, statusColumn, statusMapping, resultStatusColumn, resultStatusMapping } = await req.json();
   if (!clientId || !Array.isArray(visibleColumns)) {
     return NextResponse.json({ error: "clientId and visibleColumns[] are required" }, { status: 400 });
-  }
-  if (statusColumn && !visibleColumns.includes(statusColumn)) {
-    return NextResponse.json({ error: "statusColumn must be one of the visible columns" }, { status: 400 });
-  }
-  if (resultStatusColumn && !visibleColumns.includes(resultStatusColumn)) {
-    return NextResponse.json({ error: "resultStatusColumn must be one of the visible columns" }, { status: 400 });
   }
   const statusMappingError = validateMapping(statusMapping);
   if (statusMappingError) return NextResponse.json({ error: statusMappingError }, { status: 400 });

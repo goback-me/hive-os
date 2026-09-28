@@ -9,8 +9,8 @@ export async function GET(req: NextRequest) {
   const leadId = req.nextUrl.searchParams.get("leadId");
   if (!leadId) return NextResponse.json({ error: "leadId is required" }, { status: 400 });
 
-  const lead = await prisma.lead.findUnique({ where: { id: leadId }, select: { clientId: true } });
-  if (!lead) return NextResponse.json({ error: "Lead not found" }, { status: 404 });
+  const lead = await prisma.lead.findUnique({ where: { id: leadId }, select: { clientId: true, deletedAt: true } });
+  if (!lead || lead.deletedAt) return NextResponse.json({ error: "Lead not found" }, { status: 404 });
 
   const user = await requireUser();
   if (user.role === "CLIENT" && lead.clientId !== user.clientId) {

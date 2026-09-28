@@ -206,7 +206,7 @@ export async function syncClientLeads(clientId: string): Promise<{ summary: Sync
 export async function updateLeadStatus(leadId: string, status: string, value?: number) {
   if (!LEAD_STATUSES.includes(status as LeadStatusValue)) throw new Error("Invalid lead status");
   const lead = await prisma.lead.findUnique({ where: { id: leadId } });
-  if (!lead) throw new Error("Lead not found");
+  if (!lead || lead.deletedAt) throw new Error("Lead not found");
   const user = await requireClientAccess(lead.clientId);
 
   await prisma.leadActivity.create({
@@ -234,8 +234,8 @@ export async function updateLeadStatus(leadId: string, status: string, value?: n
 // A coach or the lead's own client can leave a follow-up note — same
 // access rule as ProgressNote, just scoped to one lead instead of the client.
 export async function addLeadNote(leadId: string, formData: FormData) {
-  const lead = await prisma.lead.findUnique({ where: { id: leadId }, select: { clientId: true } });
-  if (!lead) throw new Error("Lead not found");
+  const lead = await prisma.lead.findUnique({ where: { id: leadId }, select: { clientId: true, deletedAt: true } });
+  if (!lead || lead.deletedAt) throw new Error("Lead not found");
   const user = await requireClientAccess(lead.clientId);
 
   const note = String(formData.get("note") || "").trim();

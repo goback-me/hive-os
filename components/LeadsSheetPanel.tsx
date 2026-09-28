@@ -134,7 +134,7 @@ export default function LeadsSheetPanel({
   function pickTab(tab: string) {
     if (!pickedFile) return;
     const switching = assigned && (assigned.spreadsheetId !== pickedFile.id || assigned.sheetName !== tab);
-    if (switching && !confirm("Switch this client to a different sheet? Leads synced from the current sheet (and their notes/history) will be replaced.")) return;
+    if (switching && !confirm("Switch this client to a different sheet? Leads synced from the current sheet will be hidden (they come back, notes and history intact, if the same people appear in the new sheet).")) return;
     setLoadingList(true);
     setError(null);
     fetch("/api/google/select", {
@@ -165,7 +165,7 @@ export default function LeadsSheetPanel({
   }
 
   function removeSheet() {
-    if (!confirm("Remove this client's sheet? Their synced leads (and notes/history) will be deleted from Hive HQ. The Google Sheet itself isn't touched.")) return;
+    if (!confirm("Remove this client's sheet? Their synced leads will be hidden from Hive HQ (kept in the database, restored if the sheet is reconnected). The Google Sheet itself isn't touched.")) return;
     setError(null);
     fetch(`/api/google/select?clientId=${clientId}`, { method: "DELETE" })
       .then((r) => r.json())
@@ -184,10 +184,9 @@ export default function LeadsSheetPanel({
     const next = visibleColumns.includes(col)
       ? visibleColumns.filter((c) => c !== col)
       : allColumns.filter((h) => visibleColumns.includes(h) || h === col); // keep header order
+    // Hiding a column never touches the status settings — mapping reads the
+    // sheet server-side, independent of what the table shows.
     setVisibleColumns(next);
-    // if we just hid the current status column(s), clear them locally too
-    if (!next.includes(statusColumn ?? "")) setStatusColumn(null);
-    if (!next.includes(resultStatusColumn ?? "")) setResultStatusColumn(null);
   }
 
   function saveColumns(nextStatusColumn: string | null, nextResultStatusColumn: string | null) {
@@ -347,10 +346,8 @@ export default function LeadsSheetPanel({
   }
 
   // ── Step 3: assigned + ready — table with column + status filters ────
-  const filteredRows =
-    statusColumn && statusFilter !== "__all__"
-      ? rows.filter((r) => r[headers.indexOf(statusColumn)] === statusFilter)
-      : rows;
+  const statusIdx = statusColumn ? headers.indexOf(statusColumn) : -1;
+  const filteredRows = statusIdx !== -1 && statusFilter !== "__all__" ? rows.filter((r) => r[statusIdx] === statusFilter) : rows;
 
   return (
     <div className="card rounded-2xl p-5">
@@ -362,7 +359,7 @@ export default function LeadsSheetPanel({
           </p>
         </div>
         <div className="flex gap-2">
-          {statusColumn && statusValues.length > 0 && (
+          {statusIdx !== -1 && statusValues.length > 0 && (
             <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="px-3 py-2 rounded-lg text-xs font-bold outline-none" style={selectStyle}>
               <option value="__all__">All statuses ({rows.length})</option>
               {statusValues.map((v) => (
@@ -403,10 +400,10 @@ export default function LeadsSheetPanel({
             ))}
           </div>
 
-          <p className="text-xs mb-2" style={{ color: "var(--text-secondary)" }}>Outreach status column (your team's stage — e.g. "HIVE STATUS"; must be visible)</p>
+          <p className="text-xs mb-2" style={{ color: "var(--text-secondary)" }}>Outreach status column (your team's stage — e.g. "HIVE STATUS")</p>
           <select value={statusColumn ?? ""} onChange={(e) => setStatusColumn(e.target.value || null)} className="mb-3 px-3 py-2 rounded-lg text-xs font-bold outline-none" style={selectStyle}>
             <option value="">None</option>
-            {visibleColumns.map((h) => (
+            {allColumns.map((h) => (
               <option key={h} value={h}>
                 {h}
               </option>
@@ -443,7 +440,7 @@ export default function LeadsSheetPanel({
           )}
 
           <p className="text-xs mb-2 pt-3" style={{ color: "var(--text-secondary)", borderTop: "1px solid var(--border)" }}>
-            Result status column (did the deal actually close? — e.g. "Prospect Status"; optional, must be visible)
+            Result status column (did the deal actually close? — e.g. "Prospect Status"; optional)
           </p>
           <select
             value={resultStatusColumn ?? ""}
@@ -452,7 +449,7 @@ export default function LeadsSheetPanel({
             style={selectStyle}
           >
             <option value="">None</option>
-            {visibleColumns.map((h) => (
+            {allColumns.map((h) => (
               <option key={h} value={h}>
                 {h}
               </option>
@@ -498,7 +495,7 @@ export default function LeadsSheetPanel({
         </div>
       )}
 
-      {statusColumn && statusValues.length > 0 && (
+      {statusIdx !== -1 && statusValues.length > 0 && (
         <div className="flex flex-wrap gap-2 mb-3">
           {statusValues.map((v) => {
             const active = statusFilter === v;

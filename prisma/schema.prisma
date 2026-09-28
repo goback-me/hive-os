@@ -288,12 +288,18 @@ model Lead {
   contactedAt DateTime?
   closedAt    DateTime? // first time it reached WON, LOST, or DISQUALIFIED
 
+  // Soft delete — set when the lead's sheet row disappears (or the sheet is
+  // unassigned). Every read filters deletedAt: null; a row that reappears
+  // restores the same lead, notes and history intact.
+  deletedAt DateTime?
+
   createdAt DateTime @default(now())
   activity  LeadActivity[]
   notes     LeadNote[]
 
   @@index([clientId, createdAt])
   @@index([clientId, externalKey])
+  @@index([clientId, deletedAt])
 }
 
 // Free-text follow-up notes on an individual lead — separate from

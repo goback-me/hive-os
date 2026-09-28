@@ -50,11 +50,11 @@ export async function GET(req: NextRequest) {
   const { from, to } = resolveDateRange(preset);
   const createdAt = from || to ? { ...(from ? { gte: from } : {}), ...(to ? { lt: to } : {}) } : undefined;
 
-  const where = { clientId, ...(status ? { status: status as never } : {}), ...(createdAt ? { createdAt } : {}), ...campaignWhere, ...sheetStatusWhere };
+  const where = { clientId, deletedAt: null, ...(status ? { status: status as never } : {}), ...(createdAt ? { createdAt } : {}), ...campaignWhere, ...sheetStatusWhere };
   // Same filter minus `status`/`sheetStatus` — powers each tab's own count
   // regardless of which tab is currently selected.
-  const whereForStatusCounts = { clientId, ...(createdAt ? { createdAt } : {}), ...campaignWhere, ...sheetStatusWhere };
-  const whereForSheetStatusCounts = { clientId, ...(createdAt ? { createdAt } : {}), ...campaignWhere, ...(status ? { status: status as never } : {}) };
+  const whereForStatusCounts = { clientId, deletedAt: null, ...(createdAt ? { createdAt } : {}), ...campaignWhere, ...sheetStatusWhere };
+  const whereForSheetStatusCounts = { clientId, deletedAt: null, ...(createdAt ? { createdAt } : {}), ...campaignWhere, ...(status ? { status: status as never } : {}) };
 
   const [total, leads, statusGroups, sheetStatusGroups] = await Promise.all([
     prisma.lead.count({ where }),

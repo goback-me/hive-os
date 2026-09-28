@@ -42,7 +42,7 @@ export async function POST(req: NextRequest) {
 
     try {
       const summary = await syncLeadsFromSheet(clientId);
-      return NextResponse.json({ ok: true, synced: summary.created + summary.updated });
+      return NextResponse.json({ ok: true, synced: summary.leads });
     } catch (syncErr: any) {
       return NextResponse.json({ ok: true, syncError: syncErr.message ?? "Sync failed" });
     }

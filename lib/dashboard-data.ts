@@ -41,7 +41,7 @@ export async function getTopPerformingClients(limit = 5) {
       const [revenue, spend, leadCount] = await Promise.all([
         prisma.revenueMonthly.findFirst({ where: { clientId: client.id, month: monthStart } }),
         prisma.adSpendDaily.aggregate({ _sum: { spend: true }, where: { clientId: client.id, date: { gte: monthStart } } }),
-        prisma.lead.count({ where: { clientId: client.id, createdAt: { gte: monthStart } } }),
+        prisma.lead.count({ where: { clientId: client.id, deletedAt: null, createdAt: { gte: monthStart } } }),
       ]);
       const rev = Number(revenue?.amount ?? 0);
       const sp = Number(spend._sum.spend ?? 0);
@@ -76,7 +76,7 @@ export async function getAgencyDailySpend(days = 30, clientId?: string) {
 
 // Lead source breakdown
 export async function getLeadSourceBreakdown(clientId?: string) {
-  const leads = await prisma.lead.findMany({ where: clientId ? { clientId } : {}, select: { source: true } });
+  const leads = await prisma.lead.findMany({ where: { deletedAt: null, ...(clientId ? { clientId } : {}) }, select: { source: true } });
   const counts = new Map<string, number>();
   for (const l of leads) {
     const key = l.source ?? "unknown";
@@ -95,8 +95,8 @@ export async function getReportSummary(clientId?: string) {
   const where = clientId ? { clientId } : {};
 
   const [totalLeads, wonLeads, spendAgg] = await Promise.all([
-    prisma.lead.count({ where: { ...where, createdAt: { gte: monthStart } } }),
-    prisma.lead.count({ where: { ...where, status: "WON", createdAt: { gte: monthStart } } }),
+    prisma.lead.count({ where: { ...where, deletedAt: null, createdAt: { gte: monthStart } } }),
+    prisma.lead.count({ where: { ...where, deletedAt: null, status: "WON", createdAt: { gte: monthStart } } }),
     prisma.adSpendDaily.aggregate({ _sum: { spend: true }, where: { ...where, date: { gte: monthStart } } }),
   ]);
 
@@ -110,7 +110,7 @@ export async function getReportSummary(clientId?: string) {
 // Lead funnel counts by stage for a client
 export async function getLeadFunnel(clientId: string) {
   const statuses = ["NEW_LEAD", "CHASE_UP", "CLIENT_CONTACTED", "WON"] as const;
-  const counts = await Promise.all(statuses.map((status) => prisma.lead.count({ where: { clientId, status } })));
+  const counts = await Promise.all(statuses.map((status) => prisma.lead.count({ where: { clientId, deletedAt: null, status } })));
   return statuses.map((status, i) => ({ status, count: counts[i] }));
 }
 

@@ -36,8 +36,10 @@ export async function GET(req: NextRequest) {
     if (JSON.stringify(liveHeaders) !== JSON.stringify(sheet.allColumns)) {
       visibleColumns = sheet.visibleColumns.filter((c) => liveHeaders.includes(c));
       if (visibleColumns.length === 0) visibleColumns = liveHeaders;
-      statusColumn = statusColumn && visibleColumns.includes(statusColumn) ? statusColumn : null;
-      resultStatusColumn = resultStatusColumn && visibleColumns.includes(resultStatusColumn) ? resultStatusColumn : null;
+      // Only drop a status column if it's gone from the sheet entirely —
+      // hiding it from the table must never break status mapping.
+      statusColumn = statusColumn && liveHeaders.includes(statusColumn) ? statusColumn : null;
+      resultStatusColumn = resultStatusColumn && liveHeaders.includes(resultStatusColumn) ? resultStatusColumn : null;
       await prisma.clientSheet.update({
         where: { clientId },
         data: { allColumns: liveHeaders, visibleColumns, statusColumn, resultStatusColumn },
@@ -51,10 +53,12 @@ export async function GET(req: NextRequest) {
 
     function valueCounts(column: string | null): { values: string[]; counts: Record<string, number> } | null {
       if (!column) return null;
-      const colIdx = headers.indexOf(column);
+      // Read from the live sheet, not the visible subset — mapping works on
+      // a status column even when it's hidden from the table.
+      const colIdx = liveHeaders.indexOf(column);
       if (colIdx === -1) return null;
       const counts: Record<string, number> = {};
-      for (const r of rows) {
+      for (const r of liveRows) {
         const v = r[colIdx];
         if (!v) continue;
         counts[v] = (counts[v] ?? 0) + 1;

@@ -257,7 +257,7 @@ export default function LeadsPanel({
         if ("error" in result) throw new Error(`Sync failed: ${result.error}`);
         const { summary } = result;
         setLastSynced(new Date().toISOString());
-        setSyncMessage(`Synced ${summary.created + summary.updated} leads — ${summary.created} new, ${summary.updated} updated${summary.removed ? `, ${summary.removed} removed (no longer in sheet)` : ""}.`);
+        setSyncMessage(`Synced ${summary.leads} leads — ${summary.created} new, ${summary.updated} updated${summary.restored ? `, ${summary.restored} restored` : ""}${summary.removed ? `, ${summary.removed} removed (no longer in sheet)` : ""}.`);
         setPage(1);
         loadLeads();
         loadFunnel();

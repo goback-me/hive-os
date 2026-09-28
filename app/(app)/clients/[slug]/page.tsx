@@ -78,7 +78,7 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
     prisma.clientAward.findMany({ where: { clientId: client.id } }),
     // Same order as the Leads tab; skips blank sheet rows (no name/phone/email).
     prisma.lead.findMany({
-      where: { clientId: client.id, OR: [{ name: { not: "" } }, { phone: { not: "" } }, { email: { not: "" } }] },
+      where: { clientId: client.id, deletedAt: null, OR: [{ name: { not: "" } }, { phone: { not: "" } }, { email: { not: "" } }] },
       orderBy: { createdAt: "desc" },
       take: 5,
     }),

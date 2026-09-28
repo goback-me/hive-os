@@ -9,13 +9,17 @@ function normalizeHeader(h: string) {
   return h.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
-// Sheet headers are messy in practice (line breaks, trailing "?"/spaces) —
-// match by keyword rather than exact string. Returns the first header whose
-// normalized form contains ANY of the given keywords.
-function findColumn(headers: string[], keywords: string[]): number {
+// Sheet headers are messy in practice (line breaks, trailing "?"/spaces).
+// An exact normalized match always wins ("Name" beats "Campaign Name");
+// otherwise the first header that CONTAINS a keyword. `exclude` words veto a
+// header entirely, so "Campaign Name" / "Ad Name" can never be the lead's name.
+export function findColumn(headers: string[], keywords: string[], exclude: string[] = []): number {
   const normalized = headers.map(normalizeHeader);
+  const allowed = (h: string) => !exclude.some((x) => (x.includes(" ") ? h.includes(x) : h.split(" ").includes(x)));
+  const exact = normalized.findIndex((h) => allowed(h) && keywords.includes(h));
+  if (exact !== -1) return exact;
   for (const kw of keywords) {
-    const i = normalized.findIndex((h) => h.includes(kw));
+    const i = normalized.findIndex((h) => allowed(h) && h.includes(kw));
     if (i !== -1) return i;
   }
   return -1;
@@ -23,6 +27,24 @@ function findColumn(headers: string[], keywords: string[]): number {
 
 function normalizeIdentity(v: string) {
   return v.toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+export function normalizeEmail(v: string | null | undefined) {
+  return (v ?? "").trim().toLowerCase();
+}
+
+// Digits only, AU mobiles in international form: "0412 345 678",
+// "+61 412 345 678" and a Sheets number that lost its leading 0
+// (412345678) all become "61412345678".
+export function normalizePhone(v: string | null | undefined) {
+  const d = (v ?? "").replace(/\D/g, "");
+  if (/^04\d{8}$/.test(d)) return "61" + d.slice(1);
+  if (/^4\d{8}$/.test(d)) return "61" + d;
+  return d;
+}
+
+function normalizeName(v: string | null | undefined) {
+  return normalizeIdentity(v ?? "");
 }
 
 function parseMoney(v: string | undefined): number | null {
@@ -37,17 +59,15 @@ function parseDate(v: string | undefined): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-export type SyncSummary = { total: number; created: number; updated: number; removed: number };
+// total = sheet rows, leads = rows with an identity; updated only counts leads that actually changed.
+export type SyncSummary = { total: number; leads: number; created: number; updated: number; removed: number; restored: number };
 
-// Removes every synced lead (plus its history/notes) for a client — used when
-// the client's sheet is changed or removed, so leads from a sheet that's no
-// longer assigned never mix with the new one.
+// Soft-deletes every synced lead for a client — used when the client's sheet
+// is changed or removed, so leads from a sheet that's no longer assigned never
+// show alongside the new one. Notes/history stay, and a lead is restored if
+// its row turns up again.
 export async function clearClientLeads(clientId: string) {
-  await prisma.$transaction([
-    prisma.leadActivity.deleteMany({ where: { lead: { clientId } } }),
-    prisma.leadNote.deleteMany({ where: { lead: { clientId } } }),
-    prisma.lead.deleteMany({ where: { clientId } }),
-  ]);
+  await prisma.lead.updateMany({ where: { clientId, deletedAt: null }, data: { deletedAt: new Date() } });
 }
 
 // Pulls the client's assigned sheet (read-only, always) and upserts each row
@@ -70,6 +90,39 @@ export async function syncLeadsFromSheet(clientId: string): Promise<SyncSummary>
   }
 }
 
+const CHUNK = 200;
+function chunks<T>(arr: T[]): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += CHUNK) out.push(arr.slice(i, i + CHUNK));
+  return out;
+}
+
+type ExistingLead = Awaited<ReturnType<typeof prisma.lead.findMany>>[number];
+
+// Nothing to write if every synced field already matches — keeps a 5-minute
+// cron from rewriting thousands of identical rows.
+function leadChanged(existing: ExistingLead, data: Record<string, unknown>) {
+  for (const [k, v] of Object.entries(data)) {
+    const cur = (existing as Record<string, unknown>)[k];
+    if (k === "raw") {
+      if (JSON.stringify(cur ?? {}) !== JSON.stringify(v ?? {})) return true;
+    } else if (k === "value") {
+      if ((cur == null ? null : Number(cur)) !== (v == null ? null : Number(v))) return true;
+    } else if (cur instanceof Date || v instanceof Date) {
+      if ((cur as Date | null)?.getTime() !== (v as Date | null)?.getTime()) return true;
+    } else if ((cur ?? null) !== (v ?? null)) return true;
+  }
+  return false;
+}
+
+type PendingUpdate = {
+  lead: ExistingLead;
+  data: Record<string, unknown>;
+  statusFrom?: LeadStatusValue;
+  statusTo?: LeadStatusValue;
+  value: number | null;
+};
+
 async function runSync(clientId: string, sheet: NonNullable<Awaited<ReturnType<typeof prisma.clientSheet.findUnique>>>): Promise<SyncSummary> {
   const accessToken = await getValidAccessToken();
   const { headers, rows } = await getSheetValues(accessToken, sheet.spreadsheetId, sheet.sheetName);
@@ -79,35 +132,58 @@ async function runSync(clientId: string, sheet: NonNullable<Awaited<ReturnType<t
   const resultStatusMapping = (sheet.resultStatusMapping as Record<string, LeadStatusValue> | null) ?? {};
   const resultStatusColIdx = sheet.resultStatusColumn ? headers.indexOf(sheet.resultStatusColumn) : -1;
 
-  const nameIdx = findColumn(headers, ["name"]);
+  const nameIdx = findColumn(headers, ["name", "full name"], ["campaign", "ad", "adset", "ad set", "business"]);
   const phoneIdx = findColumn(headers, ["phone"]);
   const emailIdx = findColumn(headers, ["email"]);
-  const sourceIdx = findColumn(headers, ["source"]);
+  const sourceIdx = findColumn(headers, ["source"], ["utm"]);
   const campaignIdx = findColumn(headers, ["campaign"]);
   const adsetIdx = findColumn(headers, ["adset", "ad set"]);
   const revenueIdx = findColumn(headers, ["revenue generated", "revenue"]);
   const quoteIdx = findColumn(headers, ["quote value", "quote"]);
   const dateOptInIdx = findColumn(headers, ["date opt in", "opt in"]);
 
-  let created = 0;
-  let updated = 0;
-
-  // One query up front instead of a findFirst per row (slow at 1000+ rows).
-  // Rows created during this sync are added too, so a duplicate row later in
-  // the same sheet updates the lead instead of creating a second one.
+  // Every lead this client has ever had from a sheet, soft-deleted included —
+  // a row that reappears restores its old lead (notes + history intact)
+  // instead of creating a duplicate.
   const existingLeads = await prisma.lead.findMany({ where: { clientId, externalKey: { not: null } } });
-  const byKey = new Map(existingLeads.map((l) => [l.externalKey!, l]));
-  const seenKeys = new Set<string>();
+  const byEmail = new Map<string, ExistingLead>();
+  const byPhone = new Map<string, ExistingLead>();
+  const byName = new Map<string, ExistingLead>();
+  // Soft-deleted first so an active lead with the same identity overwrites it.
+  const ordered = [...existingLeads].sort((a, b) => Number(!!b.deletedAt) - Number(!!a.deletedAt));
+  for (const l of ordered) {
+    const e = normalizeEmail(l.email);
+    const p = normalizePhone(l.phone);
+    const n = normalizeName(l.name);
+    if (e) byEmail.set(e, l);
+    if (p) byPhone.set(p, l);
+    if (n) byName.set(n, l);
+  }
 
-  for (const row of rows) {
+  // Match order: email, then phone, then name. A lead already matched by one
+  // row can't be claimed by a different row via the weaker phone/name
+  // fallback; a duplicate row with the same email still lands on the same lead.
+  // ponytail: the name-only fallback can merge two different people with the
+  // same name when neither has a matching email/phone. Fine at our volumes.
+  const claimed = new Map<string, number>(); // leadId -> row index that claimed it
+  const pending = new Map<string, PendingUpdate>();
+  const creates = new Map<string, Record<string, unknown>>(); // externalKey -> data (dedupes identical rows)
+  let identifiedRows = 0;
+
+  rows.forEach((row, rowIdx) => {
     const name = nameIdx !== -1 ? row[nameIdx] : "";
     const phone = phoneIdx !== -1 ? row[phoneIdx] : "";
     const email = emailIdx !== -1 ? row[emailIdx] : "";
     // Every row needs SOME identity to match across syncs — skip fully blank rows.
-    const identitySource = email || phone || name;
-    if (!identitySource?.trim()) continue;
+    if (!(email || phone || name)?.trim()) return;
+    identifiedRows++;
     const externalKey = normalizeIdentity(`${email}|${phone}|${name}`);
-    seenKeys.add(externalKey);
+
+    const e = normalizeEmail(email);
+    const p = normalizePhone(phone);
+    const n = normalizeName(name);
+    const free = (l: ExistingLead | undefined) => (l && (!claimed.has(l.id) || claimed.get(l.id) === rowIdx) ? l : undefined);
+    const existing = (e && byEmail.get(e)) || free(p ? byPhone.get(p) : undefined) || free(n ? byName.get(n) : undefined) || undefined;
 
     const rawStatus = statusColIdx !== -1 ? row[statusColIdx] ?? "" : "";
     const baseMappedStatus: LeadStatusValue = LEAD_STATUSES.includes(statusMapping[rawStatus] as LeadStatusValue)
@@ -148,9 +224,8 @@ async function runSync(clientId: string, sheet: NonNullable<Awaited<ReturnType<t
       if (!mappedIdx.has(i) && h) raw[h] = row[i] ?? "";
     });
 
-    const existing = byKey.get(externalKey);
-
-    const baseData = {
+    const baseData: Record<string, unknown> = {
+      externalKey,
       name: name || null,
       phone: phone || null,
       email: email || null,
@@ -164,65 +239,70 @@ async function runSync(clientId: string, sheet: NonNullable<Awaited<ReturnType<t
       sheetStatus: rawResultStatus.trim() || rawStatus.trim() || null,
       value,
       raw,
-      lastSyncedAt: new Date(),
+      deletedAt: null,
     };
 
     if (existing) {
+      claimed.set(existing.id, rowIdx);
       // Respect a manual override — only apply the sheet's status (and the
       // stage timestamps that come with it) if nobody has manually touched
       // this lead's status yet.
+      const statusPatch = existing.statusManuallySetAt ? {} : { status: mappedStatus, ...stageTimestampPatch(existing, mappedStatus) };
       const statusChanging = !existing.statusManuallySetAt && mappedStatus !== existing.status;
-      const statusPatch = existing.statusManuallySetAt
-        ? {}
-        : { status: mappedStatus, ...stageTimestampPatch(existing, mappedStatus) };
-      byKey.set(
-        externalKey,
-        await prisma.lead.update({
-          where: { id: existing.id },
-          data: { ...baseData, ...statusPatch },
-        })
-      );
-      // A re-sync moving an existing lead to a new stage IS a real status
-      // transition worth a history entry — only the very first status a
-      // lead gets on creation (below) is routine ingestion, not a "change".
-      if (statusChanging) {
-        await prisma.leadActivity.create({
-          data: {
-            leadId: existing.id,
-            fromStatus: existing.status,
-            toStatus: mappedStatus,
-            value,
-            changedBy: "Sheet sync",
-          },
-        });
-      }
-      updated++;
+      pending.set(existing.id, {
+        lead: existing,
+        data: { ...baseData, ...statusPatch },
+        ...(statusChanging ? { statusFrom: existing.status, statusTo: mappedStatus } : {}),
+        value,
+      });
     } else {
       const emptyStages = { chaseUpAt: null, contactedAt: null, closedAt: null };
-      byKey.set(
-        externalKey,
-        await prisma.lead.create({
-          data: { clientId, externalKey, status: mappedStatus, ...stageTimestampPatch(emptyStages, mappedStatus), ...baseData },
-        })
-      );
-      created++;
+      creates.set(externalKey, { clientId, status: mappedStatus, ...stageTimestampPatch(emptyStages, mappedStatus), ...baseData });
     }
+  });
+
+  // The sheet is the source of truth: an active lead whose row is gone is
+  // soft-deleted. Leads without an externalKey (added outside the sheet) are
+  // never touched.
+  const activeLeads = existingLeads.filter((l) => !l.deletedAt);
+  const staleIds = activeLeads.filter((l) => !claimed.has(l.id)).map((l) => l.id);
+
+  // Safety guard — a renamed tab, a filter view or a bad paste can make the
+  // sheet look empty. Refuse (changing nothing) rather than wipe most of a
+  // client's leads.
+  if (activeLeads.length > 0 && (identifiedRows === 0 || (staleIds.length > 5 && staleIds.length > activeLeads.length * 0.2))) {
+    const removing = identifiedRows === 0 ? activeLeads.length : staleIds.length;
+    throw new Error(`Sync aborted: would remove ${removing} of ${activeLeads.length} leads — check the sheet/tab`);
   }
 
-  // The sheet is the source of truth: leads whose row was deleted (or whose
-  // name/phone/email was edited, which changes the key) are removed, so the
-  // Leads tab count always matches the sheet. Leads without an externalKey
-  // (added outside the sheet) are never touched.
-  const staleIds = existingLeads.filter((l) => !seenKeys.has(l.externalKey!)).map((l) => l.id);
-  if (staleIds.length) {
-    await prisma.$transaction([
-      prisma.leadActivity.deleteMany({ where: { leadId: { in: staleIds } } }),
-      prisma.leadNote.deleteMany({ where: { leadId: { in: staleIds } } }),
-      prisma.lead.deleteMany({ where: { id: { in: staleIds } } }),
-    ]);
-  }
+  const updates = Array.from(pending.values()).filter((u) => leadChanged(u.lead, u.data));
+  const restored = updates.filter((u) => u.lead.deletedAt).length;
+  const now = new Date();
 
-  return { total: rows.length, created, updated, removed: staleIds.length };
+  // All-or-nothing: a sync that fails halfway leaves the previous state intact.
+  await prisma.$transaction(
+    async (tx) => {
+      for (const batch of chunks(Array.from(creates.values()))) {
+        await tx.lead.createMany({ data: batch.map((d) => ({ ...d, lastSyncedAt: now })) as Prisma.LeadCreateManyInput[] });
+      }
+      for (const batch of chunks(updates)) {
+        await Promise.all(batch.map((u) => tx.lead.update({ where: { id: u.lead.id }, data: { ...u.data, lastSyncedAt: now } })));
+        // A re-sync moving an existing lead to a new stage IS a real status
+        // transition worth a history entry — only the very first status a
+        // lead gets on creation is routine ingestion, not a "change".
+        const activity = batch
+          .filter((u) => u.statusTo)
+          .map((u) => ({ leadId: u.lead.id, fromStatus: u.statusFrom!, toStatus: u.statusTo!, value: u.value, changedBy: "Sheet sync" }));
+        if (activity.length) await tx.leadActivity.createMany({ data: activity });
+      }
+      for (const batch of chunks(staleIds)) {
+        await tx.lead.updateMany({ where: { id: { in: batch } }, data: { deletedAt: now } });
+      }
+    },
+    { timeout: 120_000, maxWait: 10_000 }
+  );
+
+  return { total: rows.length, leads: identifiedRows, created: creates.size, updated: updates.length - restored, removed: staleIds.length, restored };
 }
 
 export type CampaignFunnelRow = {
@@ -260,7 +340,7 @@ async function getCampaignAvgDaysToConvert(
     SELECT COALESCE(NULLIF(TRIM(campaign), ''), 'Unattributed') AS campaign,
            AVG(EXTRACT(EPOCH FROM ("closedAt" - "createdAt")) / 86400) AS avg_days
     FROM "Lead"
-    WHERE "clientId" = ${clientId} AND status = 'WON' AND "closedAt" IS NOT NULL
+    WHERE "clientId" = ${clientId} AND "deletedAt" IS NULL AND status = 'WON' AND "closedAt" IS NOT NULL
       ${fromClause}
       ${toClause}
     GROUP BY 1
@@ -288,7 +368,7 @@ export async function getClientCampaignFunnel(
       : undefined;
 
   const [grouped, client, adCampaigns, avgDaysByCampaign] = await Promise.all([
-    prisma.lead.groupBy({ by: ["campaign", "status"], where: { clientId, ...(createdAt ? { createdAt } : {}) }, _count: true }),
+    prisma.lead.groupBy({ by: ["campaign", "status"], where: { clientId, deletedAt: null, ...(createdAt ? { createdAt } : {}) }, _count: true }),
     prisma.client.findUnique({ where: { id: clientId } }),
     prisma.adCampaign.findMany({ where: { clientId } }),
     getCampaignAvgDaysToConvert(clientId, dateRange),
@@ -363,6 +443,7 @@ async function bucketCounts(
     SELECT date_trunc(${granularity}, ${col}) AS bucket, COUNT(*)::bigint AS count
     FROM "Lead"
     WHERE "clientId" = ${clientId}
+      AND "deletedAt" IS NULL
       AND ${col} IS NOT NULL
       AND ${col} >= ${from}
       AND ${col} < ${to}
