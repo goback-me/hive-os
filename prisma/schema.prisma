@@ -332,6 +332,9 @@ model Lead {
   // page, etc.), keyed by header name — display-only, nothing computes on it.
   raw                 Json?
   statusManuallySetAt DateTime?
+  // What the sheet currently says, even while statusManuallySetAt locks
+  // `stage` — powers the "sheet says X" badge on locked leads.
+  sheetStage          LeadStage?
   lastSyncedAt        DateTime?
 
   // Soft delete — set when the lead's sheet row disappears (or the sheet is

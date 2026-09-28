@@ -71,10 +71,37 @@ Copy `.env.example` to `.env` and fill in:
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Google Cloud Console → Credentials |
 | `GOOGLE_REDIRECT_URI` | `https://portal.hivesocial.agency/api/google/callback` |
 | `TOKEN_ENCRYPTION_KEY` | Generate with `openssl rand -hex 32` — encrypts stored Google/Meta tokens at rest |
+| `CRON_SECRET` | Generate with `openssl rand -hex 32` — auth for the lead-sync cron (see below) |
 
 Also double check in the **Clerk dashboard** → User & Authentication →
 Restrictions: **"Allow sign-ups" must be OFF** — accounts are only ever
 created from Settings → Users & logins inside the app.
+
+## Automatic lead sync (n8n)
+
+Every client's Google Sheet is synced into the Leads tab by
+`GET /api/cron/sync`. It's public at the routing level — the
+`x-cron-secret` header (must equal `CRON_SECRET` in `.env`) is its only
+auth; anything else gets a 401.
+
+In n8n, create a workflow:
+
+1. **Schedule Trigger** — every 5 minutes.
+2. **HTTP Request** —
+   - Method: `GET`
+   - URL: `https://portal.hivesocial.agency/api/cron/sync`
+   - Headers: `x-cron-secret` = the `CRON_SECRET` value (store it as an n8n
+     credential — "Header Auth" — rather than pasting it into the node)
+   - Timeout: 300000 ms (clients sync one at a time; a big sheet takes a while)
+
+The response is JSON: `{ synced, failed, results: [{ client, ok, created,
+updated, removed, restored, error? }] }`. A failing client doesn't stop the
+others; its error also shows on that client's Leads tab (`lastSyncError`).
+Quick manual test from the VPS:
+
+```bash
+curl -s -H "x-cron-secret: $CRON_SECRET" https://portal.hivesocial.agency/api/cron/sync
+```
 
 ## Which repo/branch is production?
 

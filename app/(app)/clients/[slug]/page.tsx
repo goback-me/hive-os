@@ -11,6 +11,7 @@ import {
   createProgressNote,
   syncClientLeads,
   updateLeadStage,
+  unlockLeadStatus,
   addLeadNote,
   getOrCreateClientReferralLink,
 } from "@/lib/actions";
@@ -299,6 +300,7 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
       funnel={campaignFunnel}
       onSync={syncClientLeads}
       onUpdateStage={updateLeadStage}
+      onUnlockStage={unlockLeadStatus}
       onAddNote={addLeadNote}
     />
   );

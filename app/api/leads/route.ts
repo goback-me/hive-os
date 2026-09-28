@@ -95,6 +95,7 @@ export async function GET(req: NextRequest) {
       lostReason: l.lostReason,
       callAttempts: l.callAttempts,
       stageLocked: !!l.statusManuallySetAt,
+      sheetStage: l.sheetStage,
       sheetStatus: l.sheetStatus,
       value: l.value ? Number(l.value) : null,
       raw: l.raw,

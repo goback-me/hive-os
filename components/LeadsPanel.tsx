@@ -8,6 +8,7 @@ import {
   LEAD_STAGES,
   LOST_REASON_LABELS,
   STAGE_LABELS,
+  STAGE_RANK,
   STAGE_STYLE,
   TARGET_OPTIONS,
   encodeTarget,
@@ -34,6 +35,7 @@ type LeadRow = {
   lostReason: LostReasonValue | null;
   callAttempts: number | null;
   stageLocked: boolean;
+  sheetStage: LeadStageValue | null;
   sheetStatus: string | null;
   value: number | null;
   raw: Record<string, string> | null;
@@ -64,6 +66,11 @@ type JourneyEntry =
   | { kind: "note"; id: string; at: string; note: string; by: string }
   | { kind: "status"; id: string; at: string; from: LeadStageValue; to: LeadStageValue; value: number | null; by: string }
   | { kind: "event"; id: string; at: string; stage: LeadStageValue; source: "IMPORT" | "INFERRED" };
+
+// A locked lead whose sheet has moved further along than the manual stage.
+function sheetAhead(lead: Pick<LeadRow, "stage" | "stageLocked" | "sheetStage">) {
+  return lead.stageLocked && lead.sheetStage != null && STAGE_RANK[lead.sheetStage] > STAGE_RANK[lead.stage] ? lead.sheetStage : null;
+}
 
 // "Disqualified · Budget (after handover)" etc.
 function stageText(lead: Pick<LeadRow, "stage" | "dqReason" | "dqPhase" | "lostReason">) {
@@ -113,6 +120,7 @@ export default function LeadsPanel({
   funnel: initialFunnel,
   onSync,
   onUpdateStage,
+  onUnlockStage,
   onAddNote,
 }: {
   clientId: string;
@@ -124,6 +132,7 @@ export default function LeadsPanel({
   funnel: CampaignFunnelRow[];
   onSync: (clientId: string) => Promise<{ summary: SyncSummary } | { error: string }>;
   onUpdateStage: (leadId: string, target: string, value?: number) => Promise<void>;
+  onUnlockStage: (leadId: string) => Promise<{ ok: true } | { error: string }>;
   onAddNote: (leadId: string, formData: FormData) => Promise<void>;
 }) {
   const isCoach = viewerRole === "COACH";
@@ -323,6 +332,19 @@ export default function LeadsPanel({
         .then(() => refreshAfterChange(lead.id))
         .catch((e) => setError(e.message));
     });
+  }
+
+  const [unlocking, setUnlocking] = useState(false);
+  function unlockStage(leadId: string) {
+    setUnlocking(true);
+    setError(null);
+    onUnlockStage(leadId)
+      .then((result) => {
+        if ("error" in result) throw new Error(result.error);
+        refreshAfterChange(leadId);
+      })
+      .catch((e) => setError(e.message))
+      .finally(() => setUnlocking(false));
   }
 
   function openDetail(leadId: string) {
@@ -615,6 +637,7 @@ export default function LeadsPanel({
                               {stageText(lead)}
                             </span>
                           )}
+                          {sheetAhead(lead) && <SheetSaysBadge stage={sheetAhead(lead)!} />}
                         </td>
                         <td className="py-2 pr-4 whitespace-nowrap" style={{ color: "var(--text-primary)" }}>
                           {lead.value != null ? `$${lead.value.toLocaleString()}` : "—"}
@@ -698,6 +721,19 @@ export default function LeadsPanel({
                     <span className="material-symbols-outlined text-[12px]">lock</span>
                     Set manually
                   </span>
+                )}
+                {sheetAhead(detailLead) && <SheetSaysBadge stage={sheetAhead(detailLead)!} />}
+                {isCoach && detailLead.stageLocked && (
+                  <button
+                    onClick={() => unlockStage(detailLead.id)}
+                    disabled={unlocking}
+                    className="px-2.5 py-1 rounded-full text-xs font-bold flex items-center gap-1 disabled:opacity-50"
+                    style={{ border: "1px solid var(--border)", color: "var(--primary)" }}
+                    title="Clear the manual stage and follow the sheet again"
+                  >
+                    <span className="material-symbols-outlined text-[12px]">lock_open</span>
+                    {unlocking ? "Unlocking…" : "Unlock (follow sheet)"}
+                  </button>
                 )}
                 {detailLead.callAttempts != null && (
                   <span className="text-xs" style={{ color: "var(--text-secondary)" }}>{detailLead.callAttempts} call attempt{detailLead.callAttempts === 1 ? "" : "s"}</span>
@@ -859,6 +895,18 @@ export default function LeadsPanel({
         </div>
       )}
     </div>
+  );
+}
+
+function SheetSaysBadge({ stage }: { stage: LeadStageValue }) {
+  return (
+    <span
+      className="ml-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold whitespace-nowrap"
+      style={{ border: `1px dashed ${STAGE_STYLE[stage].color}`, color: STAGE_STYLE[stage].color }}
+      title="This lead's stage was set manually; the sheet has since moved further along"
+    >
+      sheet says {STAGE_LABELS[stage]}
+    </span>
   );
 }
 

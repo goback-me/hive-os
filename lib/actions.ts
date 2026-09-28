@@ -241,6 +241,25 @@ export async function updateLeadStage(leadId: string, target: string, value?: nu
   revalidatePath(`/clients`);
 }
 
+// Hands a manually-set lead back to the sheet: clears the lock, then re-syncs
+// so the sheet's current stage (with its events) applies straight away —
+// the same code path as any other sync. Returns the error instead of
+// throwing, like syncClientLeads.
+export async function unlockLeadStatus(leadId: string): Promise<{ ok: true } | { error: string }> {
+  await requireCoach();
+  const lead = await prisma.lead.findUnique({ where: { id: leadId }, select: { clientId: true, deletedAt: true } });
+  if (!lead || lead.deletedAt) return { error: "Lead not found" };
+
+  await prisma.lead.update({ where: { id: leadId }, data: { statusManuallySetAt: null } });
+  try {
+    await syncLeadsFromSheet(lead.clientId);
+  } catch (err) {
+    return { error: `Unlocked, but re-applying the sheet failed: ${err instanceof Error ? err.message : "sync failed"}` };
+  }
+  revalidatePath(`/clients`);
+  return { ok: true };
+}
+
 // A coach or the lead's own client can leave a follow-up note — same
 // access rule as ProgressNote, just scoped to one lead instead of the client.
 export async function addLeadNote(leadId: string, formData: FormData) {

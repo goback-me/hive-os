@@ -276,6 +276,7 @@ async function runSync(
 
     const baseData: Record<string, unknown> = {
       externalKey,
+      sheetStage: final.stage,
       name: name || null,
       phone: phone || null,
       email: email || null,
