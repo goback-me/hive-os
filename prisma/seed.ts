@@ -1,5 +1,4 @@
 import { prisma } from "../lib/prisma";
-import { computeNeedsAction } from "../lib/needs-action";
 
 // Seeds shared, global CONFIGURATION only (onboarding checklist steps,
 // playbook modules/lessons, award tiers) — every block below is guarded by
@@ -44,10 +43,6 @@ async function main() {
     await prisma.awardTier.create({ data: { name: "$200K", subtitle: "Sovereign", thresholdRevenue: 200000, order: 2 } });
   }
 
-  // Recomputes the NeedsActionItem cache off whatever real clients actually
-  // exist — safe to run every time, this only ever reads/derives, never
-  // injects fake data.
-  await computeNeedsAction();
   console.log("Seeded global config (onboarding steps, playbook modules, award tiers) — no client data touched.");
 }
 

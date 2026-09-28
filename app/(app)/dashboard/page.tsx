@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { getDashboardKpis } from "@/lib/needs-action";
+import { getDashboardKpis, getNeedsAction } from "@/lib/needs-action";
 import { getRevenueTrend } from "@/lib/dashboard-data";
 import { requireUser } from "@/lib/auth";
 import { redirect } from "next/navigation";
@@ -38,14 +38,7 @@ export default async function DashboardPage() {
 
   const kpis = await getDashboardKpis();
   const trend = await getRevenueTrend(12);
-  const allItems = await prisma.needsActionItem.findMany({
-    // Belt-and-suspenders: computeNeedsAction only ever generates rows for
-    // non-archived clients, but this guarantees a client archived since the
-    // last recompute can't still show up here in the meantime.
-    where: { client: { archivedAt: null } },
-    orderBy: [{ severity: "asc" }, { computedAt: "desc" }],
-    include: { client: { select: { slug: true } } },
-  });
+  const allItems = await getNeedsAction();
   // One card per client — their most urgent item (list is already sorted by urgency).
   const seenClients = new Set<string>();
   const items = allItems.filter((i) => !seenClients.has(i.clientId) && seenClients.add(i.clientId)).slice(0, 8);
@@ -90,7 +83,7 @@ export default async function DashboardPage() {
           {items.map((item) => {
             const s = SEVERITY_STYLE[item.severity] ?? SEVERITY_STYLE.muted;
             return (
-              <Link key={item.id} href={`/clients/${item.client.slug}`} className="card rounded-xl p-3 flex items-center gap-3">
+              <Link key={item.id} href={`/clients/${item.clientSlug}`} className="card rounded-xl p-3 flex items-center gap-3">
                 <span className="icon-chip w-8 h-8" style={{ background: s.bg }}>
                   <span className="material-symbols-outlined text-[16px]" style={{ color: s.color }}>{s.icon}</span>
                 </span>

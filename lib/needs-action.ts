@@ -1,3 +1,4 @@
+import { unstable_cache } from "next/cache";
 import { prisma } from "./prisma";
 
 const UPCOMING_SESSION_WINDOW_DAYS = 3;
@@ -6,30 +7,62 @@ const NO_CONTACT_DAYS = 14;
 // they drive different checks (contract renewal window, contact-log gap).
 const RENEWAL_WINDOW_DAYS = 14;
 const NO_CALL_DAYS = 10;
+// The cron syncs every 5 min, so an hour without a good sync means it's broken.
+const SYNC_STALE_MS = 60 * 60 * 1000;
+
+export type NeedsActionItem = {
+  id: string;
+  clientId: string;
+  clientSlug: string;
+  type: string;
+  severity: "danger" | "success" | "muted";
+  title: string;
+  description: string;
+  amount?: number;
+  daysDelta?: number;
+};
+
+const SEVERITY_ORDER: Record<NeedsActionItem["severity"], number> = { danger: 0, muted: 1, success: 2 };
 
 function daysBetween(a: Date, b: Date) {
   return Math.round((a.getTime() - b.getTime()) / (1000 * 60 * 60 * 24));
 }
 
-// Wipes and rebuilds the NeedsActionItem cache table. Merges the original coaching app's
-// session/onboarding-based checks with Hive OS's contract/contact-log
-// checks — both feed the same table and the same dashboard "Needs Action"
-// list, since a client can trip either agency's rules.
-export async function computeNeedsAction() {
+// Computed on read (no cache table) — merges the original coaching app's
+// session/onboarding checks with Hive OS's contract/contact-log/lead-sync
+// checks, since a client can trip either set of rules. Most urgent first.
+// ponytail: a few queries per client, sequential — fine for tens of clients
+// behind the 5-min cache below; batch per rule if the client list grows large.
+export async function computeNeedsAction(): Promise<NeedsActionItem[]> {
   const now = new Date();
-  const clients = await prisma.client.findMany({ where: { isActive: true, archivedAt: null } });
+  const clients = await prisma.client.findMany({ where: { isActive: true, archivedAt: null }, include: { clientSheet: true } });
 
-  const items: {
-    clientId: string;
-    type: string;
-    severity: string;
-    title: string;
-    description: string;
-    amount?: number;
-    daysDelta?: number;
-  }[] = [];
+  const items: Omit<NeedsActionItem, "id" | "clientSlug">[] = [];
 
   for (const client of clients) {
+    // ── Lead sheet sync health ─────────────────────────────────────────
+    const sheet = client.clientSheet;
+    if (sheet) {
+      if (sheet.lastSyncError) {
+        items.push({
+          clientId: client.id,
+          type: "sync_failing",
+          severity: "danger",
+          title: client.name,
+          description: `Lead sync failing: ${sheet.lastSyncError.slice(0, 120)}`,
+        });
+      } else if (!sheet.lastSyncedAt || now.getTime() - sheet.lastSyncedAt.getTime() > SYNC_STALE_MS) {
+        const hours = sheet.lastSyncedAt ? Math.floor((now.getTime() - sheet.lastSyncedAt.getTime()) / 3600000) : null;
+        items.push({
+          clientId: client.id,
+          type: "sync_stale",
+          severity: "danger",
+          title: client.name,
+          description: hours == null ? "Lead sheet has never synced" : `Leads not synced in ${hours}h — check the cron`,
+        });
+      }
+    }
+
     const overduePayments = await prisma.payment.findMany({
       where: { clientId: client.id, status: { in: ["PENDING", "OVERDUE"] }, dueDate: { lt: now } },
     });
@@ -164,23 +197,14 @@ export async function computeNeedsAction() {
     }
   }
 
-  await prisma.$transaction([
-    prisma.needsActionItem.deleteMany({}),
-    prisma.needsActionItem.createMany({
-      data: items.map((i) => ({
-        clientId: i.clientId,
-        type: i.type,
-        severity: i.severity,
-        title: i.title,
-        description: i.description,
-        amount: i.amount,
-        daysDelta: i.daysDelta,
-      })),
-    }),
-  ]);
-
-  return items.length;
+  const slugById = new Map(clients.map((c) => [c.id, c.slug]));
+  return items
+    .map((i, n) => ({ ...i, id: `${i.clientId}:${i.type}:${n}`, clientSlug: slugById.get(i.clientId)! }))
+    .sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity]);
 }
+
+// Dashboard read path — recomputed at most every 5 minutes.
+export const getNeedsAction = unstable_cache(computeNeedsAction, ["needs-action"], { revalidate: 300 });
 
 // Main dashboard page.tsx (unchanged UI) destructures revenueThisMonth/
 // activeClients/totalClients/sessionsThisMonth from this — those four keep

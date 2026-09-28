@@ -491,7 +491,6 @@ export async function deleteClientPermanently(clientId: string) {
     prisma.session.deleteMany({ where: { clientId } }),
     prisma.progressNote.deleteMany({ where: { clientId } }),
     prisma.payment.deleteMany({ where: { clientId } }),
-    prisma.needsActionItem.deleteMany({ where: { clientId } }),
     prisma.task.deleteMany({ where: { clientId } }),
     prisma.user.deleteMany({ where: { clientId } }),
     // A referral is its own record (a prospect, not this client's data) —
@@ -649,6 +648,3 @@ export async function updateSessionStatus(id: string, status: string) {
   revalidatePath("/sessions");
   revalidatePath("/clients");
 }
-
-// Swarm tracking integration removed along with the client-page Tracking
-// tab. lib/swarm-config.ts is no longer imported anywhere in this app.

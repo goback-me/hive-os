@@ -68,7 +68,6 @@ const LEAD_SOURCES = ["Facebook Ads", "Instagram Ads", "Google Search", "Referra
 const LEAD_STAGES = ["WON", "CONSULT_BOOKED", "CONTACTED", "CHASE_UP", "NEW_LEAD"] as const;
 
 async function wipe(clientId: string, keepLeads: boolean) {
-  await prisma.needsActionItem.deleteMany({ where: { clientId } });
   if (!keepLeads) {
     await prisma.leadActivity.deleteMany({ where: { lead: { clientId } } });
     await prisma.leadStageEvent.deleteMany({ where: { lead: { clientId } } });
@@ -203,10 +202,7 @@ async function main() {
     data: { archivedAt: now },
   });
 
-  const items = await computeNeedsAction();
-  // Dashboard sorts Needs Action by severity, then newest computedAt — bumping
-  // Jake's rows makes him the first card.
-  await prisma.needsActionItem.updateMany({ where: { clientId: jake.id }, data: { computedAt: new Date(now.getTime() + 60000) } });
+  const items = (await computeNeedsAction()).length;
   const lifetime = JAKE_REVENUE.reduce((a, b) => a + b, 0);
   console.log(`Demo data ready: ${CLIENTS.length + 1} active clients, ${items} needs-action items, ${archived.count} other clients archived.`);
   console.log(`Jake: $${JAKE_REVENUE.at(-1)!.toLocaleString()} this month, $${lifetime.toLocaleString()} lifetime, $11,860 ad spend.`);

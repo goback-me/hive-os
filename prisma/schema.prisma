@@ -542,7 +542,6 @@ model Client {
   sessions          Session[]
   progressNotes     ProgressNote[]
   payments          Payment[]
-  needsActionItems  NeedsActionItem[]
   tasks             Task[]
   onboardingSteps   ClientOnboardingStep[]
   lessonProgress    ClientLessonProgress[]
@@ -610,21 +609,3 @@ model Payment {
   @@index([status, dueDate])
 }
 
-// Cached rules-engine output — merged the original coaching app (session/onboarding based)
-// and Hive OS (contract/contact-log based) checks feed the same table.
-// `amount` / `daysDelta` are Hive OS additions, left nullable so the original coaching app's
-// checks (which don't have a dollar figure) can omit them.
-model NeedsActionItem {
-  id          String   @id @default(cuid())
-  clientId    String
-  client      Client   @relation(fields: [clientId], references: [id])
-  type        String
-  severity    String
-  title       String
-  description String
-  amount      Decimal? @db.Decimal(10, 2)
-  daysDelta   Int?
-  computedAt  DateTime @default(now())
-
-  @@index([computedAt])
-}
