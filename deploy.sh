@@ -79,6 +79,12 @@ echo "→ Applying database migrations..."
 docker compose run --rm --no-deps -T app npx prisma migrate deploy
 echo "  ...migrations applied"
 
+# Freeze Snapshot KPIs for any closed month not frozen yet (idempotent —
+# only the first run after this feature does real work). Never blocks a
+# deploy: the 5-min cron freezes recent months on its own anyway.
+echo "→ Backfilling monthly KPIs..."
+docker compose run --rm --no-deps -T app npm run --silent db:backfill-kpis || echo "  ...backfill had errors (see above) — rerun: docker compose run --rm app npm run db:backfill-kpis"
+
 echo "→ Starting app..."
 docker compose up -d
 

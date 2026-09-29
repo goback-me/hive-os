@@ -17,8 +17,10 @@ import {
   type LeadStageValue,
   type LostReasonValue,
 } from "@/lib/lead-status";
-import type { SyncSummary, ClientFunnel } from "@/lib/lead-sync";
+import type { SyncSummary } from "@/lib/lead-sync";
+import type { FunnelResponse } from "@/lib/funnel";
 import FunnelPanel from "@/components/FunnelPanel";
+import ProfitRoiPanel from "@/components/ProfitRoiPanel";
 import type { DateRangePreset } from "@/lib/date-range";
 import DateRangeDropdown from "@/components/DateRangeDropdown";
 import LeadTimelineChart, { type TimeSeriesPoint } from "@/components/LeadTimelineChart";
@@ -139,7 +141,7 @@ export default function LeadsPanel({
   const [activeSubTab, setActiveSubTab] = useState<"leads" | "campaigns">("leads");
 
   const [dateRange, setDateRange] = useState<DateRangePreset>("maximum");
-  const [funnel, setFunnel] = useState<ClientFunnel | null>(null);
+  const [funnel, setFunnel] = useState<FunnelResponse | null>(null);
   const [loadingFunnel, setLoadingFunnel] = useState(false);
   const [series, setSeries] = useState<TimeSeriesPoint[]>([]);
   const [loadingSeries, setLoadingSeries] = useState(false);
@@ -230,7 +232,7 @@ export default function LeadsPanel({
       .then((data) => {
         if (req !== funnelReq.current) return;
         if (data.error) throw new Error(data.error);
-        setFunnel(data.funnel);
+        setFunnel(data);
       })
       .catch((e) => req === funnelReq.current && setError(e.message))
       .finally(() => req === funnelReq.current && setLoadingFunnel(false));
@@ -448,6 +450,8 @@ export default function LeadsPanel({
 
       {activeSubTab === "campaigns" && (
         <div className="space-y-5">
+          <ProfitRoiPanel clientId={clientId} range={dateRange} isCoach={isCoach} />
+
           <div className="card rounded-2xl p-5">
             <div className="flex items-center justify-between mb-1">
               <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Lead activity over time</p>
@@ -456,7 +460,7 @@ export default function LeadsPanel({
             <LeadTimelineChart points={series} />
           </div>
 
-          <FunnelPanel funnel={funnel} loading={loadingFunnel} onViewCampaign={viewCampaignLeads} />
+          <FunnelPanel data={funnel} loading={loadingFunnel} isCoach={isCoach} onViewCampaign={viewCampaignLeads} />
         </div>
       )}
 

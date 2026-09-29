@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
-import { getClientStats } from "@/lib/client-stats";
+import { getClientStats, getReportVisibility, statsForViewer } from "@/lib/client-stats";
 import { DATE_RANGE_PRESETS, type DateRangePreset } from "@/lib/date-range";
 
-// Client Dashboard cards for a date range (components/DashboardStats.tsx).
+// Client Dashboard cards + the Leads tab's Profit / ROI section, for a date
+// range. Hidden fields are stripped for CLIENT users (statsForViewer).
 export async function GET(req: NextRequest) {
   const clientId = req.nextUrl.searchParams.get("clientId");
   if (!clientId) return NextResponse.json({ error: "clientId is required" }, { status: 400 });
@@ -15,5 +16,6 @@ export async function GET(req: NextRequest) {
 
   const param = req.nextUrl.searchParams.get("range");
   const preset: DateRangePreset = DATE_RANGE_PRESETS.includes(param as DateRangePreset) ? (param as DateRangePreset) : "this_month";
-  return NextResponse.json(await getClientStats(clientId, preset));
+  const [stats, visibility] = await Promise.all([getClientStats(clientId, preset), getReportVisibility(clientId)]);
+  return NextResponse.json(statsForViewer(stats, user.role, visibility));
 }

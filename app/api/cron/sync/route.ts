@@ -2,6 +2,7 @@ import { timingSafeEqual } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { syncLeadsFromSheet } from "@/lib/lead-sync";
+import { freezeDueMonths } from "@/lib/kpi";
 
 // Called by n8n every 5 min (see DEPLOYMENT.md). Public in middleware.ts —
 // the x-cron-secret header is the only auth. Clients sync one at a time
@@ -38,5 +39,20 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  return NextResponse.json({ synced: results.filter((r) => r.ok).length, failed: results.filter((r) => !r.ok).length, results });
+  // Month-end freeze: once a month is 3 days past its end, its Snapshot KPIs
+  // are stored in MonthlyKpi and never recomputed. Only the last couple of
+  // months are checked here (cheap every 5 min); older ones = the backfill
+  // script. A failure (e.g. Meta down) just retries on the next run.
+  const frozen: { client: string; months?: string[]; error?: string }[] = [];
+  const clients = await prisma.client.findMany({ where: { archivedAt: null }, select: { id: true, slug: true } });
+  for (const c of clients) {
+    try {
+      const months = await freezeDueMonths(c.id, { lookback: 2 });
+      if (months.length) frozen.push({ client: c.slug, months });
+    } catch (err) {
+      frozen.push({ client: c.slug, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  return NextResponse.json({ synced: results.filter((r) => r.ok).length, failed: results.filter((r) => !r.ok).length, results, frozen });
 }

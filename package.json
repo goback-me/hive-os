@@ -9,6 +9,7 @@
     "db:seed": "tsx prisma/seed.ts",
     "db:demo": "tsx prisma/demo-seed.ts",
     "db:studio": "prisma studio",
+    "db:backfill-kpis": "tsx prisma/backfill-kpis.ts",
     "create-admin": "tsx prisma/create-admin.ts"
   },
   "dependencies": {

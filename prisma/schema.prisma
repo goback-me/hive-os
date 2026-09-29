@@ -496,6 +496,26 @@ model RevenueMonthly {
   @@unique([clientId, month])
 }
 
+// ── Snapshot KPIs, frozen per Sydney calendar month (see lib/kpi.ts) ─────
+// A row exists once a month has ended and been frozen (month-end freeze in
+// the cron sync, or the backfill script) — later sheet edits never rewrite a
+// closed month. The current month is always computed live, never stored.
+model MonthlyKpi {
+  id             String   @id @default(cuid())
+  clientId       String
+  client         Client   @relation(fields: [clientId], references: [id])
+  month          String // "2026-09" — Sydney calendar month
+  leads          Int
+  liveTransfers  Int
+  consultsBooked Int
+  quotes         Int
+  spend          Decimal? @db.Decimal(10, 2) // null = no dated spend source for that month
+  spendSource    String? // "meta" | "daily"
+  frozenAt       DateTime @default(now())
+
+  @@unique([clientId, month])
+}
+
 // Auth lives in Clerk — this table is a read-model mirror of the account
 // (kept in sync by the Clerk webhook, see app/api/webhooks/clerk/route.ts).
 // The source of truth for role/clientId at request time is Clerk's
@@ -597,7 +617,14 @@ model Client {
   claritySlug      String? // Microsoft Clarity project slug
   stripeCustomerId String?
 
+  // What a CLIENT login may see in their own reports — {showProfit,
+  // showCostMetrics, showDqBreakdown, showFunnel}; null/missing keys = the
+  // defaults in lib/report-visibility.ts. Enforced server-side: hidden data is
+  // never sent to a CLIENT. Coaches always see everything.
+  reportVisibility Json?
+
   contracts      Contract[]
+  monthlyKpis    MonthlyKpi[]
   contactLogs    ContactLog[]
   adSpendDaily   AdSpendDaily[]
   revenueMonthly RevenueMonthly[]

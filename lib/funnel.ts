@@ -14,6 +14,7 @@ import {
   type LeadStageValue,
   type LostReasonValue,
 } from "./lead-status";
+import type { ReportVisibility } from "./report-visibility";
 
 export type FunnelLead = {
   campaign: string;
@@ -206,4 +207,41 @@ export function biggestDrop(c: FunnelCounts): BiggestDrop | null {
   const worst = candidates.reduce((a, b) => (b.rate < a.rate ? b : a));
   const { denom: _denom, ...drop } = worst;
   return drop;
+}
+
+// ── What a viewer may receive ──────────────────────────────────────────────
+// Strips hidden sections server-side for CLIENT users (Client.reportVisibility):
+// the data is left out of the response, not just hidden in the UI.
+
+export type DqBreakdown = Pick<FunnelCounts, "dq" | "lost" | "dqByPhase" | "dqByReason" | "lostByReason">;
+export type FunnelResponse = {
+  funnel: { overall: FunnelGroup; campaigns: FunnelGroup[] } | null; // null = funnel hidden from this client
+  dq: DqBreakdown | null; // null = DQ/lost breakdown hidden from this client
+  visibility: ReportVisibility;
+};
+
+export function funnelForViewer(
+  f: { overall: FunnelGroup; campaigns: FunnelGroup[] },
+  role: "COACH" | "CLIENT",
+  visibility: ReportVisibility
+): FunnelResponse {
+  const client = role === "CLIENT";
+  const hideDq = client && !visibility.showDqBreakdown;
+  const hideCost = client && !visibility.showCostMetrics;
+  const { dq, lost, dqByPhase, dqByReason, lostByReason } = f.overall.counts;
+
+  const blank = emptyCounts();
+  const strip = (g: FunnelGroup): FunnelGroup => ({
+    ...g,
+    counts: hideDq ? { ...g.counts, dq: 0, lost: 0, dqByPhase: blank.dqByPhase, dqByReason: blank.dqByReason, lostByReason: blank.lostByReason } : g.counts,
+    ...(hideCost
+      ? { spend: null, spendSource: null, costPerLead: null, costPerContacted: null, costPerQualified: null, costPerConsult: null, costPerWon: null }
+      : {}),
+  });
+
+  return {
+    funnel: client && !visibility.showFunnel ? null : { overall: strip(f.overall), campaigns: f.campaigns.map(strip) },
+    dq: hideDq ? null : { dq, lost, dqByPhase, dqByReason, lostByReason },
+    visibility,
+  };
 }

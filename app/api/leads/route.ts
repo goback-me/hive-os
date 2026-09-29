@@ -60,7 +60,9 @@ export async function GET(req: NextRequest) {
     prisma.lead.count({ where }),
     prisma.lead.findMany({
       where,
-      orderBy: { createdAt: "desc" },
+      // id tiebreak: a sheet import stamps many rows with the same createdAt,
+      // and without it Postgres pages them in arbitrary order (dupes/skips).
+      orderBy: [{ createdAt: "desc" }, { id: "asc" }],
       skip: (page - 1) * pageSize,
       take: pageSize,
     }),

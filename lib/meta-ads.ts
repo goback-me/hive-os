@@ -152,6 +152,23 @@ const cachedInsights = unstable_cache(
   { revalidate: 300 }
 );
 
+// Account-wide spend for an inclusive day window, given as plain
+// "YYYY-MM-DD" in the ad account's own timezone — the Snapshot KPIs pass
+// Sydney calendar days directly, so no UTC conversion shifts the month edge.
+export async function getMetaAccountSpend(adAccountId: string, encryptedAccessToken: string, since: string, until: string): Promise<number> {
+  const accessToken = decryptToken(encryptedAccessToken);
+  const timeRange = encodeURIComponent(JSON.stringify({ since, until }));
+  const res = await fetch(
+    `https://graph.facebook.com/v21.0/${adAccountId}/insights?fields=spend&time_range=${timeRange}&access_token=${encodeURIComponent(accessToken)}`,
+    { cache: "no-store" }
+  );
+  const data = await res.json();
+  if (!res.ok) throw new Error(data?.error?.message ?? "Meta API request failed");
+  return (data.data ?? []).reduce((s: number, r: any) => s + Number(r.spend ?? 0), 0);
+}
+
+export const getCachedAccountSpend = unstable_cache(getMetaAccountSpend, ["meta-account-spend"], { revalidate: 300 });
+
 export function getCachedCampaignInsights(adAccountId: string, encryptedAccessToken: string, dateRange?: { from?: Date; to?: Date }) {
   const day = (d?: Date) => (d ? toMetaDate(d) : undefined);
   return cachedInsights(adAccountId, encryptedAccessToken, day(dateRange?.from), day(dateRange?.to));

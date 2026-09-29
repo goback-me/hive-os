@@ -14,13 +14,18 @@ import {
   unlockLeadStatus,
   addLeadNote,
   getOrCreateClientReferralLink,
+  saveReportVisibility,
 } from "@/lib/actions";
 import { requireClientAccess } from "@/lib/auth";
 import { checkAndGrantAwards } from "@/lib/awards";
 import { STAGE_LABELS, STAGE_STYLE } from "@/lib/lead-status";
 import { getMetaAllCampaigns } from "@/lib/meta-ads";
-import { getClientStats } from "@/lib/client-stats";
+import { getClientStats, statsForViewer } from "@/lib/client-stats";
+import { getSnapshot } from "@/lib/kpi";
+import { parseVisibility } from "@/lib/report-visibility";
 import DashboardStats from "@/components/DashboardStats";
+import SnapshotPanel from "@/components/SnapshotPanel";
+import ReportVisibilityCard from "@/components/ReportVisibilityCard";
 import LeadsPanel from "@/components/LeadsPanel";
 import ClientTabsShell from "@/components/ClientTabsShell";
 import OnboardingChecklist from "@/components/OnboardingChecklist";
@@ -46,8 +51,8 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
   // A client login gets bounced to /dashboard (which redirects to their own
   // slug) if they try to view anyone else's page. A coach can view any client.
   const viewer = await requireClientAccess(client.id);
-
-  const now = new Date();
+  const isCoach = viewer.role === "COACH";
+  const visibility = parseVisibility(client.reportVisibility);
 
   // Everything below is independent, so it all runs at once — the page used
   // to wait on each step (awards, then queries, then the funnel, then Meta)
@@ -55,7 +60,8 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
   // doesn't compute one here any more.
   const [
     ,
-    stats,
+    rawStats,
+    snapshot,
     referralLink,
     metaCampaigns,
     onboardingTemplates,
@@ -75,6 +81,8 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
     checkAndGrantAwards(client.id),
     // Dashboard cards' first paint (This month); the range picker refetches.
     getClientStats(client.id, "this_month"),
+    // Snapshot KPI cards (current Sydney month); the month picker refetches.
+    getSnapshot(client.id, null, viewer, visibility),
     // Lazily provisions a referral link for clients that existed before this
     // feature — new clients already get one at creation (see createClient).
     getOrCreateClientReferralLink(client.id, client.name),
@@ -104,7 +112,12 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
 
   const referrals = await prisma.referral.findMany({ where: { referralLinkId: referralLink.id }, orderBy: { createdAt: "desc" } });
 
+  // Hidden fields (profit, spend) never reach a CLIENT's browser.
+  const stats = statsForViewer(rawStats, viewer.role, visibility);
   const lifetimeRevenue = stats.lifetimeRevenue;
+  // Remount the cards when the coach flips a visibility toggle, so badges and
+  // the server-filtered card list follow the new settings straight away.
+  const visibilityKey = JSON.stringify(visibility);
 
   const earnedTierIds = new Set(clientAwards.map((a) => a.awardTierId));
   const nextTier = awardTiers.find((t) => !earnedTierIds.has(t.id) && t.thresholdRevenue);
@@ -112,7 +125,9 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
 
   const dashboardContent = (
     <div className="space-y-5">
-      <DashboardStats clientId={client.id} initial={stats} />
+      <DashboardStats key={`stats-${visibilityKey}`} clientId={client.id} initial={stats} isCoach={isCoach} />
+
+      <SnapshotPanel key={`snap-${visibilityKey}`} clientId={client.id} initial={snapshot} isCoach={isCoach} />
 
       <div className="grid grid-cols-3 gap-5">
         {/* Main column — the day-to-day, coaching-relevant activity */}
@@ -175,6 +190,8 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
               <DetailRow icon="calendar_today" label="Joined" value={client.joinedAt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })} />
             </dl>
           </div>
+
+          {isCoach && <ReportVisibilityCard clientId={client.id} initial={visibility} onSave={saveReportVisibility} />}
 
           <GoalsCard clientId={client.id} initialGoals={client.goals} onSave={saveClientGoals} />
 
@@ -317,7 +334,7 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
         tabs={[
           { key: "onboarding", label: "Onboarding", content: onboardingContent },
           { key: "dashboard", label: "Dashboard", content: dashboardContent },
-          ...(clientSheet || viewer.role === "COACH" ? [{ key: "leads", label: "Leads", content: leadsContent }] : []),
+          ...(clientSheet || isCoach ? [{ key: "leads", label: "Leads", content: leadsContent }] : []),
           { key: "gameplan", label: "Gameplan", content: gameplanContent },
           { key: "playbooks", label: "Playbooks", content: playbooksContent },
           { key: "ads", label: "Ads", content: adsContent },

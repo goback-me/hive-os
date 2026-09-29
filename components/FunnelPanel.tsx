@@ -1,9 +1,8 @@
 "use client";
 
 import { DQ_PHASES, DQ_PHASE_LABELS, DQ_REASONS, DQ_REASON_LABELS, LOST_REASONS, LOST_REASON_LABELS } from "@/lib/lead-status";
-import { DURATION_KEYS, DURATION_LABELS, biggestDrop, type FunnelCounts, type FunnelGroup } from "@/lib/funnel";
-
-type ClientFunnel = { overall: FunnelGroup; campaigns: FunnelGroup[] };
+import { DURATION_KEYS, DURATION_LABELS, biggestDrop, type DqBreakdown, type FunnelCounts, type FunnelResponse } from "@/lib/funnel";
+import HiddenBadge from "@/components/HiddenBadge";
 
 const fmtPct = (v: number | null) => (v == null ? "—" : `${Math.round(v)}%`);
 const fmtMoney = (v: number | null) => (v == null ? "—" : `$${v.toLocaleString("en-US", { maximumFractionDigits: v < 100 ? 2 : 0 })}`);
@@ -26,9 +25,21 @@ const STEPS: { key: keyof FunnelCounts; label: string }[] = [
   { key: "won", label: "Won" },
 ];
 
-export default function FunnelPanel({ funnel, loading, onViewCampaign }: { funnel: ClientFunnel | null; loading: boolean; onViewCampaign: (campaign: string) => void }) {
+// Sections a CLIENT isn't allowed to see arrive as null from the server
+// (funnelForViewer); a coach gets everything plus "hidden from client" badges.
+export default function FunnelPanel({
+  data,
+  loading,
+  isCoach,
+  onViewCampaign,
+}: {
+  data: FunnelResponse | null;
+  loading: boolean;
+  isCoach: boolean;
+  onViewCampaign: (campaign: string) => void;
+}) {
   // Not loaded yet — placeholder in the funnel's shape.
-  if (!funnel) {
+  if (!data) {
     return (
       <div className="card rounded-2xl p-5 space-y-3" role="status" aria-label="Loading funnel">
         <span className="skeleton h-4 w-56 block mb-4" />
@@ -41,6 +52,13 @@ export default function FunnelPanel({ funnel, loading, onViewCampaign }: { funne
       </div>
     );
   }
+  const { funnel, dq, visibility } = data;
+  const showCost = isCoach || visibility.showCostMetrics;
+  const funnelBadge = isCoach && !visibility.showFunnel ? <HiddenBadge reason="Funnel is off in Client view settings" /> : null;
+  const dqBadge = isCoach && !visibility.showDqBreakdown ? <HiddenBadge reason="DQ & lost breakdown is off in Client view settings" /> : null;
+
+  if (!funnel) return dq ? <DqSection dq={dq} badge={dqBadge} /> : null;
+
   const { overall, campaigns } = funnel;
   const c = overall.counts;
   const drop = biggestDrop(c);
@@ -58,7 +76,9 @@ export default function FunnelPanel({ funnel, loading, onViewCampaign }: { funne
       {/* Funnel bar with step conversion */}
       <div className="card rounded-2xl p-5">
         <div className="flex items-center justify-between mb-4">
-          <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Funnel (leads that opted in this period)</p>
+          <p className="text-sm font-semibold flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
+            Funnel (leads that opted in this period) {funnelBadge}
+          </p>
           {loading && <span className="text-xs" style={{ color: "var(--text-muted)" }}>Updating…</span>}
         </div>
         <div className="space-y-1.5">
@@ -92,8 +112,8 @@ export default function FunnelPanel({ funnel, loading, onViewCampaign }: { funne
           <Stat label="Overall conversion" value={fmtPct(overall.rates.overallConversion)} strong />
           <Stat label="Live transfer rate" value={fmtPct(overall.rates.liveTransferRate)} />
           <Stat label="No-shows" value={c.noShows.toLocaleString()} />
-          <Stat label="Lost" value={c.lost.toLocaleString()} />
-          <Stat label="Disqualified" value={c.dq.toLocaleString()} />
+          {dq && <Stat label="Lost" value={dq.lost.toLocaleString()} />}
+          {dq && <Stat label="Disqualified" value={dq.dq.toLocaleString()} />}
         </div>
       </div>
 
@@ -127,23 +147,19 @@ export default function FunnelPanel({ funnel, loading, onViewCampaign }: { funne
         </p>
       </div>
 
-      {/* DQ / lost breakdown */}
-      {(c.dq > 0 || c.lost > 0) && (
-        <div className="grid md:grid-cols-3 gap-5">
-          <Breakdown title="DQ by phase" total={c.dq} rows={[...DQ_PHASES, "UNKNOWN" as const].map((p) => ({ label: p === "UNKNOWN" ? "Phase missing" : DQ_PHASE_LABELS[p], n: c.dqByPhase[p] }))} />
-          <Breakdown title="DQ by reason" total={c.dq} rows={DQ_REASONS.map((r) => ({ label: DQ_REASON_LABELS[r], n: c.dqByReason[r] }))} />
-          <Breakdown title="Lost by reason" total={c.lost} rows={LOST_REASONS.map((r) => ({ label: LOST_REASON_LABELS[r], n: c.lostByReason[r] }))} />
-        </div>
-      )}
+      {dq && <DqSection dq={dq} badge={dqBadge} />}
 
       {/* Per campaign */}
       <div>
-        <p className="text-sm font-semibold mb-3" style={{ color: "var(--text-primary)" }}>{campaigns.length} campaigns</p>
+        <p className="text-sm font-semibold mb-3 flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
+          {campaigns.length} campaigns
+          {isCoach && !visibility.showCostMetrics && <HiddenBadge reason="Spend and cost columns are hidden (cost metrics off)" />}
+        </p>
         <div className="card rounded-2xl overflow-x-auto">
           <table className="w-full text-left text-sm min-w-[1100px]">
             <thead>
               <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                {["Campaign", "Leads", "Contacted", "Qualified", "Consults", "Won", "Contact %", "Show %", "Close %", "Overall %", "Spend", "CPL", "Cost/qualified", "Cost/consult", "Cost/won", ""].map((h) => (
+                {["Campaign", "Leads", "Contacted", "Qualified", "Consults", "Won", "Contact %", "Show %", "Close %", "Overall %", ...(showCost ? ["Spend", "CPL", "Cost/qualified", "Cost/consult", "Cost/won"] : []), ""].map((h) => (
                   <th key={h} className="py-2 px-3 text-xs font-bold whitespace-nowrap" style={{ color: "var(--text-secondary)" }}>{h}</th>
                 ))}
               </tr>
@@ -165,14 +181,18 @@ export default function FunnelPanel({ funnel, loading, onViewCampaign }: { funne
                     <Td>{fmtPct(row.rates.showRate)}</Td>
                     <Td>{fmtPct(row.rates.closeRate)}</Td>
                     <Td>{fmtPct(row.rates.overallConversion)}</Td>
-                    <Td>
-                      {fmtMoney(row.spend)}
-                      {row.spendSource && <span style={{ color: "var(--text-muted)" }}> ({row.spendSource})</span>}
-                    </Td>
-                    <Td>{fmtMoney(row.costPerLead)}</Td>
-                    <Td>{fmtMoney(row.costPerQualified)}</Td>
-                    <Td>{fmtMoney(row.costPerConsult)}</Td>
-                    <Td>{fmtMoney(row.costPerWon)}</Td>
+                    {showCost && (
+                      <>
+                        <Td>
+                          {fmtMoney(row.spend)}
+                          {row.spendSource && <span style={{ color: "var(--text-muted)" }}> ({row.spendSource})</span>}
+                        </Td>
+                        <Td>{fmtMoney(row.costPerLead)}</Td>
+                        <Td>{fmtMoney(row.costPerQualified)}</Td>
+                        <Td>{fmtMoney(row.costPerConsult)}</Td>
+                        <Td>{fmtMoney(row.costPerWon)}</Td>
+                      </>
+                    )}
                     <td className="py-2 px-3">
                       {!isAll && (
                         <button onClick={() => onViewCampaign(row.campaign)} className="text-xs font-semibold whitespace-nowrap" style={{ color: "var(--primary)" }}>
@@ -186,6 +206,20 @@ export default function FunnelPanel({ funnel, loading, onViewCampaign }: { funne
             </tbody>
           </table>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function DqSection({ dq, badge }: { dq: DqBreakdown; badge: React.ReactNode }) {
+  if (dq.dq === 0 && dq.lost === 0) return null;
+  return (
+    <div>
+      {badge && <div className="mb-2">{badge}</div>}
+      <div className="grid md:grid-cols-3 gap-5">
+        <Breakdown title="DQ by phase" total={dq.dq} rows={[...DQ_PHASES, "UNKNOWN" as const].map((p) => ({ label: p === "UNKNOWN" ? "Phase missing" : DQ_PHASE_LABELS[p], n: dq.dqByPhase[p] }))} />
+        <Breakdown title="DQ by reason" total={dq.dq} rows={DQ_REASONS.map((r) => ({ label: DQ_REASON_LABELS[r], n: dq.dqByReason[r] }))} />
+        <Breakdown title="Lost by reason" total={dq.lost} rows={LOST_REASONS.map((r) => ({ label: LOST_REASON_LABELS[r], n: dq.lostByReason[r] }))} />
       </div>
     </div>
   );

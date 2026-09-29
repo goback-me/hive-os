@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
 import { getClientFunnel } from "@/lib/lead-sync";
+import { getReportVisibility } from "@/lib/client-stats";
+import { funnelForViewer } from "@/lib/funnel";
 import { DATE_RANGE_PRESETS, resolveDateRange, type DateRangePreset } from "@/lib/date-range";
 
 export async function GET(req: NextRequest) {
@@ -17,6 +19,6 @@ export async function GET(req: NextRequest) {
     ? (presetParam as DateRangePreset)
     : "maximum";
 
-  const funnel = await getClientFunnel(clientId, resolveDateRange(preset));
-  return NextResponse.json({ funnel });
+  const [funnel, visibility] = await Promise.all([getClientFunnel(clientId, resolveDateRange(preset)), getReportVisibility(clientId)]);
+  return NextResponse.json(funnelForViewer(funnel, user.role, visibility));
 }

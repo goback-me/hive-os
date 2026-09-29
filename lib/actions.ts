@@ -7,6 +7,7 @@ import { requireCoach, requireClientAccess } from "@/lib/auth";
 import { getClerkAdminClient } from "@/lib/clerk-admin";
 import { syncLeadsFromSheet, type SyncSummary } from "@/lib/lead-sync";
 import { parseTarget, planStageEvents } from "@/lib/lead-status";
+import { parseVisibility, type ReportVisibility } from "@/lib/report-visibility";
 
 function slugify(name: string) {
   return name
@@ -286,6 +287,17 @@ export async function saveClientGoals(clientId: string, goals: string) {
   await requireClientAccess(clientId);
   await prisma.client.update({ where: { id: clientId }, data: { goals: goals.trim() || null } });
   revalidatePath(`/clients`);
+}
+
+// Coach-only: what this client's own login may see in their reports.
+export async function saveReportVisibility(clientId: string, flags: Partial<ReportVisibility>) {
+  await requireCoach();
+  const client = await prisma.client.findUnique({ where: { id: clientId }, select: { reportVisibility: true, slug: true } });
+  if (!client) throw new Error("Client not found");
+  const next = parseVisibility({ ...parseVisibility(client.reportVisibility), ...flags });
+  await prisma.client.update({ where: { id: clientId }, data: { reportVisibility: next } });
+  revalidatePath(`/clients/${client.slug}`);
+  return next;
 }
 
 // ── Playbooks / lessons ──────────────────────────────────────────────────
