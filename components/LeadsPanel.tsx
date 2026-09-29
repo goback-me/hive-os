@@ -24,6 +24,7 @@ import ProfitRoiPanel from "@/components/ProfitRoiPanel";
 import type { DateRangePreset } from "@/lib/date-range";
 import DateRangeDropdown from "@/components/DateRangeDropdown";
 import LeadTimelineChart, { type TimeSeriesPoint } from "@/components/LeadTimelineChart";
+import LeadWinsCard from "@/components/LeadWinsCard";
 
 type LeadRow = {
   id: string;
@@ -463,6 +464,8 @@ export default function LeadsPanel({
           <FunnelPanel data={funnel} loading={loadingFunnel} isCoach={isCoach} onViewCampaign={viewCampaignLeads} />
         </div>
       )}
+
+      {activeSubTab === "leads" && <LeadWinsCard clientId={clientId} reloadKey={reloadKey} />}
 
       {activeSubTab === "leads" && (
         <div className="card rounded-2xl p-5 overflow-x-auto">
