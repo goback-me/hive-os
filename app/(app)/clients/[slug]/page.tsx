@@ -22,6 +22,9 @@ import {
   logContact,
   saveWeeklyUpdate,
   getWeeklyDraft,
+  saveClientIntegrations,
+  sendSlackTest,
+  createManualClickUpTask,
 } from "@/lib/actions";
 import { requireClientAccess } from "@/lib/auth";
 import { checkAndGrantAwards } from "@/lib/awards";
@@ -53,6 +56,8 @@ import HoldNote from "@/components/HoldNote";
 import ClientAlertsBanner from "@/components/ClientAlertsBanner";
 import ContactLogPanel from "@/components/ContactLogPanel";
 import WeeklyUpdatesPanel from "@/components/WeeklyUpdatesPanel";
+import IntegrationsCard from "@/components/IntegrationsCard";
+import { parseSlackEvents } from "@/lib/slack";
 import { weekStart } from "@/lib/weekly";
 import { reportsOnHold } from "@/lib/report-hold";
 
@@ -241,6 +246,16 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
           )}
 
           {isCoach && <ReportVisibilityCard clientId={client.id} initial={visibility} onSave={saveReportVisibility} />}
+
+          {isCoach && (
+            <IntegrationsCard
+              clientId={client.id}
+              initial={{ slackChannelId: client.slackChannelId ?? "", slackEvents: parseSlackEvents(client.slackEvents), clickupListId: client.clickupListId ?? "" }}
+              onSave={saveClientIntegrations}
+              onTest={sendSlackTest}
+              onCreateTask={createManualClickUpTask}
+            />
+          )}
 
           <GoalsCard clientId={client.id} initialGoals={client.goals} onSave={saveClientGoals} />
 

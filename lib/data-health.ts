@@ -3,6 +3,7 @@ import { getReportingScope } from "./reporting-scope";
 import { getAdminGoogleConnection, getValidAccessToken } from "./google-sheets";
 import { getMetaTokenInfo } from "./meta-ads";
 import { overdueLeads } from "./reminders";
+import { syncAlertTasks } from "./clickup";
 import { DATE_OPT_IN_KEYWORDS, findColumn, findHeaderIndex } from "./sheet-parse";
 import type { AlertSeverity, DataAlertType } from "@prisma/client";
 import type { Diff } from "./reconcile";
@@ -143,7 +144,21 @@ export async function runHealthChecks(clientId: string, now = new Date()) {
     }
   }
 
+  // ── Integrations (failures never block anything — they show up here) ──
+  const [slackFails, clickupFails] = await Promise.all([
+    prisma.slackPostLog.findMany({ where: { clientId, status: "FAILED", createdAt: { gt: new Date(now.getTime() - DAY) } }, select: { error: true, kind: true } }),
+    prisma.clickUpTaskLog.findMany({ where: { clientId, status: "FAILED" }, select: { error: true, title: true } }),
+  ]);
+  if (slackFails.length) {
+    f.push({ type: "SLACK_FAILED", severity: "WARNING", title: `${plural(slackFails.length, "Slack post")} failed`, detail: slackFails[0].error ?? "", fixHint: 'Check the channel ID in Client Details → Integrations, invite the Hive bot to the channel, and "Send test message".', fixUrl: url.dashboard, count: slackFails.length });
+  }
+  if (clickupFails.length) {
+    f.push({ type: "CLICKUP_FAILED", severity: "WARNING", title: `${plural(clickupFails.length, "ClickUp task")} couldn't be created or closed`, detail: `${clickupFails[0].title}: ${clickupFails[0].error ?? ""}`, fixHint: "Check the ClickUp API key under Settings → Integrations and the client's ClickUp list.", fixUrl: url.dashboard, count: clickupFails.length });
+  }
+
   await saveFindings(clientId, f, now);
+  // A ClickUp task per serious problem / overdue client updates; closed when resolved.
+  await syncAlertTasks(clientId).catch((e) => console.error("ClickUp alert tasks failed:", e));
   return f;
 }
 

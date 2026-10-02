@@ -479,6 +479,8 @@ enum DataAlertType {
   WRITEBACK_FAILED
   CLIENT_UPDATE_OVERDUE
   RECONCILE_MISMATCH
+  SLACK_FAILED
+  CLICKUP_FAILED
 }
 
 enum AlertSeverity {
@@ -526,6 +528,52 @@ model SyncReconciliation {
   diffs       Json
   ok          Boolean
   createdAt   DateTime @default(now())
+
+  @@index([clientId, createdAt])
+}
+
+enum DeliveryStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+// Every Slack post (lib/slack.ts): events and digests are queued here and
+// sent by the cron, so a Slack outage never breaks a sync. dedupeKey makes
+// each post happen once — "sale:<leadId>", "digest:<clientId>:2026-10-02".
+model SlackPostLog {
+  id        String         @id @default(cuid())
+  clientId  String?
+  client    Client?        @relation(fields: [clientId], references: [id])
+  channel   String
+  kind      String // sale | live_transfer | weekly_update | client_digest | admin_digest | test
+  dedupeKey String         @unique
+  text      String
+  status    DeliveryStatus @default(PENDING)
+  attempts  Int            @default(0)
+  error     String?
+  createdAt DateTime       @default(now())
+  sentAt    DateTime?
+
+  @@index([status, createdAt])
+}
+
+// ClickUp tasks HQ created (lib/clickup.ts), deduped by key — "alert:<id>",
+// "review:<clientId>:<week>", "weekly:<clientId>:<week>" — so each is made
+// once, and closed when what raised it is resolved.
+model ClickUpTaskLog {
+  id        String         @id @default(cuid())
+  clientId  String
+  client    Client         @relation(fields: [clientId], references: [id])
+  kind      String // alert | chase_client | account_review | weekly_update | manual
+  dedupeKey String         @unique
+  title     String
+  taskId    String?
+  taskUrl   String?
+  status    DeliveryStatus @default(PENDING)
+  closedAt  DateTime?
+  error     String?
+  createdAt DateTime       @default(now())
 
   @@index([clientId, createdAt])
 }
@@ -803,7 +851,11 @@ model Client {
   logoUrl          String?
   metaAdAccountId  String? // "act_XXXXXXXXX" — not secret, safe to store plain
   metaAccessToken  String? // encrypted at rest (see lib/crypto.ts)
-  clickupListId    String? // ClickUp list to embed for this client's tasks
+  clickupListId    String? // ClickUp list for this client's tasks (lib/clickup.ts)
+  // Slack channel for this client's posts (lib/slack.ts), and which posts are
+  // on: {sales, liveTransfers, weeklyUpdates, dailyDigest} — missing = on.
+  slackChannelId   String?
+  slackEvents      Json?
   claritySlug      String? // Microsoft Clarity project slug
   stripeCustomerId String?
 
@@ -825,6 +877,8 @@ model Client {
   leadReminders  LeadReminder[]
   dataAlerts     DataAlert[]
   weeklyUpdates  WeeklyUpdate[]
+  slackPosts     SlackPostLog[]
+  clickupTasks   ClickUpTaskLog[]
   reconciliations SyncReconciliation[]
   clientSheet    ClientSheet?
   referralLink   ReferralLink?

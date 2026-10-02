@@ -69,7 +69,7 @@ export default async function SettingsPage() {
           </button>
         </form>
         <p className="text-xs mt-3" style={{ color: "var(--text-muted)" }}>
-          Note: saving these keys stores them for future syncing — the actual ClickUp/GHL sync jobs aren't wired up yet, this just gets the connection ready.
+          The ClickUp key + Team ID power the automatic tasks (data problems, chasing client updates, account reviews, weekly updates) — pick each client&apos;s list in its Client Details → Integrations. The CRM fields aren&apos;t used yet.
         </p>
       </section>
 

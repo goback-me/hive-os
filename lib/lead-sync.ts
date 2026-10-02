@@ -5,6 +5,7 @@ import { getAdminGoogleConnection, getDropdownOptions, getValidAccessToken, getS
 import { automationWrites, queueWrites, type CellWrite } from "@/lib/sheet-writeback";
 import { countValues, reconcile, type SideCounts } from "@/lib/reconcile";
 import { runHealthChecks } from "@/lib/data-health";
+import { kickSlack, queueLeadEvent } from "@/lib/slack";
 import { clampRange, getReportingScope, scopedSpend } from "@/lib/reporting-scope";
 import { classifyHive, classifyProspect, isPendingUpdate, parseMapping, resolveStatus } from "@/lib/status-classifier";
 import { NOTES_KEYWORDS, parseNotes, type ParsedNote } from "@/lib/notes-parser";
@@ -86,7 +87,7 @@ export async function syncLeadsFromSheet(clientId: string): Promise<SyncSummary>
 
   try {
     sheet = await refreshDropdownOptions(sheet);
-    const { summary, unmapped, automation, recon } = await runSync(clientId, sheet);
+    const { summary, unmapped, automation, recon, slackEvents } = await runSync(clientId, sheet);
     await prisma.clientSheet.update({
       where: { clientId },
       data: { lastSyncedAt: new Date(), lastSyncError: null, unmappedStatuses: unmapped },
@@ -97,6 +98,9 @@ export async function syncLeadsFromSheet(clientId: string): Promise<SyncSummary>
       for (const a of automation) await queueWrites(clientId, a.leadId, a.writes);
     }
     await saveReconciliation(clientId, recon);
+    // Queued only — a Slack problem never fails the sync.
+    for (const e of slackEvents) await queueLeadEvent(e.leadId, e.kind).catch((err) => console.error("Slack queue failed:", err));
+    if (slackEvents.length) kickSlack();
     return summary;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -227,7 +231,13 @@ function reasonFields(target: StageTarget & { stage: LeadStageValue }, dqPhase: 
 async function runSync(
   clientId: string,
   sheet: Sheet
-): Promise<{ summary: SyncSummary; unmapped: UnmappedStatuses; automation: { leadId: string; writes: CellWrite[] }[]; recon: ReconInput }> {
+): Promise<{
+  summary: SyncSummary;
+  unmapped: UnmappedStatuses;
+  automation: { leadId: string; writes: CellWrite[] }[];
+  recon: ReconInput;
+  slackEvents: { leadId: string; kind: "sale" | "live_transfer" }[];
+}> {
   const accessToken = await getValidAccessToken();
   const { headers, rows, cells } = await getSheetValues(accessToken, sheet.spreadsheetId, sheet.sheetName, { unformatted: true });
 
@@ -294,6 +304,7 @@ async function runSync(
   const claimed = new Map<string, number>(); // leadId -> row index that claimed it
   const pending = new Map<string, PendingUpdate>();
   const automation: { key: string; writes: CellWrite[] }[] = []; // key = lead id, or externalKey for a new lead
+  const slackEvents: { leadId: string; kind: "sale" | "live_transfer" }[] = [];
   // For reconciliation: every identified row as the sheet has it.
   const sheetRows: { hive: string; prospect: string; won: boolean; value: number | null }[] = [];
   const badOptIn: string[] = []; // lead id, or externalKey for a new lead
@@ -448,6 +459,10 @@ async function runSync(
         if (reasons.lostReason === "UNKNOWN" && existing.lostReason) reasons.lostReason = existing.lostReason;
         if (final.stage === "DISQUALIFIED" && existing.dqPhase) reasons.dqPhase = existing.dqPhase;
       }
+      // Slack events (lib/slack.ts): a sale (Won, or a Won lead getting its
+      // value) and a live transfer the sync just saw happen.
+      if (final.stage === "WON" && value != null && (existing.stage !== "WON" || existing.value == null)) slackEvents.push({ leadId: existing.id, kind: "sale" });
+      if (plan.events.some((e) => e.stage === "HANDOVER_LIVE" && e.kind !== "inferred")) slackEvents.push({ leadId: existing.id, kind: "live_transfer" });
       pending.set(existing.id, {
         lead: existing,
         data: { ...baseData, stage: final.stage, ...reasons },
@@ -560,6 +575,7 @@ async function runSync(
 
   const idOf = (key: string) => (creates.get(key)?.data.id as string | undefined) ?? key;
   return {
+    slackEvents,
     recon: {
       sheet: {
         rows: identifiedRows,

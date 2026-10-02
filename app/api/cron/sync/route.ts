@@ -6,6 +6,8 @@ import { freezeDueMonths } from "@/lib/kpi";
 import { processWriteBacks } from "@/lib/sheet-writeback";
 import { raiseReminders } from "@/lib/reminders";
 import { runHealthChecks } from "@/lib/data-health";
+import { runDailyJobs } from "@/lib/daily-jobs";
+import { deliverSlackPosts } from "@/lib/slack";
 
 // Called by n8n every 5 min (see DEPLOYMENT.md). Public in middleware.ts —
 // the x-cron-secret header is the only auth. Clients sync one at a time
@@ -68,5 +70,10 @@ export async function GET(req: NextRequest) {
   // 7-day "needs your update" reminders (deduped per lead, so every run is fine).
   const reminders = await raiseReminders().catch((err) => ({ error: err instanceof Error ? err.message : String(err) }));
 
-  return NextResponse.json({ synced: results.filter((r) => r.ok).length, failed: results.filter((r) => !r.ok).length, results, frozen, writeBack, reminders });
+  // From 8am Sydney, once a day: Slack digests + weekly ClickUp tasks. Then
+  // send whatever Slack posts are queued (events from the syncs above, too).
+  const daily = await runDailyJobs().catch((err) => ({ error: err instanceof Error ? err.message : String(err) }));
+  const slack = await deliverSlackPosts().catch((err) => ({ error: err instanceof Error ? err.message : String(err) }));
+
+  return NextResponse.json({ synced: results.filter((r) => r.ok).length, failed: results.filter((r) => !r.ok).length, results, frozen, writeBack, reminders, daily, slack });
 }

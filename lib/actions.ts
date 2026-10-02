@@ -12,6 +12,8 @@ import { kickWriteBacks, queueLeadChange } from "@/lib/sheet-writeback";
 import { rebuildHistory } from "@/lib/kpi";
 import { runHealthChecks } from "@/lib/data-health";
 import { draftWeeklyUpdate } from "@/lib/weekly";
+import { kickSlack, parseSlackEvents, queueLeadEvent, queueTestMessage, queueWeeklyUpdatePost } from "@/lib/slack";
+import { ensureTask } from "@/lib/clickup";
 import { sydneyLocalToDate } from "@/lib/sheet-parse";
 
 function slugify(name: string) {
@@ -248,6 +250,11 @@ export async function updateLeadStage(leadId: string, target: string, value?: nu
   ]);
   await queueLeadChange(leadId);
   kickWriteBacks();
+  // Slack (queued, never blocking): a sale once it has its value, a live transfer.
+  const after = value !== undefined ? value : lead.value == null ? null : Number(lead.value);
+  if (stage === "WON" && after != null) await queueLeadEvent(leadId, "sale").catch(() => {});
+  if (stage === "HANDOVER_LIVE") await queueLeadEvent(leadId, "live_transfer").catch(() => {});
+  if (stage === "WON" || stage === "HANDOVER_LIVE") kickSlack();
   revalidatePath(`/clients`);
 }
 
@@ -387,7 +394,10 @@ export async function saveWeeklyUpdate(clientId: string, input: { weekOf: string
   if (Number.isNaN(weekOf.getTime())) throw new Error("Invalid week");
   const data = { wins: input.wins.trim(), issues: input.issues.trim(), nextSteps: input.nextSteps.trim(), createdBy: user.name };
   if (!data.wins && !data.issues && !data.nextSteps) throw new Error("Write something first");
-  await prisma.weeklyUpdate.upsert({ where: { clientId_weekOf: { clientId, weekOf } }, create: { clientId, weekOf, ...data }, update: data });
+  const saved = await prisma.weeklyUpdate.upsert({ where: { clientId_weekOf: { clientId, weekOf } }, create: { clientId, weekOf, ...data }, update: data });
+  // Posted to the client's Slack channel the first time it's published.
+  await queueWeeklyUpdatePost(saved.id).catch(() => {});
+  kickSlack();
   revalidatePath(`/clients`);
 }
 
@@ -395,6 +405,51 @@ export async function saveWeeklyUpdate(clientId: string, input: { weekOf: string
 export async function getWeeklyDraft(clientId: string) {
   await requireCoach();
   return draftWeeklyUpdate(clientId);
+}
+
+// ── Slack + ClickUp per client (coach only) ─────────────────────────────
+
+export async function saveClientIntegrations(clientId: string, input: { slackChannelId: string; slackEvents: Record<string, boolean>; clickupListId: string }) {
+  await requireCoach();
+  await prisma.client.update({
+    where: { id: clientId },
+    data: {
+      slackChannelId: input.slackChannelId.trim() || null,
+      slackEvents: parseSlackEvents(input.slackEvents),
+      clickupListId: input.clickupListId.trim() || null,
+    },
+  });
+  revalidatePath(`/clients`);
+}
+
+// Returns the error instead of throwing so the coach sees Slack's reason.
+export async function sendSlackTest(clientId: string): Promise<{ ok: true } | { error: string }> {
+  await requireCoach();
+  try {
+    await queueTestMessage(clientId);
+    return { ok: true };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Couldn't post to Slack" };
+  }
+}
+
+export async function createManualClickUpTask(clientId: string, input: { title: string; description: string; due: string }): Promise<{ ok: true } | { error: string }> {
+  const user = await requireCoach();
+  const title = input.title.trim();
+  if (!title) return { error: "Give the task a title" };
+  const m = input.due.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const taskId = await ensureTask(clientId, {
+    kind: "manual",
+    dedupeKey: `manual:${clientId}:${Date.now()}`,
+    title,
+    description: `${input.description.trim()}
+
+_Created in Hive HQ by ${user.name}_`,
+    dueDate: m ? sydneyLocalToDate(Number(m[1]), Number(m[2]), Number(m[3]), 17) : null,
+  });
+  if (taskId) return { ok: true };
+  const failed = await prisma.clickUpTaskLog.findFirst({ where: { clientId, kind: "manual" }, orderBy: { createdAt: "desc" } });
+  return { error: failed?.error ?? "ClickUp isn't set up — add the API key (Settings → Integrations) and pick this client's list" };
 }
 
 // ── Playbooks / lessons ──────────────────────────────────────────────────
@@ -607,6 +662,8 @@ export async function deleteClientPermanently(clientId: string) {
     prisma.clientSheet.deleteMany({ where: { clientId } }),
     prisma.dataAlert.deleteMany({ where: { clientId } }),
     prisma.weeklyUpdate.deleteMany({ where: { clientId } }),
+    prisma.slackPostLog.deleteMany({ where: { clientId } }),
+    prisma.clickUpTaskLog.deleteMany({ where: { clientId } }),
     prisma.syncReconciliation.deleteMany({ where: { clientId } }),
     prisma.leadReminder.deleteMany({ where: { clientId } }),
     prisma.contract.deleteMany({ where: { clientId } }),
