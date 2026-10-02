@@ -26,7 +26,9 @@ const startOf = (key: string) => {
 // that was already Won when first imported has no real close time, so its
 // last dated note stands in, else its opt-in date. Needs the lead aliased `l`.
 // Shared with the Sales section (lib/sales.ts) so both date a sale the same.
-export const WON_AT_SQL = Prisma.sql`COALESCE(
+// A function, not a constant: LeadWinsCard imports this module in the
+// browser, where building Prisma.sql at load time throws.
+export const wonAtSql = () => Prisma.sql`COALESCE(
   (SELECT MIN(e.at) FROM "LeadStageEvent" e WHERE e."leadId" = l.id AND e.stage = 'WON' AND e.source IN ('SYNC', 'MANUAL')),
   (SELECT MAX(ne.at) FROM "LeadNoteEvent" ne WHERE ne."leadId" = l.id),
   l."createdAt"
@@ -48,7 +50,7 @@ export async function getLeadWins(clientId: string, window: WinsWindow, now = ne
   const [leads, wins] = await Promise.all([
     prisma.lead.findMany({ where: { clientId, deletedAt: null, createdAt: { gte: from, lt: to } }, select: { createdAt: true } }),
     prisma.$queryRaw<{ value: unknown; closed_at: Date }[]>`
-      SELECT l.value, ${WON_AT_SQL} AS closed_at
+      SELECT l.value, ${wonAtSql()} AS closed_at
       FROM "Lead" l
       WHERE l."clientId" = ${clientId} AND l."deletedAt" IS NULL AND l.stage = 'WON'
     `,

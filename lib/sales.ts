@@ -1,13 +1,13 @@
 import { prisma } from "./prisma";
 import { sydneyDay } from "./sheet-parse";
-import { WON_AT_SQL } from "./lead-wins";
+import { wonAtSql } from "./lead-wins";
 import { metaDays } from "./meta-ads";
 import { addMonths, monthKeyOf, toneFor, type Tone } from "./kpi";
 import { dailySpend, getReportingScope, type Range } from "./reporting-scope";
 import type { ReportVisibility } from "./report-visibility";
 
 // Sales section (Leads tab): a sale = a Won lead, dated by its won date
-// (WON_AT_SQL — same rule as the revenue-closed card). Only leads that came
+// (wonAtSql — same rule as the revenue-closed card). Only leads that came
 // in on/after the client's reporting start date count (lib/reporting-scope.ts).
 //
 // Cost of sale (per row) = included spend from the start date up to the won
@@ -56,7 +56,7 @@ export async function getSales(
   const since = scope.startDate ?? new Date(0);
 
   const rows = await prisma.$queryRaw<{ id: string; name: string | null; campaign: string | null; value: unknown; createdAt: Date; won_at: Date }[]>`
-    SELECT l.id, l.name, l.campaign, l.value, l."createdAt", ${WON_AT_SQL} AS won_at
+    SELECT l.id, l.name, l.campaign, l.value, l."createdAt", ${wonAtSql()} AS won_at
     FROM "Lead" l
     WHERE l."clientId" = ${clientId} AND l."deletedAt" IS NULL AND l.stage = 'WON' AND l."createdAt" >= ${since}
   `;

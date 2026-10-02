@@ -1,5 +1,5 @@
 import { prisma } from "./prisma";
-import { WON_AT_SQL } from "./lead-wins";
+import { wonAtSql } from "./lead-wins";
 import { clampRange, getReportingScope, type Range } from "./reporting-scope";
 
 // Leads tab comparison chart: what happened in the selected period vs the
@@ -9,7 +9,7 @@ import { clampRange, getReportingScope, type Range } from "./reporting-scope";
 // handovers       leads whose live or text handover happened in the window
 // consultsBooked  leads whose consult was booked in the window
 // quotes          leads whose quote went out in the window
-// won             leads won in the window (WON_AT_SQL, same as the Sales section)
+// won             leads won in the window (wonAtSql, same as the Sales section)
 //
 // A step's date is the team's dated note when there is one, else the stage
 // change the app saw live (SYNC/MANUAL). Only leads on/after the client's
@@ -43,7 +43,7 @@ async function countPeriod(clientId: string, since: Date, r: Range): Promise<Per
       (SELECT COUNT(*) FROM first WHERE step = 'CONSULT_BOOKED' AND at >= ${from} AND at < ${to}) AS "consultsBooked",
       (SELECT COUNT(*) FROM first WHERE step = 'QUOTE_SENT' AND at >= ${from} AND at < ${to}) AS quotes,
       (SELECT COUNT(*) FROM "Lead" l WHERE l."clientId" = ${clientId} AND l."deletedAt" IS NULL AND l.stage = 'WON' AND l."createdAt" >= ${since}
-        AND ${WON_AT_SQL} >= ${from} AND ${WON_AT_SQL} < ${to}) AS won
+        AND ${wonAtSql()} >= ${from} AND ${wonAtSql()} < ${to}) AS won
   `;
   return Object.fromEntries(COMPARE_METRICS.map((k) => [k, Number(row[k])])) as PeriodCounts;
 }
