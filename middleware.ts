@@ -32,7 +32,7 @@ export default clerkMiddleware(async (auth, req) => {
   // publicMetadata is set the moment an account is created — see
   // lib/actions.ts createUser — and mirrored by the Clerk webhook,
   // app/api/webhooks/clerk/route.ts.
-  type Metadata = { role?: "COACH" | "CLIENT"; clientId?: string; clientSlug?: string };
+  type Metadata = { role?: "ADMIN" | "COACH" | "CLIENT"; clientId?: string; clientSlug?: string };
   let metadata = (sessionClaims?.publicMetadata ?? {}) as Metadata;
 
   // Some Clerk instances' default session token doesn't include

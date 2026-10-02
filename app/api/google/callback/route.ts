@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { encryptToken } from "@/lib/crypto";
-import { requireCoach } from "@/lib/auth";
+import { requireAdmin } from "@/lib/auth";
 import { exchangeCodeForTokens, getGoogleUserEmail, GOOGLE_OAUTH_STATE_COOKIE } from "@/lib/google-sheets";
 
 // Build redirects from the known public URL, not the incoming request's
@@ -16,7 +16,7 @@ function redirectWithError(error: string) {
 }
 
 export async function GET(req: NextRequest) {
-  await requireCoach();
+  await requireAdmin();
 
   const code = req.nextUrl.searchParams.get("code");
   const error = req.nextUrl.searchParams.get("error");

@@ -1,5 +1,6 @@
-// One-time bootstrap: creates the first COACH login.
-// After this, use Settings → Users in the app to create everyone else.
+// Bootstrap: creates the first ADMIN login, or promotes an existing account
+// (e.g. the original COACH login from before the ADMIN role) to ADMIN — safe
+// to re-run. After this, use Settings → Users in the app for everyone else.
 //
 // Usage:
 //   ADMIN_EMAIL=you@hivesocial.agency ADMIN_PASSWORD='choose-a-strong-one' ADMIN_NAME="Adeel" \
@@ -23,12 +24,6 @@ async function main() {
   }
 
   const clerk = createClerkClient({ secretKey: process.env.CLERK_SECRET_KEY });
-
-  const existingLocal = await prisma.user.findUnique({ where: { email } });
-  if (existingLocal) {
-    console.log(`User ${email} already exists in the database — nothing to do.`);
-    return;
-  }
 
   // If the Clerk account already exists (e.g. an earlier run created the
   // Clerk login but failed to write the local User row — often because the
@@ -57,7 +52,7 @@ async function main() {
       skipPasswordChecks: false,
       // Required by middleware.ts/lib/auth.ts, which read role straight off
       // the Clerk session's publicMetadata rather than hitting Prisma.
-      publicMetadata: { role: "COACH", name },
+      publicMetadata: { role: "ADMIN", name },
     });
   }
 
@@ -65,14 +60,16 @@ async function main() {
   // earlier partial run (or a manually-created account) may not have it,
   // which otherwise sends the coach to /login?error=no-access.
   await clerk.users.updateUserMetadata(clerkUser.id, {
-    publicMetadata: { role: "COACH", name },
+    publicMetadata: { role: "ADMIN", name },
   });
 
-  await prisma.user.create({
-    data: { clerkId: clerkUser.id, email, name, role: "COACH", clientId: null },
+  await prisma.user.upsert({
+    where: { email },
+    create: { clerkId: clerkUser.id, email, name, role: "ADMIN", clientId: null },
+    update: { clerkId: clerkUser.id, role: "ADMIN", clientId: null },
   });
 
-  console.log(`Coach login ready for ${email}. Sign in at /login.`);
+  console.log(`Admin login ready for ${email}. Sign in at /login (sign out and back in if you were already logged in).`);
 }
 
 main()

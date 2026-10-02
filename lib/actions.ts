@@ -575,11 +575,13 @@ export async function deleteClientPermanently(clientId: string) {
 // password is shown once on screen — the user should change it after first
 // login (Clerk's account settings UI handles that, not built here).
 export async function createUser(formData: FormData) {
-  await requireCoach();
+  const me = await requireCoach();
 
   const name = String(formData.get("name") || "").trim();
   const email = String(formData.get("email") || "").trim().toLowerCase();
-  const role = String(formData.get("role") || "CLIENT") as "COACH" | "CLIENT";
+  const role = String(formData.get("role") || "CLIENT") as "ADMIN" | "COACH" | "CLIENT";
+  if (!["ADMIN", "COACH", "CLIENT"].includes(role)) throw new Error("Invalid role");
+  if (role === "ADMIN" && !me.isAdmin) throw new Error("Only an admin can create another admin");
   const clientId = String(formData.get("clientId") || "") || null;
 
   if (!name) throw new Error("Name is required");
@@ -661,10 +663,11 @@ export async function createUser(formData: FormData) {
 }
 
 export async function deleteUser(userId: string) {
-  await requireCoach();
+  const me = await requireCoach();
 
   const user = await prisma.user.findUnique({ where: { id: userId } });
   if (!user) return;
+  if (user.role === "ADMIN" && !me.isAdmin) throw new Error("Only an admin can remove an admin");
 
   const clerk = await getClerkAdminClient();
   await clerk.users.deleteUser(user.clerkId);

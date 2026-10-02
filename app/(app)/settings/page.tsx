@@ -7,7 +7,7 @@ import AddLessonForm from "@/components/AddLessonForm";
 export const dynamic = "force-dynamic";
 
 export default async function SettingsPage() {
-  await requireCoach();
+  const me = await requireCoach();
 
   const [integration, onboardingSteps, awardTiers, modules, users, clients] = await Promise.all([
     prisma.integrationSettings.findUnique({ where: { id: "singleton" } }),
@@ -33,7 +33,7 @@ export default async function SettingsPage() {
         <p style={{ color: "var(--text-secondary)" }}>Connections and templates used across every client.</p>
       </div>
 
-      <UsersPanel users={userRows} clients={clients} onCreateClient={createClient} />
+      <UsersPanel users={userRows} clients={clients} onCreateClient={createClient} canManageAdmins={me.isAdmin} />
 
       <section className="card rounded-2xl p-6">
         <h3 className="font-heading font-bold text-lg mb-1" style={{ color: "var(--text-primary)" }}>Integrations</h3>

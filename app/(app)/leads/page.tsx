@@ -72,10 +72,9 @@ export default async function LeadsPage({
         </div>
       )}
 
-      {/* The single admin Google account connection is an agency-level
-          integration control — not something a client login should see
-          or manage. */}
-      {user.role === "COACH" && (
+      {/* The single Google account connection is an agency-level control —
+          admin only (the connect/callback/disconnect routes check it too). */}
+      {user.isAdmin && (
         <GoogleAccountCard connected={Boolean(googleConnection)} googleEmail={googleConnection?.googleEmail ?? null} />
       )}
 

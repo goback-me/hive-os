@@ -10,8 +10,14 @@ type UserRow = {
   id: string;
   name: string;
   email: string;
-  role: "COACH" | "CLIENT";
+  role: "ADMIN" | "COACH" | "CLIENT";
   clientName: string | null;
+};
+
+const ROLE_LABELS: Record<UserRow["role"], string> = {
+  ADMIN: "Admin (all clients + integrations)",
+  COACH: "Account manager (all clients)",
+  CLIENT: "Client (their data only)",
 };
 
 type ClientOption = { id: string; name: string };
@@ -31,13 +37,15 @@ export default function UsersPanel({
   users,
   clients,
   onCreateClient,
+  canManageAdmins,
 }: {
   users: UserRow[];
   clients: ClientOption[];
   onCreateClient: (prev: CreateClientState, formData: FormData) => Promise<CreateClientState>;
+  canManageAdmins: boolean;
 }) {
   const [state, formAction] = useFormState(createUserAction, null);
-  const [role, setRole] = useState<"CLIENT" | "COACH">("CLIENT");
+  const [role, setRole] = useState<UserRow["role"]>("CLIENT");
 
   return (
     <section className="card rounded-2xl p-6">
@@ -48,7 +56,7 @@ export default function UsersPanel({
         <AddClientModal action={onCreateClient} />
       </div>
       <p className="text-sm mb-4" style={{ color: "var(--text-secondary)" }}>
-        Admins see every client. Client logins only ever see their own data. Need a new client first? Use "Add Client" above.
+        Admins and account managers see every client; only admins manage the Google connection and other admins. Client logins only ever see their own data. Need a new client first? Use "Add Client" above.
       </p>
 
       <div className="space-y-2 mb-5">
@@ -59,10 +67,10 @@ export default function UsersPanel({
                 {u.name} <span style={{ color: "var(--text-muted)" }}>· {u.email}</span>
               </p>
               <p className="text-xs" style={{ color: "var(--text-secondary)" }}>
-                {u.role === "COACH" ? "Admin (full access)" : `Client · ${u.clientName ?? "—"}`}
+                {u.role === "CLIENT" ? `Client · ${u.clientName ?? "—"}` : ROLE_LABELS[u.role]}
               </p>
             </div>
-            <form action={deleteUser.bind(null, u.id)}>
+            {(u.role !== "ADMIN" || canManageAdmins) && <form action={deleteUser.bind(null, u.id)}>
               <button
                 type="submit"
                 className="text-xs font-semibold px-3 py-1.5 rounded-lg"
@@ -70,7 +78,7 @@ export default function UsersPanel({
               >
                 Remove
               </button>
-            </form>
+            </form>}
           </div>
         ))}
         {users.length === 0 && <p className="text-sm" style={{ color: "var(--text-secondary)" }}>No users yet.</p>}
@@ -108,12 +116,13 @@ export default function UsersPanel({
           className="px-3 py-2 rounded-lg outline-none text-sm"
         />
         <select
-          name="role" value={role} onChange={(e) => setRole(e.target.value as "CLIENT" | "COACH")}
+          name="role" value={role} onChange={(e) => setRole(e.target.value as UserRow["role"])}
           style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
           className="px-3 py-2 rounded-lg outline-none text-sm"
         >
-          <option value="CLIENT">Client (their data only)</option>
-          <option value="COACH">Admin (full access)</option>
+          <option value="CLIENT">{ROLE_LABELS.CLIENT}</option>
+          <option value="COACH">{ROLE_LABELS.COACH}</option>
+          {canManageAdmins && <option value="ADMIN">{ROLE_LABELS.ADMIN}</option>}
         </select>
         {role === "CLIENT" ? (
           <select

@@ -8,7 +8,12 @@ export type CurrentUser = {
   clerkId: string;
   email: string;
   name: string;
+  // ADMIN accounts come through as role "COACH" with isAdmin set — ADMIN is a
+  // superset of COACH, so every existing coach check lets an admin through
+  // without each call site knowing about it. requireAdmin() is the only gate
+  // that needs isAdmin itself.
   role: "COACH" | "CLIENT";
+  isAdmin: boolean;
   clientId: string | null;
   clientSlug: string | null;
 };
@@ -25,7 +30,7 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
   const { userId, sessionClaims } = await auth();
   if (!userId) return null;
 
-  type Metadata = { role?: "COACH" | "CLIENT"; clientId?: string; clientSlug?: string; name?: string };
+  type Metadata = { role?: "ADMIN" | "COACH" | "CLIENT"; clientId?: string; clientSlug?: string; name?: string };
   let metadata = (sessionClaims?.publicMetadata ?? {}) as Metadata;
   let email = sessionClaims?.email as string | undefined;
   let firstName = sessionClaims?.firstName as string | undefined;
@@ -59,7 +64,8 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
     clerkId: userId,
     email: email ?? "",
     name,
-    role: metadata.role,
+    role: metadata.role === "CLIENT" ? "CLIENT" : "COACH",
+    isAdmin: metadata.role === "ADMIN",
     clientId: metadata.clientId ?? null,
     clientSlug: metadata.clientSlug ?? null,
   };
@@ -72,15 +78,22 @@ export async function requireUser(): Promise<CurrentUser> {
   return user;
 }
 
-/** Require a COACH (admin). Sends clients back to their own dashboard instead of leaking a 403. */
+/** Require a COACH or ADMIN. Sends clients back to their own dashboard instead of leaking a 403. */
 export async function requireCoach(): Promise<CurrentUser> {
   const user = await requireUser();
   if (user.role !== "COACH") redirect("/dashboard");
   return user;
 }
 
+/** Require an ADMIN — agency-level controls (Google connection, creating admins). */
+export async function requireAdmin(): Promise<CurrentUser> {
+  const user = await requireCoach();
+  if (!user.isAdmin) redirect("/dashboard");
+  return user;
+}
+
 /**
- * Require access to a specific client's data. A COACH can access any client;
+ * Require access to a specific client's data. A COACH/ADMIN can access any client;
  * a CLIENT may only access their own. Call this at the top of every page/
  * action that takes a clientId or client slug.
  */
