@@ -19,6 +19,9 @@ import {
   rebuildKpiHistory,
   saveClientType,
   recheckClientHealth,
+  logContact,
+  saveWeeklyUpdate,
+  getWeeklyDraft,
 } from "@/lib/actions";
 import { requireClientAccess } from "@/lib/auth";
 import { checkAndGrantAwards } from "@/lib/awards";
@@ -48,6 +51,9 @@ import ClientTypeField from "@/components/ClientTypeField";
 import GrowthPanel from "@/components/GrowthPanel";
 import HoldNote from "@/components/HoldNote";
 import ClientAlertsBanner from "@/components/ClientAlertsBanner";
+import ContactLogPanel from "@/components/ContactLogPanel";
+import WeeklyUpdatesPanel from "@/components/WeeklyUpdatesPanel";
+import { weekStart } from "@/lib/weekly";
 import { reportsOnHold } from "@/lib/report-hold";
 
 // Forces this page to render fresh on every single request — no static
@@ -120,6 +126,11 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
     ? await prisma.dataAlert.findMany({ where: { clientId: client.id, status: "OPEN" }, orderBy: [{ severity: "asc" }, { lastSeenAt: "desc" }] })
     : [];
 
+  const [contacts, weeklyUpdates] = await Promise.all([
+    isCoach ? prisma.contactLog.findMany({ where: { clientId: client.id }, orderBy: { contactedAt: "desc" }, take: 10 }) : Promise.resolve([]),
+    prisma.weeklyUpdate.findMany({ where: { clientId: client.id }, orderBy: { weekOf: "desc" }, take: 12 }),
+  ]);
+
   const referrals = await prisma.referral.findMany({ where: { referralLinkId: referralLink.id }, orderBy: { createdAt: "desc" } });
 
   // Hidden fields (profit, spend) never reach a CLIENT's browser.
@@ -148,6 +159,15 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
       <div className="grid grid-cols-3 gap-5">
         {/* Main column — the day-to-day, coaching-relevant activity */}
         <div className="col-span-2 space-y-5">
+          <WeeklyUpdatesPanel
+            clientId={client.id}
+            isCoach={isCoach}
+            currentWeekOf={weekStart().toISOString()}
+            initial={weeklyUpdates.map((u) => ({ id: u.id, weekOf: u.weekOf.toISOString(), wins: u.wins, issues: u.issues, nextSteps: u.nextSteps, createdBy: u.createdBy }))}
+            onDraft={isCoach ? getWeeklyDraft : undefined}
+            onSave={isCoach ? saveWeeklyUpdate : undefined}
+          />
+
           {clientSheet && <ClientUpdatesPanel clientId={client.id} onUpdateStage={updateLeadStage} />}
 
           <div className="card rounded-2xl p-5">
@@ -210,6 +230,15 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
               <ClientTypeField clientId={client.id} initial={client.clientType} isCoach={isCoach} onSave={saveClientType} />
             </dl>
           </div>
+
+          {isCoach && (
+            <ContactLogPanel
+              clientId={client.id}
+              me={viewer.name}
+              onLog={logContact}
+              initial={contacts.map((c) => ({ id: c.id, contactedAt: c.contactedAt.toISOString(), method: c.method, loggedBy: c.loggedBy, notes: c.notes, nextStep: c.nextStep, nextStepDue: c.nextStepDue?.toISOString() ?? null }))}
+            />
+          )}
 
           {isCoach && <ReportVisibilityCard clientId={client.id} initial={visibility} onSave={saveReportVisibility} />}
 

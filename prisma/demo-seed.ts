@@ -1,5 +1,4 @@
 import { prisma } from "../lib/prisma";
-import { computeNeedsAction } from "../lib/needs-action";
 
 // DEMO DATA — fills the DB with a believable agency (clients,
 // monthly revenue, ad spend, sessions, onboarding, notes, leads) for demos /
@@ -203,9 +202,8 @@ async function main() {
     data: { archivedAt: now },
   });
 
-  const items = (await computeNeedsAction()).length;
   const lifetime = JAKE_REVENUE.reduce((a, b) => a + b, 0);
-  console.log(`Demo data ready: ${CLIENTS.length + 1} active clients, ${items} needs-action items, ${archived.count} other clients archived.`);
+  console.log(`Demo data ready: ${CLIENTS.length + 1} active clients, ${archived.count} other clients archived.`);
   console.log(`Jake: $${JAKE_REVENUE.at(-1)!.toLocaleString()} this month, $${lifetime.toLocaleString()} lifetime, $11,860 ad spend.`);
 }
 

@@ -197,6 +197,20 @@ export async function getKpiHistory(clientId: string, k: MonthKey, n: number, no
   );
 }
 
+// KPIs for any range (from/to exclusive), clamped to the start date — the
+// portfolio's date picker and the weekly update draft. Live, cached Meta.
+export async function getRangeKpis(clientId: string, range: { from?: Date; to?: Date }, now = new Date()): Promise<KpiValues> {
+  const scope = await getReportingScope(clientId);
+  const from = range.from && (!scope.startDate || range.from > scope.startDate) ? range.from : scope.startDate ?? new Date(0);
+  const to = range.to ?? now;
+  if (from >= to) return withCosts({ leads: 0, contacted: 0, liveTransfers: 0, consultsBooked: 0, quotes: 0, sales: 0, revenue: 0, spend: 0, spendSource: null });
+  const day = (d: Date) => sydneyParts(d);
+  const pad2 = (n: number) => String(n).padStart(2, "0");
+  const last = day(new Date(to.getTime() - 1));
+  const first = day(from);
+  return computeWindow(scope, { from, to, since: `${first.y}-${pad2(first.m)}-${pad2(first.d)}`, until: `${last.y}-${pad2(last.m)}-${pad2(last.d)}` }, { cached: true, strictSpend: false });
+}
+
 // This month so far, and the same days of last month — a like-for-like pair.
 export async function getMonthToDateVsLast(clientId: string, now = new Date()) {
   const scope = await getReportingScope(clientId);

@@ -633,9 +633,11 @@ model ContactLog {
   clientId    String
   client      Client   @relation(fields: [clientId], references: [id])
   contactedAt DateTime
-  method      String // "call", "email", "meeting"
+  method      String // "call" | "meeting" | "message" (older rows: "email")
   notes       String?
-  loggedBy    String
+  loggedBy    String // who from Hive made contact
+  nextStep    String?
+  nextStepDue DateTime?
   createdAt   DateTime @default(now())
 
   @@index([clientId, contactedAt])
@@ -822,9 +824,28 @@ model Client {
   leads          Lead[]
   leadReminders  LeadReminder[]
   dataAlerts     DataAlert[]
+  weeklyUpdates  WeeklyUpdate[]
   reconciliations SyncReconciliation[]
   clientSheet    ClientSheet?
   referralLink   ReferralLink?
+}
+
+// A coach's weekly status update for a client — shown on the client's
+// Dashboard as "This week's update" (newest first, with history).
+model WeeklyUpdate {
+  id        String   @id @default(cuid())
+  clientId  String
+  client    Client   @relation(fields: [clientId], references: [id])
+  weekOf    DateTime // Monday of the week, Sydney midnight
+  wins      String
+  issues    String
+  nextSteps String
+  createdBy String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([clientId, weekOf])
+  @@index([clientId, weekOf])
 }
 
 model Session {

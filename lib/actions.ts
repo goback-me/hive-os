@@ -11,6 +11,7 @@ import { parseVisibility, type ReportVisibility } from "@/lib/report-visibility"
 import { kickWriteBacks, queueLeadChange } from "@/lib/sheet-writeback";
 import { rebuildHistory } from "@/lib/kpi";
 import { runHealthChecks } from "@/lib/data-health";
+import { draftWeeklyUpdate } from "@/lib/weekly";
 import { sydneyLocalToDate } from "@/lib/sheet-parse";
 
 function slugify(name: string) {
@@ -351,6 +352,51 @@ export async function recheckClientHealth(clientId: string) {
   return { open: findings.length };
 }
 
+// ── Account management (coach only) ──────────────────────────────────────
+
+// Log a call / meeting / message with the client. The latest one is the
+// portfolio's "Last contact" and drives the "no call in 10+ days" action.
+export async function logContact(clientId: string, formData: FormData) {
+  const user = await requireCoach();
+  const day = String(formData.get("date") || "");
+  const m = day.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const contactedAt = m ? sydneyLocalToDate(Number(m[1]), Number(m[2]), Number(m[3]), 12) : null;
+  if (!contactedAt) throw new Error("Pick a date");
+  const method = String(formData.get("type") || "call");
+  if (!["call", "meeting", "message"].includes(method)) throw new Error("Invalid contact type");
+  const due = String(formData.get("nextStepDue") || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const text = (k: string) => String(formData.get(k) || "").trim() || null;
+  await prisma.contactLog.create({
+    data: {
+      clientId,
+      contactedAt,
+      method,
+      loggedBy: text("who") ?? user.name,
+      notes: text("notes"),
+      nextStep: text("nextStep"),
+      nextStepDue: due ? sydneyLocalToDate(Number(due[1]), Number(due[2]), Number(due[3])) : null,
+    },
+  });
+  revalidatePath(`/clients`);
+}
+
+// Weekly status update: one per client per week (saving again edits it).
+export async function saveWeeklyUpdate(clientId: string, input: { weekOf: string; wins: string; issues: string; nextSteps: string }) {
+  const user = await requireCoach();
+  const weekOf = new Date(input.weekOf);
+  if (Number.isNaN(weekOf.getTime())) throw new Error("Invalid week");
+  const data = { wins: input.wins.trim(), issues: input.issues.trim(), nextSteps: input.nextSteps.trim(), createdBy: user.name };
+  if (!data.wins && !data.issues && !data.nextSteps) throw new Error("Write something first");
+  await prisma.weeklyUpdate.upsert({ where: { clientId_weekOf: { clientId, weekOf } }, create: { clientId, weekOf, ...data }, update: data });
+  revalidatePath(`/clients`);
+}
+
+// Pre-filled draft for this week (lib/weekly.ts).
+export async function getWeeklyDraft(clientId: string) {
+  await requireCoach();
+  return draftWeeklyUpdate(clientId);
+}
+
 // ── Playbooks / lessons ──────────────────────────────────────────────────
 export async function toggleLessonComplete(clientId: string, lessonId: string, completed: boolean) {
   await requireClientAccess(clientId);
@@ -560,6 +606,7 @@ export async function deleteClientPermanently(clientId: string) {
     prisma.clientAward.deleteMany({ where: { clientId } }),
     prisma.clientSheet.deleteMany({ where: { clientId } }),
     prisma.dataAlert.deleteMany({ where: { clientId } }),
+    prisma.weeklyUpdate.deleteMany({ where: { clientId } }),
     prisma.syncReconciliation.deleteMany({ where: { clientId } }),
     prisma.leadReminder.deleteMany({ where: { clientId } }),
     prisma.contract.deleteMany({ where: { clientId } }),

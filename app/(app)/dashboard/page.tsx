@@ -5,7 +5,7 @@ import { requireUser } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import RevenueChart from "@/components/RevenueChart";
-import { getRevenueByMonth, revenueInMonth } from "@/lib/revenue";
+import PortfolioTable from "@/components/PortfolioTable";
 
 export const dynamic = "force-dynamic";
 
@@ -13,12 +13,6 @@ const SEVERITY_STYLE: Record<string, { color: string; bg: string; icon: string }
   danger: { color: "var(--danger)", bg: "var(--danger-tint)", icon: "priority_high" },
   success: { color: "var(--primary)", bg: "var(--primary-tint)", icon: "check_circle" },
   muted: { color: "var(--text-secondary)", bg: "var(--surface-hover)", icon: "schedule" },
-};
-
-const STATUS_STYLE: Record<string, { bg: string; color: string; label: string }> = {
-  ACTIVE: { bg: "var(--primary-tint)", color: "var(--primary)", label: "Active" },
-  ONBOARDING: { bg: "var(--surface-hover)", color: "var(--text-secondary)", label: "Onboarding" },
-  CHURNED: { bg: "var(--danger-tint)", color: "var(--danger)", label: "Not Active" },
 };
 
 function greeting() {
@@ -43,14 +37,6 @@ export default async function DashboardPage() {
   // One card per client — their most urgent item (list is already sorted by urgency).
   const seenClients = new Set<string>();
   const items = allItems.filter((i) => !seenClients.has(i.clientId) && seenClients.add(i.clientId)).slice(0, 8);
-  const clients = await prisma.client.findMany({
-    where: { archivedAt: null, status: { not: "CHURNED" } },
-    orderBy: { name: "asc" },
-    take: 12,
-  });
-  const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
-  const clientRevenue = await getRevenueByMonth(clients.map((c) => c.id));
-  const revenueByClientId = new Map(clients.map((c) => [c.id, revenueInMonth(clientRevenue, monthStart, c.id)]));
 
   const lastMonth = trend.at(-2)?.revenue ?? 0;
   const delta = lastMonth > 0 ? Math.round(((kpis.revenueThisMonth - lastMonth) / lastMonth) * 100) : null;
@@ -101,40 +87,8 @@ export default async function DashboardPage() {
         <RevenueChart trend={trend} />
       </div>
 
-      <div>
-        <div className="text-sm font-semibold mb-3" style={{ color: "var(--text-primary)" }}>Clients</div>
-        <div className="grid grid-cols-3 gap-3">
-          {clients.map((client) => {
-            const s = STATUS_STYLE[client.status] ?? STATUS_STYLE.ONBOARDING;
-            return (
-              <Link key={client.id} href={`/clients/${client.slug}`} className="card rounded-xl p-4 block">
-                <div className="flex justify-between items-start mb-2">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold" style={{ background: "var(--primary-tint)", color: "var(--primary)" }}>
-                      {client.name.slice(0, 1).toUpperCase()}
-                    </div>
-                    <div>
-                      <p className="font-semibold text-sm" style={{ color: "var(--text-primary)" }}>{client.name}</p>
-                      <p className="text-xs" style={{ color: "var(--text-secondary)" }}>{client.scope ?? "—"}</p>
-                    </div>
-                  </div>
-                  <span className="w-2 h-2 rounded-full mt-1" style={{ background: s.color }} />
-                </div>
-                <div className="flex justify-between items-end mt-3">
-                  <div>
-                    <p className="text-[10px]" style={{ color: "var(--text-muted)" }}>Revenue this month</p>
-                    <p className="font-bold" style={{ color: "var(--text-primary)" }}>${(revenueByClientId.get(client.id) ?? 0).toLocaleString()}</p>
-                  </div>
-                  <span className="text-[10px] font-bold px-2 py-1 rounded-full" style={{ background: s.bg, color: s.color }}>
-                    {s.label}
-                  </span>
-                </div>
-              </Link>
-            );
-          })}
-          {clients.length === 0 && <p style={{ color: "var(--text-secondary)" }}>No clients yet.</p>}
-        </div>
-      </div>
+      {/* One row per client, at-risk first — replaces the old client cards. */}
+      <PortfolioTable />
     </div>
   );
 }
