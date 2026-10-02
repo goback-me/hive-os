@@ -47,6 +47,7 @@ type LeadRow = {
   callAttempts: number | null;
   hqNewer: boolean; // changed in HQ since the sheet last changed — the sheet catches up via write-back
   sheetWriteError: string | null; // why the last write-back failed ("Not synced to sheet")
+  writePending: boolean; // an HQ change is on its way to the sheet
   sheetStage: LeadStageValue | null;
   sheetStatus: string | null;
   value: number | null;
@@ -79,10 +80,11 @@ type JourneyEntry =
   | { kind: "status"; id: string; at: string; from: LeadStageValue; to: LeadStageValue; value: number | null; by: string }
   | { kind: "event"; id: string; at: string; stage: LeadStageValue; source: "IMPORT" | "INFERRED" };
 
-// HQ's stage is newer and the sheet still says something else (write-back
-// pending or failed).
-function sheetAhead(lead: Pick<LeadRow, "stage" | "hqNewer" | "sheetStage">) {
-  return lead.hqNewer && lead.sheetStage != null && lead.sheetStage !== lead.stage ? lead.sheetStage : null;
+// Only right after a status change in HQ: the sheet still says something
+// else while the write-back is on its way. (A failed write shows "Not synced
+// to sheet" instead; otherwise the list simply shows the sheet's stage.)
+function sheetAhead(lead: Pick<LeadRow, "stage" | "hqNewer" | "sheetStage" | "writePending">) {
+  return lead.hqNewer && lead.writePending && lead.sheetStage != null && lead.sheetStage !== lead.stage ? lead.sheetStage : null;
 }
 
 // "Disqualified · Budget (after handover)" etc.
@@ -331,6 +333,7 @@ export default function LeadsPanel({
       dqReason: stage === "DISQUALIFIED" ? ((reason ?? "UNKNOWN") as DqReasonValue) : null,
       lostReason: stage === "LOST" ? ((reason ?? "UNKNOWN") as LostReasonValue) : null,
       hqNewer: true,
+      writePending: true,
     };
     setLeads((prev) => prev.map((l) => (l.id === lead.id ? { ...l, ...optimistic } : l)));
     setPendingChange(null);
@@ -956,7 +959,7 @@ function SheetSaysBadge({ stage }: { stage: LeadStageValue }) {
       style={{ border: `1px dashed ${STAGE_STYLE[stage].color}`, color: STAGE_STYLE[stage].color }}
       title="Changed in HQ — the sheet still says this until the write-back lands"
     >
-      sheet says {STAGE_LABELS[stage]}
+      updating sheet (says {STAGE_LABELS[stage]})
     </span>
   );
 }

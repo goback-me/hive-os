@@ -93,6 +93,11 @@ export async function GET(req: NextRequest) {
     prisma.lead.count({ where: { clientId, deletedAt: null, ...(createdAt ? { createdAt } : {}), awaitingClientUpdate: true, AND: [campaignWhere ?? {}] } }),
   ]);
 
+  // An HQ status change still being written to the sheet.
+  const pendingWrites = new Set(
+    (await prisma.writeBackJob.findMany({ where: { leadId: { in: leads.map((l) => l.id) }, status: { in: ["PENDING", "RUNNING"] } }, select: { leadId: true } })).map((j) => j.leadId)
+  );
+
   const stageCounts = Object.fromEntries(LEAD_STAGES.map((s) => [s, 0])) as Record<string, number>;
   for (const g of statusGroups) stageCounts[g.stage] = g._count;
 
@@ -123,6 +128,7 @@ export async function GET(req: NextRequest) {
       callAttempts: l.callAttempts,
       hqNewer: !!l.hqStatusUpdatedAt && (!l.sheetStatusUpdatedAt || l.hqStatusUpdatedAt > l.sheetStatusUpdatedAt),
       sheetWriteError: l.sheetWriteError,
+      writePending: pendingWrites.has(l.id),
       sheetStage: l.sheetStage,
       sheetStatus: l.sheetStatus,
       value: l.value ? Number(l.value) : null,
