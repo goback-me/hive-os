@@ -3,10 +3,11 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getValidAccessToken, getSheetValues } from "@/lib/google-sheets";
 import { clampRange, getReportingScope, scopedSpend } from "@/lib/reporting-scope";
-import { classifyStatus } from "@/lib/status-classifier";
+import { classifyHive, classifyProspect, isPendingUpdate, type ClassifiedStatus } from "@/lib/status-classifier";
 import { NOTES_KEYWORDS, parseNotes, type ParsedNote } from "@/lib/notes-parser";
 import { classifyNotesWithAI } from "@/lib/notes-ai";
 import {
+  awaitingClientUpdate,
   combineTargets,
   parseTarget,
   planStageEvents,
@@ -65,12 +66,18 @@ export function parseMapping(mapping: unknown): Record<string, StageTarget> {
 }
 
 // One status cell → stage target. The client's saved mapping wins; otherwise
-// the keyword classifier. A value neither recognises is counted in
-// `unmapped` (normalized value → rows) and contributes no stage.
-export function resolveStatus(raw: string, mapping: Record<string, StageTarget>, unmapped: Record<string, number>): StageTarget | undefined {
+// the column's keyword rules (classifyHive / classifyProspect). A value
+// neither recognises is counted in `unmapped` (normalized value → rows) and
+// contributes no stage.
+export function resolveStatus(
+  raw: string,
+  mapping: Record<string, StageTarget>,
+  unmapped: Record<string, number>,
+  classify: (raw: string) => ClassifiedStatus | null | undefined
+): StageTarget | undefined {
   const key = normalizeStatus(raw);
   if (key in mapping) return mapping[key];
-  const classified = classifyStatus(raw);
+  const classified = classify(raw);
   if (classified === null) return { stage: null }; // known "no outcome"
   if (classified === undefined) {
     if (key) unmapped[key] = (unmapped[key] ?? 0) + 1;
@@ -207,7 +214,6 @@ async function runSync(
   const statusColIdx = findHeaderIndex(headers, sheet.statusColumn);
   const resultStatusMapping = parseMapping(sheet.resultStatusMapping);
   const resultStatusColIdx = findHeaderIndex(headers, sheet.resultStatusColumn);
-  const hasStatusColumn = statusColIdx !== -1 || resultStatusColIdx !== -1;
 
   // A configured status column that's missing from the sheet would quietly
   // turn every lead into the fallback stage — stop instead and say why.
@@ -289,13 +295,21 @@ async function runSync(
     // higher-ranked wins, see combineTargets). Values nothing recognises are
     // reported back to the Leads tab instead of being silently guessed.
     const rawStatus = statusColIdx !== -1 ? row[statusColIdx] ?? "" : "";
-    const statusTarget = statusColIdx !== -1 ? resolveStatus(rawStatus, statusMapping, unmapped.status) : undefined;
+    const statusTarget = statusColIdx !== -1 ? resolveStatus(rawStatus, statusMapping, unmapped.status, classifyHive) : undefined;
     const rawResultStatus = resultStatusColIdx !== -1 ? row[resultStatusColIdx] ?? "" : "";
-    const resultTarget = resultStatusColIdx !== -1 ? resolveStatus(rawResultStatus, resultStatusMapping, unmapped.result) : undefined;
+    const resultTarget = resultStatusColIdx !== -1 ? resolveStatus(rawResultStatus, resultStatusMapping, unmapped.result, classifyProspect) : undefined;
 
-    // Nothing in either column = the automation's default stage (Chase Up) —
-    // only when there's no status column configured at all is it New Lead.
-    const { final, prior } = combineTargets(statusTarget, resultTarget, hasStatusColumn ? "CHASE_UP" : "NEW_LEAD");
+    // Nothing in either column = the default entry stage, Chase Up.
+    const { final, prior } = combineTargets(statusTarget, resultTarget, "CHASE_UP");
+
+    // Does the client owe us an update (lib/lead-status.ts)? A manually set
+    // stage is what the lead is actually at.
+    const awaitingClient = awaitingClientUpdate({
+      stage: existing?.statusManuallySetAt ? existing.stage : final.stage,
+      hive: statusTarget,
+      prospect: resultTarget,
+      prospectPending: resultStatusColIdx !== -1 && isPendingUpdate(rawResultStatus),
+    });
 
     // The deal's value is stored whatever the stage, so quoted leads show
     // their quote. It only counts as REVENUE once the lead is Won — that
@@ -350,6 +364,9 @@ async function runSync(
       // decisive signal — "SOLD" tells you more than "LIVE TRANSFER") —
       // otherwise fall back to the outreach column, whichever is filled in.
       sheetStatus: rawResultStatus.trim() || rawStatus.trim() || null,
+      hiveStatusRaw: rawStatus.trim() || null,
+      prospectStatusRaw: rawResultStatus.trim() || null,
+      awaitingClientUpdate: awaitingClient,
       value,
       raw,
       deletedAt: null,

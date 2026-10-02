@@ -3,7 +3,6 @@
 // and ordering can't drift. Pure module: no DB, safe in client components.
 
 export const LEAD_STAGES = [
-  "NEW_LEAD",
   "CHASE_UP",
   "CONTACTED",
   "NURTURE",
@@ -12,6 +11,7 @@ export const LEAD_STAGES = [
   "HANDOVER_TEXT",
   "CLIENT_CONTACTED",
   "CONSULT_BOOKED",
+  "CONSULT_CANCELLED",
   "CONSULT_NO_SHOW",
   "CONSULT_ATTENDED",
   "QUOTE_SENT",
@@ -29,15 +29,15 @@ export const LOST_REASONS = ["GHOSTED", "WENT_ELSEWHERE", "BUDGET", "UNKNOWN"] a
 export type LostReasonValue = (typeof LOST_REASONS)[number];
 
 export const STAGE_LABELS: Record<LeadStageValue, string> = {
-  NEW_LEAD: "New Lead",
   CHASE_UP: "Chase Up",
   CONTACTED: "Contacted",
-  NURTURE: "Nurture",
+  NURTURE: "Not ready yet (soft handover)",
   HANDOVER_ATTEMPTED: "Handover Attempted",
   HANDOVER_LIVE: "Live Transfer",
   HANDOVER_TEXT: "Text Handover",
   CLIENT_CONTACTED: "Client Contacted",
   CONSULT_BOOKED: "Consult Booked",
+  CONSULT_CANCELLED: "Consult Cancelled",
   CONSULT_NO_SHOW: "Consult No-Show",
   CONSULT_ATTENDED: "Consult Attended",
   QUOTE_SENT: "Quote Sent",
@@ -73,8 +73,7 @@ const early = { color: "var(--text-primary)", bg: "var(--surface-hover)" };
 const handover = { color: "var(--tag-indigo-fg)", bg: "var(--tag-indigo-bg)" };
 const consult = { color: "var(--tag-teal-fg)", bg: "var(--tag-teal-bg)" };
 export const STAGE_STYLE: Record<LeadStageValue, { color: string; bg: string }> = {
-  NEW_LEAD: muted,
-  CHASE_UP: early,
+  CHASE_UP: muted,
   CONTACTED: early,
   NURTURE: { color: "var(--tag-amber-fg)", bg: "var(--tag-amber-bg)" },
   HANDOVER_ATTEMPTED: handover,
@@ -82,6 +81,7 @@ export const STAGE_STYLE: Record<LeadStageValue, { color: string; bg: string }> 
   HANDOVER_TEXT: handover,
   CLIENT_CONTACTED: { color: "var(--primary-hover)", bg: "var(--primary-tint)" },
   CONSULT_BOOKED: consult,
+  CONSULT_CANCELLED: { color: "var(--tag-amber-fg)", bg: "var(--tag-amber-bg)" },
   CONSULT_NO_SHOW: { color: "var(--danger)", bg: "var(--danger-tint)" },
   CONSULT_ATTENDED: consult,
   QUOTE_SENT: { color: "var(--tag-purple-fg)", bg: "var(--tag-purple-bg)" },
@@ -166,7 +166,7 @@ export const TARGET_OPTIONS: { value: string; label: string }[] = [
 // on how the deal ended. `prior` is the furthest non-terminal stage either
 // column shows, used for dqPhase and so a DQ still records how far it got.
 // `fallback` applies when neither column gives a stage.
-export function combineTargets(status: StageTarget | undefined, result: StageTarget | undefined, fallback: LeadStageValue = "NEW_LEAD") {
+export function combineTargets(status: StageTarget | undefined, result: StageTarget | undefined, fallback: LeadStageValue = "CHASE_UP") {
   const s = status?.stage ? status : undefined;
   const r = result?.stage ? result : undefined;
   const final: StageTarget = !s && !r ? { stage: fallback } : !s ? r! : !r ? s : STAGE_RANK[s.stage!] > STAGE_RANK[r.stage!] ? s : r;
@@ -176,11 +176,34 @@ export function combineTargets(status: StageTarget | undefined, result: StageTar
   return { final: final as StageTarget & { stage: LeadStageValue }, prior };
 }
 
+// Nothing past Chase Up → before contact; Contacted → after contact; Nurture
+// (a soft handover), any handover or later → after handover.
 export function dqPhaseFor(furthest: LeadStageValue | null): DqPhaseValue {
   const rank = furthest ? STAGE_RANK[furthest] : 0;
   if (rank <= STAGE_RANK.CHASE_UP) return "PRE_CONTACT";
-  if (rank <= STAGE_RANK.NURTURE) return "POST_CONTACT";
+  if (rank <= STAGE_RANK.CONTACTED) return "POST_CONTACT";
   return "POST_HANDOVER";
+}
+
+// Handed to the client — they owe us an update until Prospect Status says
+// what happened. Nurture counts (a soft handover), for this accountability
+// only; it's still not a live transfer or a completed handover in the funnel.
+export const CLIENT_OWNED_STAGES: LeadStageValue[] = [...HANDOVER_STAGES, "NURTURE", "CLIENT_CONTACTED", "CONSULT_BOOKED"];
+
+// The client owes us an update: Prospect Status literally says "pending
+// update", or our team handed the lead over (HIVE STATUS is a client-owned
+// stage) and Prospect Status is still blank — while the lead isn't closed.
+// `prospect` = the prospect column's resolved target (undefined = no column
+// or an unrecognised value; { stage: null } = blank / N/A).
+export function awaitingClientUpdate(opts: {
+  stage: LeadStageValue;
+  hive: StageTarget | undefined;
+  prospect: StageTarget | undefined;
+  prospectPending: boolean;
+}): boolean {
+  if (isTerminal(opts.stage)) return false;
+  if (opts.prospectPending) return true;
+  return !!opts.hive?.stage && CLIENT_OWNED_STAGES.includes(opts.hive.stage) && opts.prospect?.stage === null;
 }
 
 // Furthest non-terminal stage a lead is known to have reached.
@@ -213,7 +236,8 @@ export function planStageEvents(opts: {
     known.add(stage);
   };
 
-  if (newStage !== oldStage && newStage !== "NEW_LEAD") add(newStage, "change");
+  // A brand-new lead sitting at the entry stage isn't a change worth an event.
+  if (newStage !== oldStage && !(oldStage === null && newStage === "CHASE_UP")) add(newStage, "change");
   if (prior && prior !== newStage && prior !== oldStage && !known.has(prior)) add(prior, "observed");
 
   // How far up the main path this lead provably got.

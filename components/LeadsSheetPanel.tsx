@@ -4,14 +4,15 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { TARGET_OPTIONS, targetLabel } from "@/lib/lead-status";
 import { findHeaderIndex, normalizeStatus } from "@/lib/sheet-parse";
-import { classifyStatus } from "@/lib/status-classifier";
+import { classifyHive, classifyProspect } from "@/lib/status-classifier";
 
 // Mapping values are dropdown-encoded: "WON", "DISQUALIFIED:BUDGET",
-// "__none__" (no outcome). "" = no entry → the keyword classifier decides,
-// the same rules the sync uses (lib/status-classifier.ts).
+// "__none__" (no outcome). "" = no entry → the column's keyword rules decide,
+// the same rules the sync uses (lib/status-classifier.ts): HIVE STATUS reads
+// blanks as Chase Up, Prospect Status reads them as "no update".
 type Mapping = Record<string, string>;
-const defaultLabel = (v: string) => {
-  const t = classifyStatus(v);
+const defaultLabel = (v: string, column: "status" | "result") => {
+  const t = column === "status" ? classifyHive(v) : classifyProspect(v);
   if (t === null) return "Auto: No outcome";
   return t ? `Auto: ${targetLabel(t)}` : "Unrecognised — pick one";
 };
@@ -468,7 +469,7 @@ export default function LeadsSheetPanel({
                       className="px-2 py-1.5 rounded-lg text-xs font-bold outline-none"
                       style={selectStyle}
                     >
-                      <option value="">{defaultLabel(v)}</option>
+                      <option value="">{defaultLabel(v, "status")}</option>
                       <option value="__none__">No outcome (ignore)</option>
                       {TARGET_OPTIONS.map((o) => (
                         <option key={o.value} value={o.value}>
@@ -517,7 +518,7 @@ export default function LeadsSheetPanel({
                       className="px-2 py-1.5 rounded-lg text-xs font-bold outline-none"
                       style={selectStyle}
                     >
-                      <option value="">{defaultLabel(v)}</option>
+                      <option value="">{defaultLabel(v, "result")}</option>
                       <option value="__none__">No outcome (ignore)</option>
                       {TARGET_OPTIONS.map((o) => (
                         <option key={o.value} value={o.value}>

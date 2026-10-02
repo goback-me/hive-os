@@ -110,7 +110,7 @@ export async function getReportSummary(clientId?: string) {
 
 // Lead funnel counts by stage for a client
 export async function getLeadFunnel(clientId: string) {
-  const stages = ["NEW_LEAD", "CONTACTED", "CLIENT_CONTACTED", "CONSULT_BOOKED", "WON"] as const;
+  const stages = ["CHASE_UP", "CONTACTED", "CLIENT_CONTACTED", "CONSULT_BOOKED", "WON"] as const;
   const counts = await Promise.all(stages.map((stage) => prisma.lead.count({ where: { clientId, deletedAt: null, stage } })));
   return stages.map((stage, i) => ({ stage, count: counts[i] }));
 }

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { addLead, biggestDrop, emptyCounts, funnelRates, reachedRank, type FunnelLead } from "./funnel";
 import { STAGE_RANK } from "./lead-status";
 
-const lead = (p: Partial<FunnelLead>): FunnelLead => ({ campaign: "A", stage: "NEW_LEAD", dqPhase: null, dqReason: null, lostReason: null, eventStages: [], ...p });
+const lead = (p: Partial<FunnelLead>): FunnelLead => ({ campaign: "A", stage: "CHASE_UP", dqPhase: null, dqReason: null, lostReason: null, eventStages: [], ...p });
 
 // Won reaches everything; open leads by current stage or events
 assert.equal(reachedRank(lead({ stage: "WON" })), STAGE_RANK.WON);

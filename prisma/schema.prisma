@@ -251,9 +251,9 @@ model ClientSheet {
 }
 
 // The real sales funnel, in order (see STAGE_RANK in lib/lead-status.ts).
-// WON / LOST / DISQUALIFIED are terminal.
+// WON / LOST / DISQUALIFIED are terminal. CHASE_UP is the entry stage (the
+// old NEW_LEAD was folded into it).
 enum LeadStage {
-  NEW_LEAD
   CHASE_UP
   CONTACTED
   NURTURE
@@ -262,6 +262,7 @@ enum LeadStage {
   HANDOVER_TEXT
   CLIENT_CONTACTED
   CONSULT_BOOKED
+  CONSULT_CANCELLED
   CONSULT_NO_SHOW
   CONSULT_ATTENDED
   QUOTE_SENT
@@ -320,7 +321,7 @@ model Lead {
   source       String?
   campaign     String?
   adset        String?
-  stage        LeadStage   @default(NEW_LEAD)
+  stage        LeadStage   @default(CHASE_UP)
   dqReason     DqReason?
   dqPhase      DqPhase?
   lostReason   LostReason?
@@ -334,6 +335,14 @@ model Lead {
   // whatever the sheet actually says even before (or without) a client
   // configuring the statusMapping on ClientSheet.
   sheetStatus String?
+  // Each status column's raw text on its own: HIVE STATUS (our team) and
+  // Prospect Status (the client's word on the outcome).
+  hiveStatusRaw     String?
+  prospectStatusRaw String?
+  // Handed to the client (handover / client contacted / nurture / booked)
+  // but they haven't reported back yet: Prospect Status is blank or
+  // "pending update" and the lead isn't closed. See lib/lead-sync.ts.
+  awaitingClientUpdate Boolean @default(false)
 
   // Stable identity across repeated syncs (normalized email/phone/name) —
   // no DB-level unique constraint; matched via findFirst in lib/lead-sync.ts.

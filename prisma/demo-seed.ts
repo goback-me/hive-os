@@ -65,7 +65,7 @@ function history(d: Demo, seed: number) {
 
 const LEAD_NAMES = ["Liam Carter", "Olivia Nguyen", "Noah Williams", "Ava Thompson", "Jack Robinson", "Mia Kelly"];
 const LEAD_SOURCES = ["Facebook Ads", "Instagram Ads", "Google Search", "Referral", "Facebook Ads"];
-const LEAD_STAGES = ["WON", "CONSULT_BOOKED", "CONTACTED", "CHASE_UP", "NEW_LEAD"] as const;
+const LEAD_STAGES = ["WON", "CONSULT_BOOKED", "CONTACTED", "CHASE_UP"] as const;
 
 async function wipe(clientId: string, keepLeads: boolean) {
   if (!keepLeads) {
