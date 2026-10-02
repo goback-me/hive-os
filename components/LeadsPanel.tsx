@@ -21,7 +21,8 @@ import type { SyncSummary } from "@/lib/lead-sync";
 import type { FunnelResponse } from "@/lib/funnel";
 import FunnelPanel from "@/components/FunnelPanel";
 import ProfitRoiPanel from "@/components/ProfitRoiPanel";
-import type { DateRangePreset } from "@/lib/date-range";
+import SalesPanel from "@/components/SalesPanel";
+import { DATE_RANGE_LABELS, type DateRangePreset } from "@/lib/date-range";
 import DateRangeDropdown from "@/components/DateRangeDropdown";
 import LeadTimelineChart, { type TimeSeriesPoint } from "@/components/LeadTimelineChart";
 import LeadWinsCard from "@/components/LeadWinsCard";
@@ -455,6 +456,8 @@ export default function LeadsPanel({
 
       {activeSubTab === "campaigns" && (
         <div className="space-y-5">
+          <SalesPanel clientId={clientId} rangeQuery={`range=${dateRange}`} rangeLabel={DATE_RANGE_LABELS[dateRange]} isCoach={isCoach} reloadKey={reloadKey} />
+
           <ProfitRoiPanel clientId={clientId} range={dateRange} isCoach={isCoach} />
 
           <div className="card rounded-2xl p-5">

@@ -13,7 +13,7 @@ const ICONS: Record<SnapshotCard["key"], string> = {
   leads: "person_add",
 };
 
-const TONE_STYLE: Record<Tone, { bg: string; fg: string }> = {
+export const TONE_STYLE: Record<Tone, { bg: string; fg: string }> = {
   green: { bg: "var(--tag-green-bg)", fg: "var(--tag-green-fg)" },
   amber: { bg: "var(--tag-amber-bg)", fg: "var(--tag-amber-fg)" },
   red: { bg: "var(--danger-tint)", fg: "var(--danger)" },

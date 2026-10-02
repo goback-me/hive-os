@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import { SHEET_TZ, sydneyLocalToDate } from "./sheet-parse";
 
@@ -21,6 +22,16 @@ const startOf = (key: string) => {
   return sydneyLocalToDate(y, m, d)!;
 };
 
+// A win's date: when the app saw it turn Won (sync or manual change). A lead
+// that was already Won when first imported has no real close time, so its
+// last dated note stands in, else its opt-in date. Needs the lead aliased `l`.
+// Shared with the Sales section (lib/sales.ts) so both date a sale the same.
+export const WON_AT_SQL = Prisma.sql`COALESCE(
+  (SELECT MIN(e.at) FROM "LeadStageEvent" e WHERE e."leadId" = l.id AND e.stage = 'WON' AND e.source IN ('SYNC', 'MANUAL')),
+  (SELECT MAX(ne.at) FROM "LeadNoteEvent" ne WHERE ne."leadId" = l.id),
+  l."createdAt"
+)`;
+
 export async function getLeadWins(clientId: string, window: WinsWindow, now = new Date()): Promise<LeadWins | null> {
   let start: string;
   if (window === "first") {
@@ -34,17 +45,10 @@ export async function getLeadWins(clientId: string, window: WinsWindow, now = ne
   const from = startOf(keys[0]);
   const to = startOf(addDays(keys[keys.length - 1], 1));
 
-  // A win's date: when the app saw it turn Won (sync or manual change). A
-  // lead that was already Won when first imported has no real close time,
-  // so its last dated note stands in, else its opt-in date.
   const [leads, wins] = await Promise.all([
     prisma.lead.findMany({ where: { clientId, deletedAt: null, createdAt: { gte: from, lt: to } }, select: { createdAt: true } }),
     prisma.$queryRaw<{ value: unknown; closed_at: Date }[]>`
-      SELECT l.value, COALESCE(
-        (SELECT MIN(e.at) FROM "LeadStageEvent" e WHERE e."leadId" = l.id AND e.stage = 'WON' AND e.source IN ('SYNC', 'MANUAL')),
-        (SELECT MAX(ne.at) FROM "LeadNoteEvent" ne WHERE ne."leadId" = l.id),
-        l."createdAt"
-      ) AS closed_at
+      SELECT l.value, ${WON_AT_SQL} AS closed_at
       FROM "Lead" l
       WHERE l."clientId" = ${clientId} AND l."deletedAt" IS NULL AND l.stage = 'WON'
     `,
