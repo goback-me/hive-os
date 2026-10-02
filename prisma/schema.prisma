@@ -149,7 +149,13 @@ model AdCampaign {
   metaCampaignId String?
   syncedAt       DateTime?
   createdAt      DateTime  @default(now())
+  // Coach override for whether this campaign's spend counts in reports
+  // (lib/reporting-scope.ts). null = the default: included when the campaign
+  // started on/after Client.startDate. A Meta campaign gets a row here (keyed
+  // by metaCampaignId) only once a coach overrides it.
+  includedInReporting Boolean?
 
+  @@unique([clientId, metaCampaignId])
   @@index([clientId])
 }
 
@@ -596,6 +602,10 @@ model Client {
   programId   String?
   program     Program?     @relation(fields: [programId], references: [id])
   joinedAt    DateTime     @default(now())
+  // Onboarding date (Sydney midnight) — reports only count leads, sales and
+  // spend on/after it, and "Since start" means startDate → today. null =
+  // everything counts (see lib/reporting-scope.ts).
+  startDate   DateTime?
 
   // ── Original coaching app — coaching-business relations ──────────────────────────
   users             User[]

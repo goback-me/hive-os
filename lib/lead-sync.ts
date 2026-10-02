@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "crypto";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getValidAccessToken, getSheetValues } from "@/lib/google-sheets";
-import { getCachedCampaignInsights } from "@/lib/meta-ads";
+import { clampRange, getReportingScope, scopedSpend } from "@/lib/reporting-scope";
 import { classifyStatus } from "@/lib/status-classifier";
 import { NOTES_KEYWORDS, parseNotes, type ParsedNote } from "@/lib/notes-parser";
 import { classifyNotesWithAI } from "@/lib/notes-ai";
@@ -603,37 +603,25 @@ function toGroup(campaign: string, counts: FunnelCounts, durations: Durations | 
 // range, counted by how far each provably got (see lib/funnel.ts), per
 // campaign and overall, joined with spend — Meta's live per-campaign spend
 // if connected, else the manually tracked AdCampaign rows (matched by name).
-// Only the few columns the maths needs are selected — never `raw`.
-export async function getClientFunnel(clientId: string, dateRange?: { from?: Date; to?: Date }): Promise<ClientFunnel> {
+// Scoped to the reporting start date and included campaigns
+// (lib/reporting-scope.ts). Only the few columns the maths needs are
+// selected — never `raw`.
+export async function getClientFunnel(clientId: string, range?: { from?: Date; to?: Date }): Promise<ClientFunnel> {
+  const scope = await getReportingScope(clientId);
+  const dateRange = clampRange(range ?? {}, scope.startDate);
   const createdAt =
-    dateRange?.from || dateRange?.to
+    dateRange.from || dateRange.to
       ? { ...(dateRange.from ? { gte: dateRange.from } : {}), ...(dateRange.to ? { lt: dateRange.to } : {}) }
       : undefined;
 
-  const [leads, client, adCampaigns, durations] = await Promise.all([
+  const [leads, spend, durations] = await Promise.all([
     prisma.lead.findMany({
       where: { clientId, deletedAt: null, ...(createdAt ? { createdAt } : {}) },
       select: { campaign: true, stage: true, dqPhase: true, dqReason: true, lostReason: true, stageEvents: { select: { stage: true } } },
     }),
-    prisma.client.findUnique({ where: { id: clientId } }),
-    prisma.adCampaign.findMany({ where: { clientId } }),
+    scopedSpend(scope, dateRange),
     getFunnelDurations(clientId, dateRange),
   ]);
-
-  let metaSpendByName: Map<string, number> | null = null;
-  if (client?.metaAdAccountId && client.metaAccessToken) {
-    try {
-      const rows = await getCachedCampaignInsights(client.metaAdAccountId, client.metaAccessToken, dateRange);
-      metaSpendByName = new Map<string, number>();
-      for (const r of rows) {
-        const k = r.campaignName.toLowerCase().trim();
-        metaSpendByName.set(k, (metaSpendByName.get(k) ?? 0) + r.spend);
-      }
-    } catch {
-      metaSpendByName = null; // Meta connected but the call failed — fall back silently
-    }
-  }
-  const manualSpendByName = new Map(adCampaigns.map((c) => [c.name.toLowerCase().trim(), Number(c.spend)]));
 
   const overall = emptyCounts();
   const byCampaign = new Map<string, FunnelCounts>();
@@ -645,21 +633,14 @@ export async function getClientFunnel(clientId: string, dateRange?: { from?: Dat
   }
 
   const campaigns = Array.from(byCampaign.entries()).map(([campaign, counts]) => {
-    const key = campaign.toLowerCase().trim();
-    const metaSpend = metaSpendByName?.get(key);
-    const manualSpend = manualSpendByName.get(key);
-    const spend = metaSpend ?? manualSpend ?? null;
-    return toGroup(campaign, counts, durations.get(campaign), spend, metaSpend !== undefined ? "meta" : manualSpend !== undefined ? "manual" : null);
+    const s = spend.byName?.get(campaign.toLowerCase().trim());
+    return toGroup(campaign, counts, durations.get(campaign), s ?? null, s !== undefined ? spend.source : null);
   });
 
-  // Client-wide spend is ALL spend in the range (campaigns with no leads
-  // still cost money), not just the campaigns that matched a lead.
-  const sum = (m: Map<string, number>) => Array.from(m.values()).reduce((a, b) => a + b, 0);
-  const overallSpend = metaSpendByName ? sum(metaSpendByName) : manualSpendByName.size ? sum(manualSpendByName) : null;
-  const overallSource = metaSpendByName ? "meta" : manualSpendByName.size ? "manual" : null;
-
+  // Client-wide spend is ALL included spend in the range (campaigns with no
+  // leads still cost money), not just the campaigns that matched a lead.
   return {
-    overall: toGroup(ALL, overall, durations.get(ALL), overallSpend, overallSource),
+    overall: toGroup(ALL, overall, durations.get(ALL), spend.total, spend.source),
     campaigns: campaigns.sort((a, b) => b.counts.leads - a.counts.leads),
   };
 }

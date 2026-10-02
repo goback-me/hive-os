@@ -1,7 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import { SHEET_TZ, sydneyLocalToDate } from "./sheet-parse";
-import { getCachedAccountSpend, getMetaAccountSpend } from "./meta-ads";
+import { getReportingScope, scopedSpend, type ReportingScope } from "./reporting-scope";
 import type { ReportVisibility } from "./report-visibility";
 
 // Snapshot KPIs — activity-based, bucketed by Sydney calendar month.
@@ -16,7 +16,9 @@ import type { ReportVisibility } from "./report-visibility";
 // funnel's timings use. IMPORT/INFERRED stage events are skipped: their
 // timestamp is just when we first synced, which would pile a client's whole
 // history into their first month. Each lead counts once per step, in the
-// month it first reached it.
+// month it first reached it. Only leads that came in on/after the client's
+// reporting start date count, and only included campaigns' spend
+// (lib/reporting-scope.ts).
 
 export type MonthKey = string; // "2026-09"
 type Window = { from: Date; to: Date; since: string; until: string }; // to exclusive; since/until inclusive days
@@ -87,10 +89,11 @@ export function isFreezable(k: MonthKey, now = new Date()) {
 
 // ── Computing ──────────────────────────────────────────────────────────────
 
-async function countKpis(clientId: string, w: Window) {
+async function countKpis(clientId: string, w: Window, startDate: Date | null) {
+  const since = startDate ?? new Date(0);
   const [row] = await prisma.$queryRaw<{ leads: bigint; live: bigint; booked: bigint; quotes: bigint }[]>`
     WITH l AS (
-      SELECT id, "createdAt" FROM "Lead" WHERE "clientId" = ${clientId} AND "deletedAt" IS NULL
+      SELECT id, "createdAt" FROM "Lead" WHERE "clientId" = ${clientId} AND "deletedAt" IS NULL AND "createdAt" >= ${since}
     ), ev AS (
       SELECT e."leadId", e.stage::text AS step, e.at, false AS note
       FROM "LeadStageEvent" e JOIN l ON l.id = e."leadId"
@@ -114,19 +117,14 @@ async function countKpis(clientId: string, w: Window) {
   return { leads: Number(row.leads), liveTransfers: Number(row.live), consultsBooked: Number(row.booked), quotes: Number(row.quotes) };
 }
 
-// Meta spend for exactly these days; else the dated daily-spend table.
-// Manual AdCampaign spend is deliberately NOT used: it has no dates, so it
-// would put all-time spend into every month and wreck cost-per-booking.
+// Included Meta spend for exactly these days; else the dated daily-spend
+// table. Manual AdCampaign spend is deliberately NOT used: it has no dates, so
+// it would put all-time spend into every month and wreck cost-per-booking.
 // Throws if Meta is connected but the call fails — callers that freeze must
 // not store a null spend over a transient Meta error.
-async function spendFor(clientId: string, w: Window, cached: boolean): Promise<Pick<KpiValues, "spend" | "spendSource">> {
-  const client = await prisma.client.findUnique({ where: { id: clientId }, select: { metaAdAccountId: true, metaAccessToken: true } });
-  if (client?.metaAdAccountId && client.metaAccessToken) {
-    const get = cached ? getCachedAccountSpend : getMetaAccountSpend;
-    return { spend: await get(client.metaAdAccountId, client.metaAccessToken, w.since, w.until), spendSource: "meta" };
-  }
-  const daily = await prisma.adSpendDaily.aggregate({ _sum: { spend: true }, _count: true, where: { clientId, date: { gte: w.from, lt: w.to } } });
-  return daily._count ? { spend: Number(daily._sum.spend ?? 0), spendSource: "daily" } : { spend: null, spendSource: null };
+async function spendFor(scope: ReportingScope, w: Window, cached: boolean): Promise<Pick<KpiValues, "spend" | "spendSource">> {
+  const s = await scopedSpend(scope, w, { cached, strict: true });
+  return s.source === "meta" || s.source === "daily" ? { spend: s.total, spendSource: s.source } : { spend: null, spendSource: null };
 }
 
 function withCosts(c: Omit<KpiValues, "costPerBooking" | "costPerQuote">): KpiValues {
@@ -134,10 +132,10 @@ function withCosts(c: Omit<KpiValues, "costPerBooking" | "costPerQuote">): KpiVa
   return { ...c, costPerBooking: per(c.consultsBooked), costPerQuote: per(c.quotes) };
 }
 
-async function computeWindow(clientId: string, w: Window, opts: { cached: boolean; strictSpend: boolean }): Promise<KpiValues> {
+async function computeWindow(scope: ReportingScope, w: Window, opts: { cached: boolean; strictSpend: boolean }): Promise<KpiValues> {
   const [counts, spend] = await Promise.all([
-    countKpis(clientId, w),
-    spendFor(clientId, w, opts.cached).catch((e) => {
+    countKpis(scope.clientId, w, scope.startDate),
+    spendFor(scope, w, opts.cached).catch((e) => {
       if (opts.strictSpend) throw e;
       return { spend: null, spendSource: null } as const; // expired token etc. — cost cards just drop out
     }),
@@ -158,13 +156,14 @@ export async function getMonthKpis(clientId: string, k: MonthKey): Promise<KpiVa
       spendSource: row.spendSource as KpiValues["spendSource"],
     });
   }
-  return computeWindow(clientId, monthWindow(k), { cached: true, strictSpend: false });
+  return computeWindow(await getReportingScope(clientId), monthWindow(k), { cached: true, strictSpend: false });
 }
 
 // ── Month-end freeze + backfill ────────────────────────────────────────────
 
-async function freezeMonth(clientId: string, k: MonthKey) {
-  const v = await computeWindow(clientId, monthWindow(k), { cached: false, strictSpend: true });
+async function freezeMonth(scope: ReportingScope, k: MonthKey) {
+  const clientId = scope.clientId;
+  const v = await computeWindow(scope, monthWindow(k), { cached: false, strictSpend: true });
   const data = { leads: v.leads, liveTransfers: v.liveTransfers, consultsBooked: v.consultsBooked, quotes: v.quotes, spend: v.spend, spendSource: v.spendSource };
   await prisma.monthlyKpi.upsert({
     where: { clientId_month: { clientId, month: k } },
@@ -173,8 +172,13 @@ async function freezeMonth(clientId: string, k: MonthKey) {
   });
 }
 
-async function firstLeadMonth(clientId: string): Promise<MonthKey | null> {
-  const first = await prisma.lead.findFirst({ where: { clientId, deletedAt: null }, orderBy: { createdAt: "asc" }, select: { createdAt: true } });
+// The first month with a lead on/after the reporting start date.
+async function firstLeadMonth(clientId: string, startDate: Date | null): Promise<MonthKey | null> {
+  const first = await prisma.lead.findFirst({
+    where: { clientId, deletedAt: null, ...(startDate ? { createdAt: { gte: startDate } } : {}) },
+    orderBy: { createdAt: "asc" },
+    select: { createdAt: true },
+  });
   return first ? monthKeyOf(first.createdAt) : null;
 }
 
@@ -183,7 +187,8 @@ async function firstLeadMonth(clientId: string): Promise<MonthKey | null> {
 // omitted — the backfill). `force` re-freezes months already stored.
 export async function freezeDueMonths(clientId: string, opts: { lookback?: number; force?: boolean; now?: Date } = {}) {
   const now = opts.now ?? new Date();
-  const start = await firstLeadMonth(clientId);
+  const scope = await getReportingScope(clientId, { cached: false });
+  const start = await firstLeadMonth(clientId, scope.startDate);
   if (!start) return [];
   const current = monthKeyOf(now);
   const earliest = opts.lookback ? addMonths(current, -opts.lookback) : start;
@@ -193,7 +198,7 @@ export async function freezeDueMonths(clientId: string, opts: { lookback?: numbe
   const frozen: MonthKey[] = [];
   for (let k = earliest > start ? earliest : start; k < current; k = addMonths(k, 1)) {
     if (existing.has(k) || !isFreezable(k, now)) continue;
-    await freezeMonth(clientId, k);
+    await freezeMonth(scope, k);
     frozen.push(k);
   }
   return frozen;
@@ -261,7 +266,8 @@ export async function getSnapshot(
   now = new Date()
 ): Promise<Snapshot> {
   const current = monthKeyOf(now);
-  const start = (await firstLeadMonth(clientId)) ?? current;
+  const scope = await getReportingScope(clientId);
+  const start = (await firstLeadMonth(clientId, scope.startDate)) ?? current;
   const months: { key: MonthKey; label: string }[] = [];
   for (let k = current; k >= start && months.length < 12; k = addMonths(k, -1)) months.push({ key: k, label: monthLabel(k) });
 
@@ -277,8 +283,8 @@ export async function getSnapshot(
     const w = monthWindow(k);
     const opts = { cached: true, strictSpend: false };
     [values, previous] = await Promise.all([
-      computeWindow(clientId, { ...w, to: now, until: `${k}-${pad(today)}` }, opts),
-      computeWindow(clientId, monthWindow(prevKey, today), opts),
+      computeWindow(scope, { ...w, to: now, until: `${k}-${pad(today)}` }, opts),
+      computeWindow(scope, monthWindow(prevKey, today), opts),
     ]);
     compareLabel = `vs 1–${today} ${monthLabel(prevKey).split(" ")[0]}`;
   } else {

@@ -1,5 +1,6 @@
 import { unstable_cache } from "next/cache";
 import { decryptToken } from "@/lib/crypto";
+import { sydneyDay } from "@/lib/sheet-parse";
 
 export type MetaInsights = {
   spend: number;
@@ -56,120 +57,109 @@ export async function getMetaInsights(adAccountId: string, encryptedAccessToken:
   };
 }
 
-export type MetaCampaignSpend = { campaignId: string; campaignName: string; spend: number; impressions: number; clicks: number };
+export type MetaCampaignSpend = {
+  campaignId: string;
+  campaignName: string;
+  date?: string; // Sydney day, only when fetched with `daily`
+  spend: number;
+  impressions: number;
+  clicks: number;
+};
 
-function toMetaDate(d: Date) {
-  return d.toISOString().slice(0, 10); // Meta's time_range wants plain YYYY-MM-DD, day granularity anyway
+// Every page of a Graph API list — Meta pages at 25 rows by default, which
+// silently dropped campaigns (and daily rows) past the first page.
+async function metaGetAll(url: string): Promise<any[]> {
+  const out: any[] = [];
+  for (let next: string | undefined = url; next; ) {
+    const res: Response = await fetch(next, { cache: "no-store" });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data?.error?.message ?? "Meta API request failed");
+    out.push(...(data.data ?? []));
+    next = data.paging?.next;
+  }
+  return out;
 }
 
-// Same account, broken down per campaign (level=campaign) — used only by the
-// Leads tab's per-campaign funnel (lib/lead-sync.ts), which needs individual
-// campaign spend rather than the account-wide total getMetaInsights returns.
-//
-// Was previously hardcoded to date_preset=last_30d regardless of what date
-// range the Leads tab had selected, so spend never matched the lead counts
-// next to it. Now takes the SAME {from, to} the funnel resolved its lead
-// counts from, so both numbers cover the identical window — `time_range`
-// when a bound is given, `date_preset=maximum` (full account history) when
-// dateRange is empty (the "Maximum" preset has no from/to).
-export async function getMetaCampaignInsights(
-  adAccountId: string,
-  encryptedAccessToken: string,
-  dateRange?: { from?: Date; to?: Date }
-): Promise<MetaCampaignSpend[]> {
+// An app range ({from, to exclusive}) → Meta's inclusive day bounds, as
+// Sydney calendar days (the ad accounts run on Sydney time).
+export function metaDays(range?: { from?: Date; to?: Date }) {
+  return {
+    since: range?.from ? sydneyDay(range.from) : undefined,
+    until: range?.to ? sydneyDay(new Date(range.to.getTime() - 1)) : undefined,
+  };
+}
+
+// Meta only serves ~37 months of insights.
+const META_HISTORY_DAYS = 37 * 30;
+
+// Per-campaign spend for an inclusive Sydney day window (`since`/`until`
+// both omitted = the account's full history). `daily` breaks it down by day.
+async function fetchCampaignInsights(adAccountId: string, encryptedAccessToken: string, since?: string, until?: string, daily = false): Promise<MetaCampaignSpend[]> {
   const accessToken = decryptToken(encryptedAccessToken);
   const fields = "campaign_id,campaign_name,spend,impressions,clicks";
-
   const dateParam =
-    dateRange?.from || dateRange?.to
+    since || until || daily
       ? `time_range=${encodeURIComponent(
-          JSON.stringify({
-            since: toMetaDate(dateRange.from ?? new Date(0)),
-            until: toMetaDate(dateRange.to ?? new Date()),
-          })
+          JSON.stringify({ since: since ?? sydneyDay(new Date(Date.now() - META_HISTORY_DAYS * 86_400_000)), until: until ?? sydneyDay(new Date()) })
         )}`
       : "date_preset=maximum";
-
-  const url =
+  const rows = await metaGetAll(
     `https://graph.facebook.com/v21.0/${adAccountId}/insights` +
-    `?level=campaign&fields=${fields}&${dateParam}&access_token=${encodeURIComponent(accessToken)}`;
-
-  const res = await fetch(url, { cache: "no-store" });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data?.error?.message ?? "Meta API request failed");
-
-  return (data.data ?? []).map((row: any) => ({
+      `?level=campaign&fields=${fields}&${dateParam}${daily ? "&time_increment=1" : ""}&limit=500&access_token=${encodeURIComponent(accessToken)}`
+  );
+  return rows.map((row: any) => ({
     campaignId: row.campaign_id,
     campaignName: row.campaign_name,
+    ...(daily ? { date: row.date_start } : {}),
     spend: Number(row.spend ?? 0),
     impressions: Number(row.impressions ?? 0),
     clicks: Number(row.clicks ?? 0),
   }));
 }
 
-export type MetaCampaign = { id: string; name: string; status: string; spend: number; impressions: number; clicks: number };
-
-// Every campaign that's ever existed in the account — active, paused, or
-// archived — with its lifetime spend, so the Ads tab can show campaigns
-// beyond whatever's active right now and a lead's `campaign` text can be
-// matched against something that still exists in the list. Insights only
-// cover campaigns with at least some historical spend/activity; a brand new
-// campaign with nothing spent yet just shows $0 rather than being dropped.
-export async function getMetaAllCampaigns(adAccountId: string, encryptedAccessToken: string): Promise<MetaCampaign[]> {
-  const accessToken = decryptToken(encryptedAccessToken);
-
-  const [campaignsRes, insights] = await Promise.all([
-    fetch(
-      `https://graph.facebook.com/v21.0/${adAccountId}/campaigns?fields=id,name,effective_status&limit=500&access_token=${encodeURIComponent(accessToken)}`,
-      { cache: "no-store" }
-    ).then((r) => r.json()),
-    getMetaCampaignInsights(adAccountId, encryptedAccessToken), // no dateRange => date_preset=maximum (full account history)
-  ]);
-  if (campaignsRes.error) throw new Error(campaignsRes.error.message ?? "Meta API request failed");
-
-  const insightsByCampaignId = new Map(insights.map((i) => [i.campaignId, i]));
-
-  return (campaignsRes.data ?? []).map((c: any) => {
-    const insight = insightsByCampaignId.get(c.id);
-    return {
-      id: c.id,
-      name: c.name,
-      status: c.effective_status ?? "UNKNOWN",
-      spend: insight?.spend ?? 0,
-      impressions: insight?.impressions ?? 0,
-      clicks: insight?.clicks ?? 0,
-    };
-  });
+// Same account, broken down per campaign (level=campaign), for the same
+// {from, to} range the caller counted its leads over — `date_preset=maximum`
+// (full account history) when the range is empty.
+export function getMetaCampaignInsights(adAccountId: string, encryptedAccessToken: string, dateRange?: { from?: Date; to?: Date }, daily = false) {
+  const { since, until } = metaDays(dateRange);
+  return fetchCampaignInsights(adAccountId, encryptedAccessToken, since, until, daily);
 }
 
-// Meta's per-campaign spend is a slow network call and only has day
-// granularity — cached for 5 min, keyed by day, so reopening the funnel or
-// dashboard, or flipping between date ranges, doesn't wait on Meta again.
-const cachedInsights = unstable_cache(
-  (adAccountId: string, token: string, since?: string, until?: string) =>
-    getMetaCampaignInsights(adAccountId, token, { from: since ? new Date(since) : undefined, to: until ? new Date(until) : undefined }),
-  ["meta-campaign-insights"],
-  { revalidate: 300 }
-);
+export type MetaCampaignInfo = { id: string; name: string; status: string; startedAt: string | null };
 
-// Account-wide spend for an inclusive day window, given as plain
-// "YYYY-MM-DD" in the ad account's own timezone — the Snapshot KPIs pass
-// Sydney calendar days directly, so no UTC conversion shifts the month edge.
-export async function getMetaAccountSpend(adAccountId: string, encryptedAccessToken: string, since: string, until: string): Promise<number> {
+// Every campaign that's ever existed in the account (active, paused or
+// archived), with when it started — the reporting scope's default rule
+// compares that to the client's start date.
+export async function getMetaCampaignList(adAccountId: string, encryptedAccessToken: string): Promise<MetaCampaignInfo[]> {
   const accessToken = decryptToken(encryptedAccessToken);
-  const timeRange = encodeURIComponent(JSON.stringify({ since, until }));
-  const res = await fetch(
-    `https://graph.facebook.com/v21.0/${adAccountId}/insights?fields=spend&time_range=${timeRange}&access_token=${encodeURIComponent(accessToken)}`,
-    { cache: "no-store" }
+  const rows = await metaGetAll(
+    `https://graph.facebook.com/v21.0/${adAccountId}/campaigns?fields=id,name,effective_status,start_time,created_time&limit=500&access_token=${encodeURIComponent(accessToken)}`
   );
-  const data = await res.json();
-  if (!res.ok) throw new Error(data?.error?.message ?? "Meta API request failed");
-  return (data.data ?? []).reduce((s: number, r: any) => s + Number(r.spend ?? 0), 0);
+  return rows.map((c: any) => ({ id: c.id, name: c.name, status: c.effective_status ?? "UNKNOWN", startedAt: c.start_time ?? c.created_time ?? null }));
 }
 
-export const getCachedAccountSpend = unstable_cache(getMetaAccountSpend, ["meta-account-spend"], { revalidate: 300 });
+export type MetaCampaign = MetaCampaignInfo & { spend: number; impressions: number; clicks: number };
 
-export function getCachedCampaignInsights(adAccountId: string, encryptedAccessToken: string, dateRange?: { from?: Date; to?: Date }) {
-  const day = (d?: Date) => (d ? toMetaDate(d) : undefined);
-  return cachedInsights(adAccountId, encryptedAccessToken, day(dateRange?.from), day(dateRange?.to));
+// The campaign list joined with spend for a range (all-time when omitted).
+// Insights only cover campaigns with some activity; a brand new campaign with
+// nothing spent yet just shows $0 rather than being dropped.
+export async function getMetaAllCampaigns(adAccountId: string, encryptedAccessToken: string, dateRange?: { from?: Date; to?: Date }): Promise<MetaCampaign[]> {
+  const [list, insights] = await Promise.all([
+    getCachedMetaCampaignList(adAccountId, encryptedAccessToken),
+    getCachedCampaignInsights(adAccountId, encryptedAccessToken, dateRange),
+  ]);
+  const byId = new Map(insights.map((i) => [i.campaignId, i]));
+  return list.map((c) => ({ ...c, spend: byId.get(c.id)?.spend ?? 0, impressions: byId.get(c.id)?.impressions ?? 0, clicks: byId.get(c.id)?.clicks ?? 0 }));
+}
+
+// Meta calls are slow and only have day granularity — cached for 5 min,
+// keyed by day, so flipping between date ranges doesn't wait on Meta again.
+// unstable_cache only works inside Next — scripts (the KPI backfill) call the
+// uncached versions.
+const cachedInsights = unstable_cache(fetchCampaignInsights, ["meta-campaign-insights-v2"], { revalidate: 300 });
+export const getCachedMetaCampaignList = unstable_cache(getMetaCampaignList, ["meta-campaign-list"], { revalidate: 300 });
+
+export function getCachedCampaignInsights(adAccountId: string, encryptedAccessToken: string, dateRange?: { from?: Date; to?: Date }, daily = false) {
+  const { since, until } = metaDays(dateRange);
+  return cachedInsights(adAccountId, encryptedAccessToken, since, until, daily);
 }

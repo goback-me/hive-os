@@ -73,7 +73,7 @@ export type FunnelGroup = {
   rates: FunnelRates;
   durations: Durations;
   spend: number | null;
-  spendSource: "meta" | "manual" | null;
+  spendSource: "meta" | "daily" | "manual" | null;
   costPerLead: number | null;
   costPerContacted: number | null;
   costPerQualified: number | null;

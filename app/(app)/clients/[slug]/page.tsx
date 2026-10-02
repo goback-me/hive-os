@@ -15,11 +15,13 @@ import {
   addLeadNote,
   getOrCreateClientReferralLink,
   saveReportVisibility,
+  saveClientStartDate,
+  setCampaignReporting,
 } from "@/lib/actions";
 import { requireClientAccess } from "@/lib/auth";
 import { checkAndGrantAwards } from "@/lib/awards";
 import { STAGE_LABELS, STAGE_STYLE } from "@/lib/lead-status";
-import { getMetaAllCampaigns } from "@/lib/meta-ads";
+import { sydneyDay } from "@/lib/sheet-parse";
 import { getClientStats, statsForViewer } from "@/lib/client-stats";
 import { getSnapshot } from "@/lib/kpi";
 import { parseVisibility } from "@/lib/report-visibility";
@@ -37,6 +39,7 @@ import ProgressNotesPanel from "@/components/ProgressNotesPanel";
 import ClientReferralPanel from "@/components/ClientReferralPanel";
 import MetaAdsCard from "@/components/MetaAdsCard";
 import GoalsCard from "@/components/GoalsCard";
+import StartDateField from "@/components/StartDateField";
 
 // Forces this page to render fresh on every single request — no static
 // caching, no ISR.
@@ -63,12 +66,10 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
     rawStats,
     snapshot,
     referralLink,
-    metaCampaigns,
     onboardingTemplates,
     onboardingProgress,
     modules,
     lessonProgress,
-    campaigns,
     awardTiers,
     clientAwards,
     recentLeads,
@@ -86,18 +87,10 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
     // Lazily provisions a referral link for clients that existed before this
     // feature — new clients already get one at creation (see createClient).
     getOrCreateClientReferralLink(client.id, client.name),
-    // Once Meta's connected, its live campaign list (active + paused/ended,
-    // all-time spend) replaces the old manually-typed AdCampaign rows on the
-    // Ads tab. Falls back to the manual rows if the call fails (e.g. an
-    // expired token).
-    client.metaAdAccountId && client.metaAccessToken
-      ? getMetaAllCampaigns(client.metaAdAccountId, client.metaAccessToken).catch(() => null)
-      : Promise.resolve(null),
     prisma.onboardingStepTemplate.findMany({ orderBy: { order: "asc" } }),
     prisma.clientOnboardingStep.findMany({ where: { clientId: client.id } }),
     prisma.module.findMany({ orderBy: { order: "asc" }, include: { lessons: { orderBy: { order: "asc" } } } }),
     prisma.clientLessonProgress.findMany({ where: { clientId: client.id, completedAt: { not: null } } }),
-    prisma.adCampaign.findMany({ where: { clientId: client.id } }),
     prisma.awardTier.findMany({ orderBy: { order: "asc" } }),
     prisma.clientAward.findMany({ where: { clientId: client.id } }),
     // Same order as the Leads tab; skips blank sheet rows (no name/phone/email).
@@ -188,6 +181,7 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
               <DetailRow icon="mail" label="Email" value={client.email ?? "—"} />
               {client.scope && <DetailRow icon="task_alt" label="Scope" value={client.scope} />}
               <DetailRow icon="calendar_today" label="Joined" value={client.joinedAt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })} />
+              <StartDateField clientId={client.id} initial={client.startDate ? sydneyDay(client.startDate) : ""} isCoach={isCoach} onSave={saveClientStartDate} />
             </dl>
           </div>
 
@@ -254,24 +248,9 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
 
   const adsContent = (
     <div className="space-y-6">
-      <AdsPanel
-        source={metaCampaigns ? "meta" : "manual"}
-        campaigns={
-          metaCampaigns
-            ? metaCampaigns.map((c) => ({ id: c.id, name: c.name, status: c.status, spend: c.spend, impressions: c.impressions, clicks: c.clicks }))
-            : campaigns.map((c) => ({
-                id: c.id,
-                name: c.name,
-                status: c.status,
-                spend: Number(c.spend),
-                impressions: c.impressions,
-                profileVisits: c.profileVisits,
-                engagement: c.engagement,
-                saves: c.saves,
-                syncedAt: c.syncedAt?.toISOString() ?? null,
-              }))
-        }
-      />
+      {/* Campaigns + spend load client-side (/api/ads) — Meta's live list once
+          connected, else the manually tracked AdCampaign rows. */}
+      <AdsPanel clientId={client.id} isCoach={isCoach} onSetReporting={setCampaignReporting} />
       {/* Hive OS — Meta Marketing API connection for this client, merged in
           alongside the original coaching app's own manually-tracked AdCampaign rows above. */}
       <MetaAdsCard clientId={client.id} connected={Boolean(client.metaAdAccountId)} adAccountId={client.metaAdAccountId} />
@@ -301,6 +280,7 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
       viewerRole={viewer.role}
       hasSheet={Boolean(clientSheet)}
       clientSlug={client.slug}
+      startDate={client.startDate?.toISOString() ?? null}
       lastSyncedAt={clientSheet?.lastSyncedAt?.toISOString() ?? null}
       lastSyncError={clientSheet?.lastSyncError ?? null}
       onSync={syncClientLeads}

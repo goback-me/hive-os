@@ -25,6 +25,7 @@ import type { DateRangePreset } from "@/lib/date-range";
 import DateRangeDropdown from "@/components/DateRangeDropdown";
 import LeadTimelineChart, { type TimeSeriesPoint } from "@/components/LeadTimelineChart";
 import LeadWinsCard from "@/components/LeadWinsCard";
+import { StartDateWarning } from "@/components/StartDateField";
 
 type LeadRow = {
   id: string;
@@ -119,6 +120,7 @@ export default function LeadsPanel({
   viewerRole,
   hasSheet,
   clientSlug,
+  startDate,
   lastSyncedAt: initialLastSyncedAt,
   lastSyncError,
   onSync,
@@ -130,6 +132,7 @@ export default function LeadsPanel({
   viewerRole: "COACH" | "CLIENT";
   hasSheet: boolean;
   clientSlug: string;
+  startDate: string | null;
   lastSyncedAt: string | null;
   lastSyncError: string | null;
   onSync: (clientId: string) => Promise<{ summary: SyncSummary } | { error: string }>;
@@ -415,6 +418,7 @@ export default function LeadsPanel({
 
   return (
     <div className="space-y-5">
+      {isCoach && !startDate && <StartDateWarning />}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           {isCoach && (

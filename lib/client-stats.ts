@@ -1,15 +1,16 @@
 import { prisma } from "./prisma";
 import { resolveDateRange, type DateRangePreset } from "./date-range";
-import { getCachedCampaignInsights } from "./meta-ads";
+import { clampRange, getReportingScope, scopedSpend } from "./reporting-scope";
 import { getRevenueEntries, revenueBetween } from "./revenue";
 import { parseVisibility, type ReportVisibility } from "./report-visibility";
 
 export type ClientStats = {
   revenue: number;
   spend: number;
-  // "meta" = live Meta spend for this exact range. "manual" = the manually
-  // tracked campaigns, which have no dates, so they're always all-time.
-  spendSource: "meta" | "manual";
+  // "meta" = live Meta spend for this exact range, "daily" = dated daily-spend
+  // rows. "manual" = the manually tracked campaigns, which have no dates, so
+  // they're always all-time.
+  spendSource: "meta" | "daily" | "manual";
   spendAllTime: boolean;
   profit: number;
   lifetimeRevenue: number;
@@ -44,23 +45,18 @@ export async function getReportVisibility(clientId: string): Promise<ReportVisib
 
 // The client Dashboard cards for one date range — used for the first server
 // render and by /api/clients/stats when the range changes, so both agree.
+// Scoped to the client's reporting start date and included campaigns
+// (lib/reporting-scope.ts): "Maximum" = start date → today.
 export async function getClientStats(clientId: string, preset: DateRangePreset): Promise<ClientStats> {
-  const range = resolveDateRange(preset);
-  const [client, entries, campaigns] = await Promise.all([
-    prisma.client.findUnique({ where: { id: clientId }, select: { metaAdAccountId: true, metaAccessToken: true } }),
-    getRevenueEntries([clientId]),
-    prisma.adCampaign.findMany({ where: { clientId }, select: { spend: true } }),
+  const scope = await getReportingScope(clientId);
+  const range = clampRange(resolveDateRange(preset), scope.startDate);
+  const [entries, scoped] = await Promise.all([
+    getRevenueEntries([clientId], { leadsSince: scope.startDate }),
+    scopedSpend(scope, range),
   ]);
 
-  let spend: number | null = null;
-  if (client?.metaAdAccountId && client.metaAccessToken) {
-    spend = await getCachedCampaignInsights(client.metaAdAccountId, client.metaAccessToken, range)
-      .then((rows) => rows.reduce((s, r) => s + r.spend, 0))
-      .catch(() => null); // expired token etc. → fall back to the manual numbers
-  }
-  const spendSource = spend == null ? "manual" : "meta";
-  if (spend == null) spend = campaigns.reduce((s, c) => s + Number(c.spend), 0);
-
+  const spend = scoped.total ?? 0;
+  const spendSource = scoped.source ?? "manual";
   const revenue = revenueBetween(entries, range);
   return {
     revenue,
@@ -68,6 +64,6 @@ export async function getClientStats(clientId: string, preset: DateRangePreset):
     spendSource,
     spendAllTime: spendSource === "manual" && preset !== "maximum",
     profit: revenue - spend,
-    lifetimeRevenue: revenueBetween(entries, {}),
+    lifetimeRevenue: revenueBetween(entries, clampRange({}, scope.startDate)),
   };
 }

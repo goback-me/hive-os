@@ -1,3 +1,8 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import { StartDateWarning } from "@/components/StartDateField";
+
 type Campaign = {
   id: string;
   name: string;
@@ -9,7 +14,17 @@ type Campaign = {
   engagement?: number;
   saves?: number;
   syncedAt?: string | null;
+  // Coach only — whether this campaign's spend counts in reports.
+  startedAt?: string | null;
+  defaultIncluded?: boolean;
+  override?: boolean | null;
+  included?: boolean;
 };
+
+type AdsData = { source: "meta" | "manual"; startDate: string | null; campaigns: Campaign[] };
+type SetReporting = (clientId: string, campaign: { id: string; name: string; source: "meta" | "manual" }, included: boolean | null) => Promise<void>;
+
+const sydDate = (iso: string) => new Date(iso).toLocaleDateString("en-AU", { timeZone: "Australia/Sydney", day: "numeric", month: "short", year: "numeric" });
 
 function isActive(status: string) {
   return status.toUpperCase() === "ACTIVE";
@@ -33,10 +48,46 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-export default function AdsPanel({ campaigns, source = "manual" }: { campaigns: Campaign[]; source?: "meta" | "manual" }) {
+export default function AdsPanel({ clientId, isCoach, onSetReporting }: { clientId: string; isCoach: boolean; onSetReporting: SetReporting }) {
+  const [data, setData] = useState<AdsData | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const req = useRef(0);
+
+  function load() {
+    const id = ++req.current;
+    setError(null);
+    fetch(`/api/ads?clientId=${clientId}`)
+      .then((r) => r.json())
+      .then((d) => {
+        if (id !== req.current) return;
+        if (d.error) throw new Error(d.error);
+        setData(d);
+      })
+      .catch((e) => id === req.current && setError(e.message));
+  }
+  useEffect(load, [clientId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Ticking back to the default clears the override rather than pinning it.
+  function toggle(c: Campaign) {
+    if (!data) return;
+    const next = !c.included;
+    const override = next === c.defaultIncluded ? null : next;
+    setData({ ...data, campaigns: data.campaigns.map((x) => (x.id === c.id ? { ...x, included: next, override } : x)) });
+    onSetReporting(clientId, { id: c.id, name: c.name, source: data.source }, override).catch((e) => {
+      setError(e instanceof Error ? e.message : "Couldn't save");
+      load();
+    });
+  }
+
+  if (error && !data) return <p className="text-xs" style={{ color: "var(--danger)" }}>{error}</p>;
+  if (!data) return <div className="card rounded-2xl p-5"><span className="skeleton h-4 w-40 block mb-4" /><span className="skeleton h-8 w-full block" /></div>;
+
+  const { campaigns, source } = data;
+  const showReporting = isCoach && campaigns.some((c) => c.defaultIncluded !== undefined);
+  const excluded = campaigns.filter((c) => c.included === false).length;
   const totals = campaigns.reduce(
     (acc, c) => ({
-      spend: acc.spend + c.spend,
+      spend: acc.spend + (c.included === false ? 0 : c.spend), // only campaigns that count in reports
       impressions: acc.impressions + c.impressions,
       clicks: acc.clicks + (c.clicks ?? 0),
       active: acc.active + (isActive(c.status) ? 1 : 0),
@@ -50,6 +101,8 @@ export default function AdsPanel({ campaigns, source = "manual" }: { campaigns: 
 
   return (
     <div>
+      {isCoach && !data.startDate && <StartDateWarning />}
+      {error && <p className="text-xs mb-3" style={{ color: "var(--danger)" }}>{error}</p>}
       {!isConnected && (
         <div
           className="rounded-xl p-3 mb-4 flex items-center gap-2 text-sm"
@@ -64,6 +117,7 @@ export default function AdsPanel({ campaigns, source = "manual" }: { campaigns: 
         <div className="card rounded-2xl p-4">
           <p className="text-xs" style={{ color: "var(--text-secondary)" }}>
             Total Spend{source === "meta" && <span style={{ color: "var(--text-muted)" }}> · all-time</span>}
+            {excluded > 0 && <span style={{ color: "var(--text-muted)" }}> · {excluded} excluded</span>}
           </p>
           <p className="font-heading text-2xl font-bold mt-1" style={{ color: "var(--text-primary)" }}>${totals.spend.toLocaleString()}</p>
         </div>
@@ -88,7 +142,7 @@ export default function AdsPanel({ campaigns, source = "manual" }: { campaigns: 
               {(source === "meta"
                 ? ["Campaign", "Status", "Spend", "Impressions", "Clicks"]
                 : ["Campaign", "Status", "Spend", "Impressions", "Profile Visits", "Engagement", "Saves"]
-              ).map((h) => (
+              ).concat(showReporting ? ["In reports"] : []).map((h) => (
                 <th key={h} className="text-left px-4 py-3 font-medium" style={{ color: "var(--text-muted)" }}>{h}</th>
               ))}
             </tr>
@@ -109,11 +163,29 @@ export default function AdsPanel({ campaigns, source = "manual" }: { campaigns: 
                     <td className="px-4 py-3" style={{ color: "var(--text-primary)" }}>{(c.saves ?? 0).toLocaleString()}</td>
                   </>
                 )}
+                {showReporting && (
+                  <td className="px-4 py-3">
+                    <label className="flex items-center gap-2 cursor-pointer whitespace-nowrap">
+                      <input type="checkbox" checked={!!c.included} onChange={() => toggle(c)} className="w-4 h-4 accent-[var(--primary)]" />
+                      <span className="text-xs" style={{ color: "var(--text-secondary)" }}>
+                        {c.override != null ? (
+                          <span className="font-bold" style={{ color: "var(--primary)" }}>Override</span>
+                        ) : (
+                          "Default"
+                        )}
+                        <span style={{ color: "var(--text-muted)" }}>
+                          {" "}· default {c.defaultIncluded ? "included" : "excluded"}
+                          {c.startedAt ? ` (started ${sydDate(c.startedAt)})` : ""}
+                        </span>
+                      </span>
+                    </label>
+                  </td>
+                )}
               </tr>
             ))}
             {campaigns.length === 0 && (
               <tr>
-                <td colSpan={source === "meta" ? 5 : 7} className="px-4 py-8 text-center" style={{ color: "var(--text-muted)" }}>
+                <td colSpan={(source === "meta" ? 5 : 7) + (showReporting ? 1 : 0)} className="px-4 py-8 text-center" style={{ color: "var(--text-muted)" }}>
                   No campaigns yet.
                 </td>
               </tr>

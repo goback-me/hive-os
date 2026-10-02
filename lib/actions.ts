@@ -8,6 +8,7 @@ import { getClerkAdminClient } from "@/lib/clerk-admin";
 import { syncLeadsFromSheet, type SyncSummary } from "@/lib/lead-sync";
 import { parseTarget, planStageEvents } from "@/lib/lead-status";
 import { parseVisibility, type ReportVisibility } from "@/lib/report-visibility";
+import { sydneyLocalToDate } from "@/lib/sheet-parse";
 
 function slugify(name: string) {
   return name
@@ -298,6 +299,43 @@ export async function saveReportVisibility(clientId: string, flags: Partial<Repo
   await prisma.client.update({ where: { id: clientId }, data: { reportVisibility: next } });
   revalidatePath(`/clients/${client.slug}`);
   return next;
+}
+
+// Coach-only: the client's onboarding date ("YYYY-MM-DD", Sydney; "" clears
+// it). Reports only count leads/sales/spend from this day on. Frozen months
+// were computed under the old scope, so they're dropped and recompute live
+// (re-freeze with `npm run db:backfill-kpis`).
+export async function saveClientStartDate(clientId: string, day: string) {
+  await requireCoach();
+  const m = day.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const startDate = m ? sydneyLocalToDate(Number(m[1]), Number(m[2]), Number(m[3])) : null;
+  if (day && !startDate) throw new Error("Invalid date");
+  await prisma.$transaction([
+    prisma.client.update({ where: { id: clientId }, data: { startDate } }),
+    prisma.monthlyKpi.deleteMany({ where: { clientId } }),
+  ]);
+  revalidatePath(`/clients`);
+}
+
+// Coach-only: include/exclude one campaign's spend from reports. `included`
+// null = back to the default (started on/after the start date). A Meta
+// campaign gets an AdCampaign row (by metaCampaignId) to hold the override.
+export async function setCampaignReporting(
+  clientId: string,
+  campaign: { id: string; name: string; source: "meta" | "manual" },
+  included: boolean | null
+) {
+  await requireCoach();
+  await prisma.$transaction([
+    campaign.source === "meta"
+      ? prisma.adCampaign.upsert({
+          where: { clientId_metaCampaignId: { clientId, metaCampaignId: campaign.id } },
+          create: { clientId, metaCampaignId: campaign.id, name: campaign.name, includedInReporting: included },
+          update: { name: campaign.name, includedInReporting: included },
+        })
+      : prisma.adCampaign.update({ where: { id: campaign.id, clientId }, data: { includedInReporting: included } }),
+    prisma.monthlyKpi.deleteMany({ where: { clientId } }),
+  ]);
 }
 
 // ── Playbooks / lessons ──────────────────────────────────────────────────

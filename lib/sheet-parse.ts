@@ -3,6 +3,9 @@
 
 export const SHEET_TZ = "Australia/Sydney";
 
+// The Sydney calendar day an instant falls on, as "2026-09-29".
+export const sydneyDay = (d: Date) => new Intl.DateTimeFormat("en-CA", { timeZone: SHEET_TZ }).format(d);
+
 export function normalizeHeader(h: string) {
   return h.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }

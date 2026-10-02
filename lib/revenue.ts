@@ -14,12 +14,14 @@ const key = (d: Date) => monthStartOf(d).getTime();
 // One dated amount: a manual month (dated the 1st) or a won lead (dated won).
 export type RevenueEntry = { clientId: string; at: Date; amount: number };
 
-export async function getRevenueEntries(clientIds?: string[]): Promise<RevenueEntry[]> {
+// `leadsSince` drops won leads that came in before it (a client's reporting
+// start date — see lib/reporting-scope.ts).
+export async function getRevenueEntries(clientIds?: string[], { leadsSince }: { leadsSince?: Date | null } = {}): Promise<RevenueEntry[]> {
   const clientFilter = clientIds ? { clientId: { in: clientIds } } : { client: { archivedAt: null } };
   const [manual, won] = await Promise.all([
     prisma.revenueMonthly.findMany({ where: clientFilter, select: { clientId: true, month: true, amount: true } }),
     prisma.lead.findMany({
-      where: { ...clientFilter, deletedAt: null, stage: "WON", value: { not: null } },
+      where: { ...clientFilter, deletedAt: null, stage: "WON", value: { not: null }, ...(leadsSince ? { createdAt: { gte: leadsSince } } : {}) },
       select: {
         clientId: true,
         value: true,
