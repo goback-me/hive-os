@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireCoach } from "@/lib/auth";
 import { encodeTarget, parseTarget } from "@/lib/lead-status";
-import { normalizeMappingKeys, syncLeadsFromSheet } from "@/lib/lead-sync";
+import { syncLeadsFromSheet } from "@/lib/lead-sync";
+import { normalizeMappingKeys } from "@/lib/status-classifier";
 
 // Saves which columns show, and (optionally) which column is the "status"
 // column. The status/result columns don't have to be visible — mapping works
@@ -28,9 +29,24 @@ function toStoredMapping(mapping: unknown) {
   );
 }
 
+// Write-back overrides: {status|result: {"WON": "SOLD"}} — stage targets that
+// parse, string values only; anything else is dropped.
+function toStoredWriteMapping(raw: unknown) {
+  const out: Record<"status" | "result", Record<string, string>> = { status: {}, result: {} };
+  for (const column of ["status", "result"] as const) {
+    const m = (raw as Record<string, unknown>)?.[column];
+    if (!m || typeof m !== "object") continue;
+    for (const [k, v] of Object.entries(m as Record<string, unknown>)) {
+      const t = parseTarget(k);
+      if (t?.stage && typeof v === "string" && v.trim()) out[column][encodeTarget(t)] = v;
+    }
+  }
+  return out;
+}
+
 export async function POST(req: NextRequest) {
   await requireCoach();
-  const { clientId, visibleColumns, statusColumn, statusMapping, resultStatusColumn, resultStatusMapping } = await req.json();
+  const { clientId, visibleColumns, statusColumn, statusMapping, resultStatusColumn, resultStatusMapping, writeMapping } = await req.json();
   if (!clientId || !Array.isArray(visibleColumns)) {
     return NextResponse.json({ error: "clientId and visibleColumns[] are required" }, { status: 400 });
   }
@@ -47,6 +63,7 @@ export async function POST(req: NextRequest) {
       resultStatusColumn: resultStatusColumn ?? null,
       ...(statusMapping ? { statusMapping: toStoredMapping(statusMapping) } : {}),
       ...(resultStatusMapping ? { resultStatusMapping: toStoredMapping(resultStatusMapping) } : {}),
+      ...(writeMapping ? { writeMapping: toStoredWriteMapping(writeMapping) } : {}),
     },
   });
 

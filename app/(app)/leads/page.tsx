@@ -4,6 +4,7 @@ import GoogleAccountCard from "@/components/GoogleAccountCard";
 import LeadsSheetPanel from "@/components/LeadsSheetPanel";
 import AddClientSheetButton from "@/components/AddClientSheetButton";
 import { requireUser } from "@/lib/auth";
+import { hasWriteScope } from "@/lib/google-sheets";
 
 export const dynamic = "force-dynamic";
 
@@ -75,7 +76,7 @@ export default async function LeadsPage({
       {/* The single Google account connection is an agency-level control —
           admin only (the connect/callback/disconnect routes check it too). */}
       {user.isAdmin && (
-        <GoogleAccountCard connected={Boolean(googleConnection)} googleEmail={googleConnection?.googleEmail ?? null} />
+        <GoogleAccountCard connected={Boolean(googleConnection)} googleEmail={googleConnection?.googleEmail ?? null} canWrite={hasWriteScope(googleConnection)} />
       )}
 
       <LeadsSheetPanel

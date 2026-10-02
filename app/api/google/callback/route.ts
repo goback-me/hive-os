@@ -46,6 +46,7 @@ export async function GET(req: NextRequest) {
           refreshToken,
           expiresAt: new Date(Date.now() + tokens.expires_in * 1000),
           googleEmail: email,
+          scope: tokens.scope ?? null,
         },
       }),
     ]);

@@ -10,7 +10,7 @@
 // prospect cell is no update at all.
 
 import { normalizeStatus } from "./sheet-parse";
-import type { DqReasonValue, LeadStageValue, LostReasonValue } from "./lead-status";
+import { parseTarget, type DqReasonValue, type LeadStageValue, type LostReasonValue, type StageTarget } from "./lead-status";
 
 export type ClassifiedStatus = { stage: LeadStageValue; dqReason?: DqReasonValue; lostReason?: LostReasonValue };
 
@@ -83,3 +83,41 @@ export function classifyProspect(raw: string | null | undefined): ClassifiedStat
 }
 
 export const isPendingUpdate = (raw: string | null | undefined) => normalizeStatusText(raw) === "pending update";
+
+// Stored mappings may have been saved with raw sheet text as keys — always
+// compare on the normalized form so "DQ " and "dq" hit the same entry.
+export function normalizeMappingKeys<T>(mapping: unknown): Record<string, T> {
+  if (!mapping || typeof mapping !== "object") return {};
+  return Object.fromEntries(Object.entries(mapping as Record<string, T>).map(([k, v]) => [normalizeStatus(k), v]));
+}
+
+// Stored mapping JSON → {normalized value: target}; invalid entries dropped.
+export function parseMapping(mapping: unknown): Record<string, StageTarget> {
+  const out: Record<string, StageTarget> = {};
+  for (const [k, v] of Object.entries(normalizeMappingKeys<unknown>(mapping))) {
+    const t = parseTarget(v);
+    if (t) out[k] = t;
+  }
+  return out;
+}
+
+// One status cell → stage target. The client's saved mapping wins; otherwise
+// the column's keyword rules (classifyHive / classifyProspect). A value
+// neither recognises is counted in `unmapped` (normalized value → rows) and
+// contributes no stage.
+export function resolveStatus(
+  raw: string,
+  mapping: Record<string, StageTarget>,
+  unmapped: Record<string, number>,
+  classify: (raw: string) => ClassifiedStatus | null | undefined
+): StageTarget | undefined {
+  const key = normalizeStatus(raw);
+  if (key in mapping) return mapping[key];
+  const classified = classify(raw);
+  if (classified === null) return { stage: null }; // known "no outcome"
+  if (classified === undefined) {
+    if (key) unmapped[key] = (unmapped[key] ?? 0) + 1;
+    return undefined;
+  }
+  return classified;
+}

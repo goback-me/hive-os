@@ -1,9 +1,10 @@
 import { createHash, randomUUID } from "crypto";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { getValidAccessToken, getSheetValues } from "@/lib/google-sheets";
+import { getAdminGoogleConnection, getDropdownOptions, getValidAccessToken, getSheetValues, hasWriteScope } from "@/lib/google-sheets";
+import { automationWrites, queueWrites, type CellWrite } from "@/lib/sheet-writeback";
 import { clampRange, getReportingScope, scopedSpend } from "@/lib/reporting-scope";
-import { classifyHive, classifyProspect, isPendingUpdate, type ClassifiedStatus } from "@/lib/status-classifier";
+import { classifyHive, classifyProspect, isPendingUpdate, parseMapping, resolveStatus } from "@/lib/status-classifier";
 import { NOTES_KEYWORDS, parseNotes, type ParsedNote } from "@/lib/notes-parser";
 import { classifyNotesWithAI } from "@/lib/notes-ai";
 import { milestoneSql } from "@/lib/milestones";
@@ -26,8 +27,8 @@ import {
   formatSheetDate,
   normalizeEmail,
   normalizeHeader,
+  normalizeName,
   normalizePhone,
-  normalizeStatus,
   parseSheetDate,
 } from "@/lib/sheet-parse";
 import {
@@ -41,52 +42,6 @@ import {
   type FunnelGroup,
   type FunnelLead,
 } from "@/lib/funnel";
-
-function normalizeIdentity(v: string) {
-  return v.toLowerCase().replace(/[^a-z0-9]+/g, "");
-}
-
-function normalizeName(v: string | null | undefined) {
-  return normalizeIdentity(v ?? "");
-}
-
-// Stored mappings may have been saved with raw sheet text as keys — always
-// compare on the normalized form so "DQ " and "dq" hit the same entry.
-export function normalizeMappingKeys<T>(mapping: unknown): Record<string, T> {
-  if (!mapping || typeof mapping !== "object") return {};
-  return Object.fromEntries(Object.entries(mapping as Record<string, T>).map(([k, v]) => [normalizeStatus(k), v]));
-}
-
-// Stored mapping JSON → {normalized value: target}; invalid entries dropped.
-export function parseMapping(mapping: unknown): Record<string, StageTarget> {
-  const out: Record<string, StageTarget> = {};
-  for (const [k, v] of Object.entries(normalizeMappingKeys<unknown>(mapping))) {
-    const t = parseTarget(v);
-    if (t) out[k] = t;
-  }
-  return out;
-}
-
-// One status cell → stage target. The client's saved mapping wins; otherwise
-// the column's keyword rules (classifyHive / classifyProspect). A value
-// neither recognises is counted in `unmapped` (normalized value → rows) and
-// contributes no stage.
-export function resolveStatus(
-  raw: string,
-  mapping: Record<string, StageTarget>,
-  unmapped: Record<string, number>,
-  classify: (raw: string) => ClassifiedStatus | null | undefined
-): StageTarget | undefined {
-  const key = normalizeStatus(raw);
-  if (key in mapping) return mapping[key];
-  const classified = classify(raw);
-  if (classified === null) return { stage: null }; // known "no outcome"
-  if (classified === undefined) {
-    if (key) unmapped[key] = (unmapped[key] ?? 0) + 1;
-    return undefined;
-  }
-  return classified;
-}
 
 export type UnmappedStatuses = { status: Record<string, number>; result: Record<string, number> };
 
@@ -107,11 +62,12 @@ export async function clearClientLeads(clientId: string) {
   await prisma.lead.updateMany({ where: { clientId, deletedAt: null }, data: { deletedAt: new Date() } });
 }
 
-// Pulls the client's assigned sheet (read-only, always) and upserts each row
-// into the Lead table. A lead whose status has been manually set in the app
-// (statusManuallySetAt) never has its status overwritten by a later sync —
-// every other field still refreshes normally. The outcome (time or error) is
-// recorded on ClientSheet so the Leads tab can show it.
+// Pulls the client's assigned sheet and upserts each row into the Lead table.
+// Status is two-way: where HQ changed a lead's stage more recently than the
+// sheet did, HQ's stage stands (its write-back updates the sheet). Every
+// other field refreshes from the sheet. Then the status automation's missing
+// cells are queued for write-back. The outcome (time or error) is recorded on
+// ClientSheet so the Leads tab can show it.
 export async function syncLeadsFromSheet(clientId: string): Promise<SyncSummary> {
   let sheet = await prisma.clientSheet.findUnique({ where: { clientId } });
   if (!sheet) throw new Error("No Google Sheet assigned to this client yet — connect one on the Leads page first.");
@@ -127,16 +83,43 @@ export async function syncLeadsFromSheet(clientId: string): Promise<SyncSummary>
   }
 
   try {
-    const { summary, unmapped } = await runSync(clientId, sheet);
+    sheet = await refreshDropdownOptions(sheet);
+    const { summary, unmapped, automation } = await runSync(clientId, sheet);
     await prisma.clientSheet.update({
       where: { clientId },
       data: { lastSyncedAt: new Date(), lastSyncError: null, unmappedStatuses: unmapped },
     });
+    // Only once Google can write — otherwise every sync would queue jobs
+    // doomed to fail (the admin sees a reconnect banner instead).
+    if (automation.length && hasWriteScope(await getAdminGoogleConnection())) {
+      for (const a of automation) await queueWrites(clientId, a.leadId, a.writes);
+    }
     return summary;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await prisma.clientSheet.update({ where: { clientId }, data: { lastSyncError: message.slice(0, 500) } }).catch(() => {});
     throw err;
+  }
+}
+
+type Sheet = NonNullable<Awaited<ReturnType<typeof prisma.clientSheet.findUnique>>>;
+
+// Each status column's dropdown values, re-read every sync — write-back only
+// ever writes one of these. A read failure keeps the last known list.
+async function refreshDropdownOptions(sheet: Sheet): Promise<Sheet> {
+  try {
+    const token = await getValidAccessToken();
+    const options = async (column: string | null) => {
+      const idx = findHeaderIndex(sheet.allColumns, column);
+      return idx === -1 ? [] : getDropdownOptions(token, sheet.spreadsheetId, sheet.sheetName, idx);
+    };
+    const [statusOptions, resultStatusOptions] = await Promise.all([options(sheet.statusColumn), options(sheet.resultStatusColumn)]);
+    const same = JSON.stringify([statusOptions, resultStatusOptions]) === JSON.stringify([sheet.statusOptions, sheet.resultStatusOptions]);
+    if (same) return sheet;
+    return prisma.clientSheet.update({ where: { clientId: sheet.clientId }, data: { statusOptions, resultStatusOptions } });
+  } catch (err) {
+    console.error("Dropdown options refresh failed — keeping the last known values:", err);
+    return sheet;
   }
 }
 
@@ -177,6 +160,8 @@ type PendingUpdate = {
   data: Record<string, unknown>;
   stageFrom?: LeadStageValue;
   stageTo?: LeadStageValue;
+  overrodeHq?: boolean; // the sheet's change beat an earlier HQ change
+  overridden?: LeadStageValue; // the sheet said this, but a newer HQ change won
   value: number | null;
   events: PlannedEvent[];
   noteJob?: NoteJob;
@@ -206,8 +191,8 @@ function reasonFields(target: StageTarget & { stage: LeadStageValue }, dqPhase: 
 
 async function runSync(
   clientId: string,
-  sheet: NonNullable<Awaited<ReturnType<typeof prisma.clientSheet.findUnique>>>
-): Promise<{ summary: SyncSummary; unmapped: UnmappedStatuses }> {
+  sheet: Sheet
+): Promise<{ summary: SyncSummary; unmapped: UnmappedStatuses; automation: { leadId: string; writes: CellWrite[] }[] }> {
   const accessToken = await getValidAccessToken();
   const { headers, rows, cells } = await getSheetValues(accessToken, sheet.spreadsheetId, sheet.sheetName, { unformatted: true });
 
@@ -273,6 +258,7 @@ async function runSync(
   // same name when neither has a matching email/phone. Fine at our volumes.
   const claimed = new Map<string, number>(); // leadId -> row index that claimed it
   const pending = new Map<string, PendingUpdate>();
+  const automation: { key: string; writes: CellWrite[] }[] = []; // key = lead id, or externalKey for a new lead
   const creates = new Map<string, { data: Record<string, unknown>; events: PlannedEvent[]; noteJob?: NoteJob }>(); // externalKey -> new lead
   let identifiedRows = 0;
 
@@ -285,7 +271,7 @@ async function runSync(
     // Every row needs SOME identity to match across syncs — skip fully blank rows.
     if (!(email || phone || name)) return;
     identifiedRows++;
-    const externalKey = normalizeIdentity(`${email}|${phone}|${name}`);
+    const externalKey = normalizeName(`${email}|${phone}|${name}`);
 
     const e = normalizeEmail(email);
     const p = normalizePhone(phone);
@@ -304,10 +290,26 @@ async function runSync(
     // Nothing in either column = the default entry stage, Chase Up.
     const { final, prior } = combineTargets(statusTarget, resultTarget, "CHASE_UP");
 
-    // Does the client owe us an update (lib/lead-status.ts)? A manually set
-    // stage is what the lead is actually at.
+    // Two-way sync: the latest change wins. A sheet edit = either status
+    // cell's text differs from last sync (not just how our rules read it —
+    // a rule change isn't an edit). The sheet gives no edit times, so an edit
+    // counts as made at the earliest it could have been: the previous sync.
+    // An HQ change after that wins (its write-back will overwrite the sheet);
+    // otherwise the sheet does. A lead whose cells were never recorded gets a
+    // baseline (epoch) — an earlier HQ change keeps winning until a real edit.
+    const rawKnown = !!existing?.sheetStatusUpdatedAt;
+    const sheetChanged =
+      rawKnown && ((existing!.hiveStatusRaw ?? "") !== rawStatus.trim() || (existing!.prospectStatusRaw ?? "") !== rawResultStatus.trim());
+    const sheetTime = !existing || !rawKnown ? new Date(0) : sheetChanged ? existing.lastSyncedAt ?? new Date(0) : existing.sheetStatusUpdatedAt;
+    const hqWins = !!existing?.hqStatusUpdatedAt && (!sheetTime || existing.hqStatusUpdatedAt > sheetTime);
+
+    // Status automation: fill in what's missing in the two status cells.
+    automation.push({ key: existing?.id ?? externalKey, writes: automationWrites({ raw: rawStatus, stage: statusTarget?.stage ?? null }, rawResultStatus, sheet) });
+
+    // Does the client owe us an update (lib/lead-status.ts)? When HQ's change
+    // wins, that's the stage the lead is actually at.
     const awaitingClient = awaitingClientUpdate({
-      stage: existing?.statusManuallySetAt ? existing.stage : final.stage,
+      stage: hqWins ? existing!.stage : final.stage,
       hive: statusTarget,
       prospect: resultTarget,
       prospectPending: resultStatusColIdx !== -1 && isPendingUpdate(rawResultStatus),
@@ -369,6 +371,7 @@ async function runSync(
       hiveStatusRaw: rawStatus.trim() || null,
       prospectStatusRaw: rawResultStatus.trim() || null,
       awaitingClientUpdate: awaitingClient,
+      sheetStatusUpdatedAt: sheetTime,
       value,
       raw,
       deletedAt: null,
@@ -376,13 +379,19 @@ async function runSync(
 
     if (existing) {
       claimed.set(existing.id, rowIdx);
-      // Respect a manual override — the sheet's stage (and its events) only
-      // apply while nobody has manually set this lead's stage.
-      if (existing.statusManuallySetAt) {
-        // A value typed in with the manual stage change survives until the
-        // sheet has one of its own.
+      if (hqWins) {
+        // HQ's stage stands; a sheet change it beat is logged as overridden.
+        // A value typed in with the HQ change survives until the sheet has
+        // one of its own.
         const { value: _sheetValue, ...keepValue } = baseData;
-        pending.set(existing.id, { lead: existing, data: value == null ? keepValue : baseData, value, events: [], noteJob });
+        pending.set(existing.id, {
+          lead: existing,
+          data: value == null ? keepValue : baseData,
+          value,
+          events: [],
+          noteJob,
+          ...(sheetChanged && final.stage !== existing.stage ? { overridden: final.stage } : {}),
+        });
         return;
       }
       const plan = planStageEvents({
@@ -391,10 +400,18 @@ async function runSync(
         prior,
         eventStages: eventStagesByLead.get(existing.id) ?? new Set(),
       });
+      // Same stage, but the sheet's dropdown only says e.g. "LOST": keep the
+      // reason HQ recorded rather than dropping it to Unknown.
+      const reasons = reasonFields(final, plan.dqPhase);
+      if (final.stage === existing.stage) {
+        if (reasons.dqReason === "UNKNOWN" && existing.dqReason) reasons.dqReason = existing.dqReason;
+        if (reasons.lostReason === "UNKNOWN" && existing.lostReason) reasons.lostReason = existing.lostReason;
+        if (final.stage === "DISQUALIFIED" && existing.dqPhase) reasons.dqPhase = existing.dqPhase;
+      }
       pending.set(existing.id, {
         lead: existing,
-        data: { ...baseData, stage: final.stage, ...reasonFields(final, plan.dqPhase) },
-        ...(final.stage !== existing.stage ? { stageFrom: existing.stage, stageTo: final.stage } : {}),
+        data: { ...baseData, stage: final.stage, ...reasons },
+        ...(final.stage !== existing.stage ? { stageFrom: existing.stage, stageTo: final.stage, overrodeHq: !!existing.hqStatusUpdatedAt } : {}),
         value,
         events: plan.events,
         noteJob,
@@ -474,9 +491,15 @@ async function runSync(
         await Promise.all(batch.map((u) => tx.lead.update({ where: { id: u.lead.id }, data: { ...u.data, lastSyncedAt: now } })));
         // A re-sync moving an existing lead to a new stage IS a real change
         // worth an audit entry — a new lead's first stage is just ingestion.
-        const activity = batch
-          .filter((u) => u.stageTo)
-          .map((u) => ({ leadId: u.lead.id, fromStatus: u.stageFrom!, toStatus: u.stageTo!, value: u.value, changedBy: "Sheet sync" }));
+        // A sheet change that lost to a newer HQ change is logged too.
+        const activity = [
+          ...batch
+            .filter((u) => u.stageTo)
+            .map((u) => ({ leadId: u.lead.id, fromStatus: u.stageFrom!, toStatus: u.stageTo!, value: u.value, changedBy: u.overrodeHq ? SHEET_OVERRODE_HQ : "Sheet sync" })),
+          ...batch
+            .filter((u) => u.overridden)
+            .map((u) => ({ leadId: u.lead.id, fromStatus: u.lead.stage, toStatus: u.overridden!, value: null, changedBy: OVERRIDDEN_BY_HQ })),
+        ];
         if (activity.length) await tx.leadActivity.createMany({ data: activity });
       }
       for (const batch of chunks(events)) {
@@ -498,8 +521,15 @@ async function runSync(
   return {
     summary: { total: rows.length, leads: identifiedRows, created: creates.size, updated: updates.length - restored, removed: staleIds.length, restored },
     unmapped,
+    automation: automation
+      .filter((a) => a.writes.length)
+      .map((a) => ({ leadId: creates.get(a.key)?.data.id as string | undefined ?? a.key, writes: a.writes })),
   };
 }
+
+// LeadActivity.changedBy markers for the two-way sync's conflicts.
+export const SHEET_OVERRODE_HQ = "Sheet sync (overrode an HQ change)";
+export const OVERRIDDEN_BY_HQ = "Sheet change overridden by HQ";
 
 export type ClientFunnel ={ overall: FunnelGroup; campaigns: FunnelGroup[] };
 

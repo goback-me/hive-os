@@ -203,6 +203,10 @@ model GoogleAccountConnection {
   refreshToken String // encrypted at rest
   expiresAt    DateTime
   googleEmail  String? // shown in the UI so you know which account is connected
+  // Space-separated OAuth scopes Google granted. Writing status back to the
+  // sheets needs ".../auth/spreadsheets" (not ".readonly"); null = connected
+  // before write-back existed, so it's treated as read-only.
+  scope        String?
   connectedAt  DateTime @default(now())
 }
 
@@ -245,6 +249,14 @@ model ClientSheet {
   // {status: {value: count}, result: {value: count}} — shown as a warning
   // with a quick-map dropdown on the Leads tab.
   unmappedStatuses Json?
+
+  // Two-way sync (lib/sheet-writeback.ts). Each status column's dropdown
+  // values, read from its data validation on every sync — what HQ writes back
+  // is always one of these. writeMapping = the coach's per-client overrides
+  // of which value a stage writes: {status: {"WON": "SOLD"}, result: {...}}.
+  statusOptions       String[] @default([])
+  resultStatusOptions String[] @default([])
+  writeMapping        Json?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -309,10 +321,9 @@ enum StageEventSource {
 }
 
 // ── Leads (Hive OS) — synced from each client's assigned Google Sheet ───
-// (see lib/lead-sync.ts). The sheet is read-only forever: syncing refreshes
-// every field except the stage once a lead has been manually touched
-// (statusManuallySetAt set) — a manual stage change never gets clobbered
-// by the next sync.
+// (see lib/lead-sync.ts). Status syncs both ways: a stage changed in HQ is
+// written back to the sheet's status cell (lib/sheet-writeback.ts), and the
+// latest change on either side wins. Every other column is read-only.
 model Lead {
   id           String      @id @default(cuid())
   clientId     String
@@ -353,9 +364,18 @@ model Lead {
   // price/timeframe, address, ad creative, docs status, feedback, landing
   // page, etc.), keyed by header name — display-only, nothing computes on it.
   raw                 Json?
-  statusManuallySetAt DateTime?
-  // What the sheet currently says, even while statusManuallySetAt locks
-  // `stage` — powers the "sheet says X" badge on locked leads.
+  // Two-way status sync: whichever side changed the stage last wins (see
+  // lib/lead-sync.ts). sheetStatusUpdatedAt = the earliest the sheet's change
+  // could have happened (the sync before we saw it); hqStatusUpdatedAt = when
+  // someone changed it in HQ (which also queues a write-back).
+  sheetStatusUpdatedAt DateTime?
+  hqStatusUpdatedAt    DateTime?
+  // Why the last write-back to the sheet failed — shown as "Not synced to
+  // sheet". Cleared when a write succeeds.
+  sheetWriteError      String?
+  // What the sheet's status columns resolved to on the last sync — differs
+  // from `stage` while an HQ change is newer (powers the "sheet says X"
+  // badge), and a change in it is how a sync spots a new sheet edit.
   sheetStage          LeadStage?
   // sha256 of the feedback/notes cell last parsed into LeadNoteEvents — the
   // cell (and its AI classification) is only re-parsed when this changes.
@@ -369,6 +389,7 @@ model Lead {
 
   createdAt   DateTime         @default(now())
   activity    LeadActivity[]
+  writeBacks  WriteBackJob[]
   notes       LeadNote[]
   stageEvents LeadStageEvent[]
   noteEvents  LeadNoteEvent[]
@@ -376,6 +397,36 @@ model Lead {
   @@index([clientId, createdAt])
   @@index([clientId, externalKey])
   @@index([clientId, deletedAt])
+}
+
+enum WriteBackStatus {
+  PENDING
+  RUNNING
+  DONE
+  FAILED
+}
+
+// One cell to write back to a client's sheet: the lead's row (found by
+// email → phone → name at write time, never by row number) × `column` (a
+// header — only the status columns and Quote Value / Revenue are ever
+// allowed). Processed by lib/sheet-writeback.ts, max 50 cells a minute.
+model WriteBackJob {
+  id        String          @id @default(cuid())
+  clientId  String
+  leadId    String
+  lead      Lead            @relation(fields: [leadId], references: [id])
+  column    String
+  value     String
+  status    WriteBackStatus @default(PENDING)
+  attempts  Int             @default(0)
+  error     String?
+  runAfter  DateTime        @default(now())
+  claimId   String?
+  createdAt DateTime        @default(now())
+  doneAt    DateTime?
+
+  @@index([status, runAfter])
+  @@index([leadId, column])
 }
 
 // Free-text follow-up notes on an individual lead — separate from

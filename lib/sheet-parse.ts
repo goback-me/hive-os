@@ -57,6 +57,12 @@ export function findHeaderIndex(headers: string[], name: string | null | undefin
   return headers.findIndex((h) => normalizeHeaderName(h) === target);
 }
 
+// Letters and digits only, lowercased — "Jane  O'Brien" = "janeobrien". The
+// lead's name identity (and the sync's externalKey).
+export function normalizeName(v: string | null | undefined) {
+  return (v ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
 export function normalizeEmail(v: string | null | undefined) {
   return (v ?? "").trim().toLowerCase();
 }

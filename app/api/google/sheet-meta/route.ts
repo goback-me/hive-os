@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/auth";
-import { parseMapping } from "@/lib/lead-sync";
-import { encodeTarget, type StageTarget } from "@/lib/lead-status";
+import { parseMapping } from "@/lib/status-classifier";
+import { TARGET_OPTIONS, encodeTarget, parseTarget, type LeadStageValue, type StageTarget } from "@/lib/lead-status";
+import { planStageWrite } from "@/lib/sheet-writeback";
 import { DATE_OPT_IN_KEYWORDS, findColumn } from "@/lib/sheet-parse";
 
 // Returns the cached column names (all of them, including hidden ones) so
@@ -32,5 +33,16 @@ export async function GET(req: NextRequest) {
     resultStatusMapping: encodeAll(parseMapping(sheet.resultStatusMapping)),
     unmappedStatuses: sheet.unmappedStatuses ?? { status: {}, result: {} },
     hasOptInDateColumn: findColumn(sheet.allColumns, DATE_OPT_IN_KEYWORDS) !== -1,
+    // Write-back: which column + value each stage writes when changed in HQ
+    // (automatic choice, before the coach's overrides), and the overrides.
+    statusOptions: sheet.statusOptions,
+    resultStatusOptions: sheet.resultStatusOptions,
+    writeMapping: sheet.writeMapping ?? { status: {}, result: {} },
+    writePlan: TARGET_OPTIONS.map((o) => {
+      const t = parseTarget(o.value) as StageTarget & { stage: LeadStageValue };
+      const plan = planStageWrite(t, null, { ...sheet, writeMapping: null });
+      const column = "error" in plan ? null : plan.column === sheet.statusColumn ? "status" : "result";
+      return { target: o.value, label: o.label, column, auto: "error" in plan ? null : plan.value };
+    }),
   });
 }

@@ -64,6 +64,11 @@ export default function LeadsSheetPanel({
   // From the last sync: normalized status values nothing maps to yet.
   const [unmapped, setUnmapped] = useState<{ status: Record<string, number>; result: Record<string, number> }>({ status: {}, result: {} });
   const [hasOptInDateColumn, setHasOptInDateColumn] = useState(true);
+  // Write-back (HQ → sheet): what each stage writes, and the coach's overrides.
+  type WritePlanRow = { target: string; label: string; column: "status" | "result" | null; auto: string | null };
+  const [writePlan, setWritePlan] = useState<WritePlanRow[]>([]);
+  const [writeOptions, setWriteOptions] = useState<{ status: string[]; result: string[] }>({ status: [], result: [] });
+  const [writeMapping, setWriteMapping] = useState<{ status: Mapping; result: Mapping }>({ status: {}, result: {} });
 
   // Actual row data — server already stripped hidden columns out of this.
   const [headers, setHeaders] = useState<string[]>([]);
@@ -92,6 +97,9 @@ export default function LeadsSheetPanel({
         setResultStatusMapping(data.resultStatusMapping ?? {});
         setUnmapped(data.unmappedStatuses ?? { status: {}, result: {} });
         setHasOptInDateColumn(data.hasOptInDateColumn ?? true);
+        setWritePlan(data.writePlan ?? []);
+        setWriteOptions({ status: data.statusOptions ?? [], result: data.resultStatusOptions ?? [] });
+        setWriteMapping({ status: data.writeMapping?.status ?? {}, result: data.writeMapping?.result ?? {} });
         setCurrentSpreadsheetName(data.spreadsheetName);
         setCurrentSheetName(data.sheetName);
       })
@@ -226,6 +234,7 @@ export default function LeadsSheetPanel({
         statusMapping: mappings.statusMapping,
         resultStatusColumn: nextResultStatusColumn,
         resultStatusMapping: mappings.resultStatusMapping,
+        writeMapping,
       }),
     })
       .then((r) => r.json())
@@ -528,6 +537,48 @@ export default function LeadsSheetPanel({
                     </select>
                   </div>
                 ))}
+              </div>
+            </>
+          )}
+
+          {writePlan.some((r) => r.column && writeOptions[r.column].length > 0) && (
+            <>
+              <p className="text-xs mb-2 mt-4 font-semibold" style={{ color: "var(--text-primary)" }}>Writing back to the sheet</p>
+              <p className="text-xs mb-2" style={{ color: "var(--text-secondary)" }}>
+                When a lead&apos;s stage changes in HQ, this dropdown value is written to its status cell. &quot;Auto&quot; picks the first
+                option that reads back as the same stage; override it here if that&apos;s the wrong one.
+              </p>
+              <div className="space-y-2 mb-3">
+                {writePlan
+                  .filter((r) => r.column && writeOptions[r.column].length > 0)
+                  .map((r) => {
+                    const column = r.column!;
+                    return (
+                      <div key={r.target} className="flex items-center gap-2">
+                        <span className="text-xs font-semibold flex-1 truncate" style={{ color: "var(--text-primary)" }}>{r.label}</span>
+                        <span className="text-[10px]" style={{ color: "var(--text-muted)" }}>{column === "status" ? statusColumn : resultStatusColumn}</span>
+                        <span className="material-symbols-outlined text-[14px]" style={{ color: "var(--text-muted)" }}>arrow_forward</span>
+                        <select
+                          value={writeMapping[column][r.target] ?? ""}
+                          onChange={(e) =>
+                            setWriteMapping((prev) => {
+                              const next = { ...prev[column] };
+                              if (e.target.value) next[r.target] = e.target.value;
+                              else delete next[r.target];
+                              return { ...prev, [column]: next };
+                            })
+                          }
+                          className="px-2 py-1.5 rounded-lg text-xs font-bold outline-none"
+                          style={selectStyle}
+                        >
+                          <option value="">{r.auto ? `Auto: ${r.auto}` : "Auto: no match — pick one"}</option>
+                          {writeOptions[column].map((o) => (
+                            <option key={o} value={o}>{o}</option>
+                          ))}
+                        </select>
+                      </div>
+                    );
+                  })}
               </div>
             </>
           )}

@@ -10,7 +10,6 @@ import {
   LOST_REASONS,
   LOST_REASON_LABELS,
   STAGE_LABELS,
-  STAGE_RANK,
   STAGE_STYLE,
   TARGET_OPTIONS,
   encodeTarget,
@@ -20,6 +19,9 @@ import {
   type LostReasonValue,
 } from "@/lib/lead-status";
 import type { SyncSummary } from "@/lib/lead-sync";
+// Plain string, kept in sync with OVERRIDDEN_BY_HQ in lib/lead-sync.ts (a
+// server module, not imported here).
+const OVERRIDDEN_BY_HQ = "Sheet change overridden by HQ";
 import type { FunnelResponse } from "@/lib/funnel";
 import FunnelPanel from "@/components/FunnelPanel";
 import ProfitRoiPanel from "@/components/ProfitRoiPanel";
@@ -28,6 +30,7 @@ import { reportRangeLabel, reportRangeQuery, type ReportRange } from "@/lib/date
 import DateRangePicker, { useReportRange } from "@/components/DateRangePicker";
 import LeadCompareChart from "@/components/LeadCompareChart";
 import LeadWinsCard from "@/components/LeadWinsCard";
+import ClientUpdatesPanel from "@/components/ClientUpdatesPanel";
 import { StartDateWarning } from "@/components/StartDateField";
 
 type LeadRow = {
@@ -42,7 +45,8 @@ type LeadRow = {
   dqPhase: DqPhaseValue | null;
   lostReason: LostReasonValue | null;
   callAttempts: number | null;
-  stageLocked: boolean;
+  hqNewer: boolean; // changed in HQ since the sheet last changed — the sheet catches up via write-back
+  sheetWriteError: string | null; // why the last write-back failed ("Not synced to sheet")
   sheetStage: LeadStageValue | null;
   sheetStatus: string | null;
   value: number | null;
@@ -75,9 +79,10 @@ type JourneyEntry =
   | { kind: "status"; id: string; at: string; from: LeadStageValue; to: LeadStageValue; value: number | null; by: string }
   | { kind: "event"; id: string; at: string; stage: LeadStageValue; source: "IMPORT" | "INFERRED" };
 
-// A locked lead whose sheet has moved further along than the manual stage.
-function sheetAhead(lead: Pick<LeadRow, "stage" | "stageLocked" | "sheetStage">) {
-  return lead.stageLocked && lead.sheetStage != null && STAGE_RANK[lead.sheetStage] > STAGE_RANK[lead.stage] ? lead.sheetStage : null;
+// HQ's stage is newer and the sheet still says something else (write-back
+// pending or failed).
+function sheetAhead(lead: Pick<LeadRow, "stage" | "hqNewer" | "sheetStage">) {
+  return lead.hqNewer && lead.sheetStage != null && lead.sheetStage !== lead.stage ? lead.sheetStage : null;
 }
 
 // "Disqualified · Budget (after handover)" etc.
@@ -128,7 +133,6 @@ export default function LeadsPanel({
   lastSyncError,
   onSync,
   onUpdateStage,
-  onUnlockStage,
   onAddNote,
 }: {
   clientId: string;
@@ -140,7 +144,6 @@ export default function LeadsPanel({
   lastSyncError: string | null;
   onSync: (clientId: string) => Promise<{ summary: SyncSummary } | { error: string }>;
   onUpdateStage: (leadId: string, target: string, value?: number) => Promise<void>;
-  onUnlockStage: (leadId: string) => Promise<{ ok: true } | { error: string }>;
   onAddNote: (leadId: string, formData: FormData) => Promise<void>;
 }) {
   const isCoach = viewerRole === "COACH";
@@ -318,7 +321,7 @@ export default function LeadsPanel({
       stage,
       dqReason: stage === "DISQUALIFIED" ? ((reason ?? "UNKNOWN") as DqReasonValue) : null,
       lostReason: stage === "LOST" ? ((reason ?? "UNKNOWN") as LostReasonValue) : null,
-      stageLocked: true,
+      hqNewer: true,
     };
     setLeads((prev) => prev.map((l) => (l.id === lead.id ? { ...l, ...optimistic } : l)));
     setPendingChange(null);
@@ -337,19 +340,6 @@ export default function LeadsPanel({
         .then(() => refreshAfterChange(lead.id))
         .catch((e) => setError(e.message));
     });
-  }
-
-  const [unlocking, setUnlocking] = useState(false);
-  function unlockStage(leadId: string) {
-    setUnlocking(true);
-    setError(null);
-    onUnlockStage(leadId)
-      .then((result) => {
-        if ("error" in result) throw new Error(result.error);
-        refreshAfterChange(leadId);
-      })
-      .catch((e) => setError(e.message))
-      .finally(() => setUnlocking(false));
   }
 
   function openDetail(leadId: string) {
@@ -472,6 +462,8 @@ export default function LeadsPanel({
 
       {activeSubTab === "leads" && <LeadWinsCard clientId={clientId} reloadKey={reloadKey} />}
 
+      {activeSubTab === "leads" && <ClientUpdatesPanel clientId={clientId} onUpdateStage={onUpdateStage} reloadKey={reloadKey} onSaved={reload} />}
+
       {activeSubTab === "leads" && (
         <div className="card rounded-2xl p-5 overflow-x-auto">
           <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
@@ -589,7 +581,7 @@ export default function LeadsPanel({
                               onChange={(e) => requestStatusChange(lead, e.target.value)}
                               className="px-2 py-1 rounded-full text-xs font-bold outline-none border-0"
                               style={{ background: st.bg, color: st.color }}
-                              title={lead.stageLocked ? "Set manually — the sheet no longer changes this lead's stage" : undefined}
+                              title={lead.hqNewer ? "Changed in HQ — the sheet is updated to match" : undefined}
                             >
                               {TARGET_OPTIONS.map((o) => (
                                 <option key={o.value} value={o.value}>{o.label}</option>
@@ -601,6 +593,7 @@ export default function LeadsPanel({
                             </span>
                           )}
                           {sheetAhead(lead) && <SheetSaysBadge stage={sheetAhead(lead)!} />}
+                          {lead.sheetWriteError && <NotSyncedBadge reason={lead.sheetWriteError} />}
                         </td>
                         <td className="py-2 pr-4 whitespace-nowrap" style={{ color: "var(--text-primary)" }}>
                           {lead.value != null ? `$${lead.value.toLocaleString()}` : "—"}
@@ -684,25 +677,8 @@ export default function LeadsPanel({
                 <span className="px-2.5 py-1 rounded-full text-xs font-bold" style={{ background: STAGE_STYLE[detailLead.stage].color, color: "#fff" }}>
                   {stageText(detailLead)}
                 </span>
-                {detailLead.stageLocked && (
-                  <span className="px-2.5 py-1 rounded-full text-xs font-bold flex items-center gap-1" style={{ background: "var(--surface-card)", color: "var(--text-secondary)" }}>
-                    <span className="material-symbols-outlined text-[12px]">lock</span>
-                    Set manually
-                  </span>
-                )}
                 {sheetAhead(detailLead) && <SheetSaysBadge stage={sheetAhead(detailLead)!} />}
-                {isCoach && detailLead.stageLocked && (
-                  <button
-                    onClick={() => unlockStage(detailLead.id)}
-                    disabled={unlocking}
-                    className="px-2.5 py-1 rounded-full text-xs font-bold flex items-center gap-1 disabled:opacity-50"
-                    style={{ border: "1px solid var(--border)", color: "var(--primary)" }}
-                    title="Clear the manual stage and follow the sheet again"
-                  >
-                    <span className="material-symbols-outlined text-[12px]">lock_open</span>
-                    {unlocking ? "Unlocking…" : "Unlock (follow sheet)"}
-                  </button>
-                )}
+                {detailLead.sheetWriteError && <NotSyncedBadge reason={detailLead.sheetWriteError} showReason />}
                 {detailLead.callAttempts != null && (
                   <span className="text-xs" style={{ color: "var(--text-secondary)" }}>{detailLead.callAttempts} call attempt{detailLead.callAttempts === 1 ? "" : "s"}</span>
                 )}
@@ -785,6 +761,17 @@ export default function LeadsPanel({
                           );
                         }
                         const toStyle = STAGE_STYLE[entry.to];
+                        if (entry.by === OVERRIDDEN_BY_HQ) {
+                          return (
+                            <div key={entry.id} className="relative pl-5">
+                              <span className="absolute left-0 top-1 w-2.5 h-2.5 rounded-full" style={{ background: "var(--border)" }} />
+                              <p className="text-xs" style={{ color: "var(--text-secondary)" }}>
+                                Sheet changed to <strong style={{ color: "var(--text-primary)" }}>{STAGE_LABELS[entry.to]}</strong> — overridden by a newer HQ change (kept {STAGE_LABELS[entry.from]})
+                                <span style={{ color: "var(--text-muted)" }}> · {when}</span>
+                              </p>
+                            </div>
+                          );
+                        }
                         return (
                           <div key={entry.id} className="relative pl-5">
                             <span className="absolute left-0 top-1 w-2.5 h-2.5 rounded-full" style={{ background: toStyle.color }} />
@@ -934,12 +921,26 @@ function SkeletonRows() {
   );
 }
 
+// The last write-back to the sheet failed — reason on hover (or shown).
+function NotSyncedBadge({ reason, showReason }: { reason: string; showReason?: boolean }) {
+  return (
+    <span
+      className="ml-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold inline-flex items-center gap-1"
+      style={{ background: "var(--danger-tint)", color: "var(--danger)" }}
+      title={reason}
+    >
+      <span className="material-symbols-outlined text-[12px]">sync_problem</span>
+      Not synced to sheet{showReason ? `: ${reason}` : ""}
+    </span>
+  );
+}
+
 function SheetSaysBadge({ stage }: { stage: LeadStageValue }) {
   return (
     <span
       className="ml-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold whitespace-nowrap"
       style={{ border: `1px dashed ${STAGE_STYLE[stage].color}`, color: STAGE_STYLE[stage].color }}
-      title="This lead's stage was set manually; the sheet has since moved further along"
+      title="Changed in HQ — the sheet still says this until the write-back lands"
     >
       sheet says {STAGE_LABELS[stage]}
     </span>

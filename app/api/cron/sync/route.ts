@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { syncLeadsFromSheet } from "@/lib/lead-sync";
 import { freezeDueMonths } from "@/lib/kpi";
+import { processWriteBacks } from "@/lib/sheet-writeback";
 
 // Called by n8n every 5 min (see DEPLOYMENT.md). Public in middleware.ts —
 // the x-cron-secret header is the only auth. Clients sync one at a time
@@ -54,5 +55,9 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  return NextResponse.json({ synced: results.filter((r) => r.ok).length, failed: results.filter((r) => !r.ok).length, results, frozen });
+  // HQ → sheet status write-back (max 50 cells a minute). Gets what's left
+  // of the run's time; anything still queued goes on the next run.
+  const writeBack = await processWriteBacks({ maxMs: 120_000 }).catch((err) => ({ error: err instanceof Error ? err.message : String(err) }));
+
+  return NextResponse.json({ synced: results.filter((r) => r.ok).length, failed: results.filter((r) => !r.ok).length, results, frozen, writeBack });
 }

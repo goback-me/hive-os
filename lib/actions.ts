@@ -8,6 +8,7 @@ import { getClerkAdminClient } from "@/lib/clerk-admin";
 import { syncLeadsFromSheet, type SyncSummary } from "@/lib/lead-sync";
 import { parseTarget, planStageEvents } from "@/lib/lead-status";
 import { parseVisibility, type ReportVisibility } from "@/lib/report-visibility";
+import { kickWriteBacks, queueLeadChange } from "@/lib/sheet-writeback";
 import { sydneyLocalToDate } from "@/lib/sheet-parse";
 
 function slugify(name: string) {
@@ -202,11 +203,12 @@ export async function syncClientLeads(clientId: string): Promise<{ summary: Sync
   }
 }
 
-// A manual stage change never gets clobbered by a later sync (see
-// lib/lead-sync.ts) — statusManuallySetAt marks that this lead is now
-// coach/client-owned, not sheet-owned, for its status field only.
-// `target` is a stage, optionally with a reason: "WON", "DISQUALIFIED:BUDGET",
-// "LOST:GHOSTED" (same encoding as the mapping dropdowns).
+// A stage change made in HQ (coach or the lead's own client). It's written
+// back to the sheet's status cell (lib/sheet-writeback.ts) and, until the
+// sheet changes again after it, HQ's stage is the one that stands — see the
+// two-way sync in lib/lead-sync.ts. `target` is a stage, optionally with a
+// reason: "WON", "DISQUALIFIED:BUDGET", "LOST:GHOSTED" (same encoding as the
+// mapping dropdowns).
 export async function updateLeadStage(leadId: string, target: string, value?: number) {
   const parsed = parseTarget(target);
   if (!parsed?.stage) throw new Error("Invalid lead stage");
@@ -236,31 +238,14 @@ export async function updateLeadStage(leadId: string, target: string, value?: nu
         // Re-picking the reason on an already-DQ'd lead keeps how far it got.
         dqPhase: stage === "DISQUALIFIED" ? (lead.stage === "DISQUALIFIED" && lead.dqPhase ? lead.dqPhase : plan.dqPhase) : null,
         lostReason: stage === "LOST" ? parsed.lostReason ?? "UNKNOWN" : null,
-        statusManuallySetAt: now,
+        hqStatusUpdatedAt: now,
         ...(value !== undefined ? { value } : {}),
       },
     }),
   ]);
+  await queueLeadChange(leadId);
+  kickWriteBacks();
   revalidatePath(`/clients`);
-}
-
-// Hands a manually-set lead back to the sheet: clears the lock, then re-syncs
-// so the sheet's current stage (with its events) applies straight away —
-// the same code path as any other sync. Returns the error instead of
-// throwing, like syncClientLeads.
-export async function unlockLeadStatus(leadId: string): Promise<{ ok: true } | { error: string }> {
-  await requireCoach();
-  const lead = await prisma.lead.findUnique({ where: { id: leadId }, select: { clientId: true, deletedAt: true } });
-  if (!lead || lead.deletedAt) return { error: "Lead not found" };
-
-  await prisma.lead.update({ where: { id: leadId }, data: { statusManuallySetAt: null } });
-  try {
-    await syncLeadsFromSheet(lead.clientId);
-  } catch (err) {
-    return { error: `Unlocked, but re-applying the sheet failed: ${err instanceof Error ? err.message : "sync failed"}` };
-  }
-  revalidatePath(`/clients`);
-  return { ok: true };
 }
 
 // A coach or the lead's own client can leave a follow-up note — same
@@ -537,6 +522,7 @@ export async function deleteClientPermanently(clientId: string) {
           prisma.leadNote.deleteMany({ where: { leadId: { in: leadIds } } }),
           prisma.leadStageEvent.deleteMany({ where: { leadId: { in: leadIds } } }),
           prisma.leadNoteEvent.deleteMany({ where: { leadId: { in: leadIds } } }),
+          prisma.writeBackJob.deleteMany({ where: { leadId: { in: leadIds } } }),
         ]
       : []),
     prisma.lead.deleteMany({ where: { clientId } }),

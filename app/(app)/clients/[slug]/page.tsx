@@ -11,7 +11,6 @@ import {
   createProgressNote,
   syncClientLeads,
   updateLeadStage,
-  unlockLeadStatus,
   addLeadNote,
   getOrCreateClientReferralLink,
   saveReportVisibility,
@@ -41,6 +40,7 @@ import ClientReferralPanel from "@/components/ClientReferralPanel";
 import MetaAdsCard from "@/components/MetaAdsCard";
 import GoalsCard from "@/components/GoalsCard";
 import StartDateField from "@/components/StartDateField";
+import ClientUpdatesPanel from "@/components/ClientUpdatesPanel";
 
 // Forces this page to render fresh on every single request — no static
 // caching, no ISR.
@@ -126,6 +126,8 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
       <div className="grid grid-cols-3 gap-5">
         {/* Main column — the day-to-day, coaching-relevant activity */}
         <div className="col-span-2 space-y-5">
+          {clientSheet && <ClientUpdatesPanel clientId={client.id} onUpdateStage={updateLeadStage} />}
+
           <div className="card rounded-2xl p-5">
             <div className="flex justify-between items-center mb-4">
               <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Leads</p>
@@ -286,7 +288,6 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
       lastSyncError={clientSheet?.lastSyncError ?? null}
       onSync={syncClientLeads}
       onUpdateStage={updateLeadStage}
-      onUnlockStage={unlockLeadStatus}
       onAddNote={addLeadNote}
     />
   );

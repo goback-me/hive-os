@@ -1,8 +1,7 @@
 // Run: npx tsx lib/status-classifier.check.ts — throws on the first failure.
 import assert from "node:assert/strict";
-import { classifyHive, classifyProspect, isPendingUpdate } from "./status-classifier";
+import { classifyHive, classifyProspect, isPendingUpdate, resolveStatus } from "./status-classifier";
 import { awaitingClientUpdate, combineTargets } from "./lead-status";
-import { resolveStatus } from "./lead-sync";
 
 type R = ReturnType<typeof classifyProspect>;
 const CHASE = { stage: "CHASE_UP" } as const;

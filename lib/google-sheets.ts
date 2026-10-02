@@ -2,8 +2,11 @@ import { prisma } from "@/lib/prisma";
 import { encryptToken, decryptToken } from "@/lib/crypto";
 import { cellToString } from "@/lib/sheet-parse";
 
+// Read/write on sheets: HQ writes lead status changes back to the status
+// cells (lib/sheet-writeback.ts). Drive stays read-only (file picker).
+const SHEETS_WRITE_SCOPE = "https://www.googleapis.com/auth/spreadsheets";
 const SCOPES = [
-  "https://www.googleapis.com/auth/spreadsheets.readonly",
+  SHEETS_WRITE_SCOPE,
   "https://www.googleapis.com/auth/drive.readonly",
   "https://www.googleapis.com/auth/userinfo.email",
 ].join(" ");
@@ -74,6 +77,10 @@ export async function getGoogleUserEmail(accessToken: string) {
   const data = await res.json();
   return data.email as string | null;
 }
+
+// A connection made before write-back existed (scope null) or consented
+// read-only can't write status back — the admin is asked to reconnect.
+export const hasWriteScope = (conn: { scope: string | null } | null) => !!conn?.scope?.split(" ").includes(SHEETS_WRITE_SCOPE);
 
 // There's only ever one row in GoogleAccountConnection — this app uses a
 // single Google account (yours) to read every client's sheet, instead of
@@ -160,4 +167,50 @@ export async function getSheetValues(
     rows: cells.map((r) => r.map(cellToString)),
     cells,
   };
+}
+
+// ── Sheets: a column's dropdown values (data validation) ─────────────
+// Read from the first data row's cell. A list typed into the rule
+// (ONE_OF_LIST) is returned as-is; one that points at a range
+// (ONE_OF_RANGE, "=Lists!$A$2:$A$20") is read from that range. No rule →
+// [] (the column is free text).
+export async function getDropdownOptions(accessToken: string, spreadsheetId: string, sheetName: string, colIdx: number): Promise<string[]> {
+  const cell = `'${sheetName.replace(/'/g, "''")}'!${columnLetter(colIdx)}2`;
+  const res = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?ranges=${encodeURIComponent(cell)}&includeGridData=true&fields=${encodeURIComponent("sheets.data.rowData.values.dataValidation")}`,
+    { headers: { Authorization: `Bearer ${accessToken}` } }
+  );
+  if (!res.ok) throw new Error(`Dropdown read failed: ${await res.text()}`);
+  const data = await res.json();
+  const condition = data.sheets?.[0]?.data?.[0]?.rowData?.[0]?.values?.[0]?.dataValidation?.condition;
+  const raw: string[] = (condition?.values ?? []).map((v: { userEnteredValue?: string }) => v.userEnteredValue ?? "").filter(Boolean);
+  if (condition?.type === "ONE_OF_LIST") return raw.map((v) => v.trim()).filter(Boolean);
+  if (condition?.type === "ONE_OF_RANGE" && raw[0]) {
+    const range = raw[0].replace(/^=/, "").replace(/\$/g, "");
+    const r = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(range)}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!r.ok) throw new Error(`Dropdown range read failed: ${await r.text()}`);
+    const values: unknown[][] = (await r.json()).values ?? [];
+    return values.flat().map(cellToString).map((v) => v.trim()).filter(Boolean);
+  }
+  return [];
+}
+
+// 0 → A, 25 → Z, 26 → AA.
+export function columnLetter(i: number): string {
+  let s = "";
+  for (let n = i + 1; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + ((n - 1) % 26)) + s;
+  return s;
+}
+
+// ── Sheets: write cells (USER_ENTERED, as if typed) ──────────────────
+// Returns the HTTP status so the caller can back off on 429.
+export async function batchUpdateValues(accessToken: string, spreadsheetId: string, data: { range: string; values: string[][] }[]) {
+  const res = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values:batchUpdate`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ valueInputOption: "USER_ENTERED", data }),
+  });
+  return { ok: res.ok, status: res.status, error: res.ok ? null : await res.text() };
 }
