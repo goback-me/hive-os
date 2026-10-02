@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
+import { holdResponse } from "@/lib/report-hold";
 import { getLeadWins } from "@/lib/lead-wins";
 
 // Leads tab headline cards + 60-day chart (components/LeadWinsCard.tsx).
@@ -11,6 +12,8 @@ export async function GET(req: NextRequest) {
   if (user.role === "CLIENT" && clientId !== user.clientId) {
     return NextResponse.json({ error: "Not authorized for this client" }, { status: 403 });
   }
+  const hold = await holdResponse(user, clientId);
+  if (hold) return hold;
 
   const window = req.nextUrl.searchParams.get("window") === "last" ? "last" : "first";
   return NextResponse.json({ wins: await getLeadWins(clientId, window) });

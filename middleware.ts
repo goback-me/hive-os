@@ -21,6 +21,7 @@ const isCoachOnlyRoute = createRouteMatcher([
   "/clients",
   "/settings(.*)",
   "/referrals(.*)",
+  "/alerts(.*)",
 ]);
 
 export default clerkMiddleware(async (auth, req) => {

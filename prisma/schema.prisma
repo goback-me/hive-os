@@ -454,6 +454,82 @@ model LeadReminder {
   @@index([clientId, createdAt])
 }
 
+// ── Data health (lib/data-health.ts) ─────────────────────────────────────
+// Problems with a client's data, re-checked after every sync. An alert stays
+// one row per (client, type, fingerprint): re-seen → lastSeenAt; no longer
+// found → RESOLVED; a coach's "Mark handled" → DISMISSED (with a note).
+enum DataAlertType {
+  STATUS_COLUMN_MISSING
+  REQUIRED_COLUMN_MISSING
+  UNMAPPED_STATUS
+  LEAD_NO_CAMPAIGN
+  WON_NO_VALUE
+  QUOTE_NO_VALUE
+  DQ_NO_REASON
+  LOST_NO_REASON
+  BAD_OPTIN_DATE
+  CAMPAIGN_NAME_UNMATCHED
+  NO_START_DATE
+  NO_INCLUDED_CAMPAIGNS
+  SYNC_FAILED
+  SYNC_STALE
+  SYNC_ABORTED_GUARD
+  GOOGLE_TOKEN_INVALID
+  META_TOKEN_EXPIRED
+  WRITEBACK_FAILED
+  CLIENT_UPDATE_OVERDUE
+  RECONCILE_MISMATCH
+}
+
+enum AlertSeverity {
+  DANGER
+  WARNING
+}
+
+enum AlertStatus {
+  OPEN
+  RESOLVED
+  DISMISSED
+}
+
+model DataAlert {
+  id              String        @id @default(cuid())
+  clientId        String
+  client          Client        @relation(fields: [clientId], references: [id])
+  type            DataAlertType
+  severity        AlertSeverity
+  title           String
+  detail          String
+  fixHint         String
+  fixUrl          String?
+  count           Int           @default(0)
+  affectedLeadIds String[]      @default([])
+  fingerprint     String        @default("")
+  status          AlertStatus   @default(OPEN)
+  firstSeenAt     DateTime      @default(now())
+  lastSeenAt      DateTime      @default(now())
+  resolvedAt      DateTime?
+  dismissNote     String?
+  clickupTaskId   String?
+
+  @@unique([clientId, type, fingerprint])
+  @@index([status, severity])
+}
+
+// Raw sheet vs HQ after each sync (lib/reconcile.ts). ok = no diffs.
+model SyncReconciliation {
+  id          String   @id @default(cuid())
+  clientId    String
+  client      Client   @relation(fields: [clientId], references: [id])
+  sheetCounts Json
+  hqCounts    Json
+  diffs       Json
+  ok          Boolean
+  createdAt   DateTime @default(now())
+
+  @@index([clientId, createdAt])
+}
+
 // Free-text follow-up notes on an individual lead — separate from
 // ProgressNote (which is per-client, for the coaching relationship overall).
 // A coach or the lead's own client can add one; shown in the lead detail
@@ -745,6 +821,8 @@ model Client {
   revenueMonthly RevenueMonthly[]
   leads          Lead[]
   leadReminders  LeadReminder[]
+  dataAlerts     DataAlert[]
+  reconciliations SyncReconciliation[]
   clientSheet    ClientSheet?
   referralLink   ReferralLink?
 }

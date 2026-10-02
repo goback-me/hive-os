@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import ThemeToggle from "./ThemeToggle";
+import AlertBell from "./AlertBell";
 import { SignOutButton } from "@clerk/nextjs";
 
 const COACH_NAV_ITEMS = [
@@ -10,6 +11,7 @@ const COACH_NAV_ITEMS = [
   { href: "/clients", label: "Clients", icon: "diversity_3" },
   { href: "/leads", label: "Leads", icon: "person_search" },
   { href: "/referrals", label: "Referrals", icon: "share" },
+  { href: "/alerts", label: "Data alerts", icon: "notifications" },
   { href: "/settings", label: "Settings", icon: "settings" },
 ];
 
@@ -26,9 +28,10 @@ export default function Sidebar({ user }: { user: { name: string; role: "COACH" 
     >
       <div className="flex items-center gap-3 px-2 mb-8">
         <img src="/logo.webp" alt="" width={36} height={36} className="w-9 h-9 shrink-0" />
-        <h1 className="font-heading font-bold text-xl tracking-tight" style={{ color: "var(--text-primary)" }}>
+        <h1 className="font-heading font-bold text-xl tracking-tight flex-1" style={{ color: "var(--text-primary)" }}>
           Hive HQ
         </h1>
+        {user.role === "COACH" && <AlertBell />}
       </div>
 
       <nav className="flex-1 space-y-1">

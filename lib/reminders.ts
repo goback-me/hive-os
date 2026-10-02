@@ -10,6 +10,21 @@ import { STAGE_LABELS, type LeadStageValue } from "./lead-status";
 export const REMINDER_DAYS = 7;
 const DAY = 86_400_000;
 
+// Leads a client has owed an update on for 7+ days, right now (regardless of
+// whether a reminder went out) — the data-health CLIENT_UPDATE_OVERDUE check.
+export async function overdueLeads(clientId: string, now = new Date()) {
+  const cutoff = new Date(now.getTime() - REMINDER_DAYS * DAY);
+  return prisma.$queryRaw<{ id: string }[]>`
+    SELECT id FROM (
+      SELECT l.id, COALESCE((SELECT MAX(e.at) FROM "LeadStageEvent" e WHERE e."leadId" = l.id AND e.stage = l.stage AND e.source::text <> 'INFERRED'), l."createdAt") AS since
+      FROM "Lead" l JOIN "Client" c ON c.id = l."clientId"
+      WHERE l."clientId" = ${clientId} AND l."deletedAt" IS NULL
+        AND (l."awaitingClientUpdate" OR l.stage IN ('CONSULT_BOOKED', 'QUOTE_SENT'))
+        AND (c."startDate" IS NULL OR l."createdAt" >= c."startDate")
+    ) d WHERE d.since <= ${cutoff}
+  `;
+}
+
 type Due = { id: string; clientId: string; name: string | null; stage: LeadStageValue; awaitingClientUpdate: boolean; since: Date };
 
 export async function raiseReminders(now = new Date()) {

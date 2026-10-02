@@ -10,6 +10,7 @@ import { parseTarget, planStageEvents } from "@/lib/lead-status";
 import { parseVisibility, type ReportVisibility } from "@/lib/report-visibility";
 import { kickWriteBacks, queueLeadChange } from "@/lib/sheet-writeback";
 import { rebuildHistory } from "@/lib/kpi";
+import { runHealthChecks } from "@/lib/data-health";
 import { sydneyLocalToDate } from "@/lib/sheet-parse";
 
 function slugify(name: string) {
@@ -342,6 +343,14 @@ export async function saveClientType(clientId: string, clientType: string) {
   revalidatePath(`/clients`);
 }
 
+// Coach-only: re-run a client's data health checks now (lib/data-health.ts).
+export async function recheckClientHealth(clientId: string) {
+  await requireCoach();
+  const findings = await runHealthChecks(clientId);
+  revalidatePath(`/clients`);
+  return { open: findings.length };
+}
+
 // ── Playbooks / lessons ──────────────────────────────────────────────────
 export async function toggleLessonComplete(clientId: string, lessonId: string, completed: boolean) {
   await requireClientAccess(clientId);
@@ -550,6 +559,9 @@ export async function deleteClientPermanently(clientId: string) {
     prisma.adCampaign.deleteMany({ where: { clientId } }),
     prisma.clientAward.deleteMany({ where: { clientId } }),
     prisma.clientSheet.deleteMany({ where: { clientId } }),
+    prisma.dataAlert.deleteMany({ where: { clientId } }),
+    prisma.syncReconciliation.deleteMany({ where: { clientId } }),
+    prisma.leadReminder.deleteMany({ where: { clientId } }),
     prisma.contract.deleteMany({ where: { clientId } }),
     prisma.contactLog.deleteMany({ where: { clientId } }),
     prisma.adSpendDaily.deleteMany({ where: { clientId } }),

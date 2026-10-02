@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { createClient, bulkUpdateClientStatus, archiveClient, unarchiveClient, deleteClientPermanently } from "@/lib/actions";
 import { requireCoach } from "@/lib/auth";
 import { getRevenueByMonth, revenueInMonth } from "@/lib/revenue";
+import { HOLD_TYPES } from "@/lib/data-health";
 import AddClientModal from "./AddClientModal";
 import ClientsGrid from "./ClientsGrid";
 
@@ -38,7 +39,14 @@ export default async function ClientsPage({
     orderBy: { name: "asc" },
   });
 
-  const revenue = await getRevenueByMonth(clients.map((c) => c.id));
+  const [revenue, openAlerts] = await Promise.all([
+    getRevenueByMonth(clients.map((c) => c.id)),
+    prisma.dataAlert.findMany({ where: { clientId: { in: clients.map((c) => c.id) }, status: "OPEN" }, select: { clientId: true, type: true } }),
+  ]);
+  const alertsFor = (id: string) => {
+    const mine = openAlerts.filter((a) => a.clientId === id);
+    return { mismatch: mine.some((a) => HOLD_TYPES.includes(a.type)), count: mine.length };
+  };
   const revenueByClient = clients.map((c) => revenueInMonth(revenue, monthStart, c.id));
 
   return (
@@ -83,6 +91,7 @@ export default async function ClientsPage({
           status: client.status,
           scope: client.scope,
           revenue: revenueByClient[i],
+          alerts: alertsFor(client.id),
         }))}
         onBulkUpdateStatus={bulkUpdateClientStatus}
         onArchive={archiveClient}

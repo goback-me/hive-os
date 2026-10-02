@@ -18,6 +18,7 @@ import {
   setCampaignReporting,
   rebuildKpiHistory,
   saveClientType,
+  recheckClientHealth,
 } from "@/lib/actions";
 import { requireClientAccess } from "@/lib/auth";
 import { checkAndGrantAwards } from "@/lib/awards";
@@ -45,6 +46,9 @@ import StartDateField from "@/components/StartDateField";
 import ClientUpdatesPanel from "@/components/ClientUpdatesPanel";
 import ClientTypeField from "@/components/ClientTypeField";
 import GrowthPanel from "@/components/GrowthPanel";
+import HoldNote from "@/components/HoldNote";
+import ClientAlertsBanner from "@/components/ClientAlertsBanner";
+import { reportsOnHold } from "@/lib/report-hold";
 
 // Forces this page to render fresh on every single request — no static
 // caching, no ISR.
@@ -61,6 +65,9 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
   const viewer = await requireClientAccess(client.id);
   const isCoach = viewer.role === "COACH";
   const visibility = parseVisibility(client.reportVisibility);
+  // A report-breaking data problem is open → a client sees "Data being
+  // updated" instead of any numbers (coaches see everything + the alert).
+  const hold = !isCoach && (await reportsOnHold(client.id));
 
   // Everything below is independent, so it all runs at once — the page used
   // to wait on each step (awards, then queries, then the funnel, then Meta)
@@ -108,6 +115,11 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
     prisma.clientSheet.findUnique({ where: { clientId: client.id } }),
   ]);
 
+  // Coaches: this client's open data alerts (lib/data-health.ts).
+  const openAlerts = isCoach
+    ? await prisma.dataAlert.findMany({ where: { clientId: client.id, status: "OPEN" }, orderBy: [{ severity: "asc" }, { lastSeenAt: "desc" }] })
+    : [];
+
   const referrals = await prisma.referral.findMany({ where: { referralLinkId: referralLink.id }, orderBy: { createdAt: "desc" } });
 
   // Hidden fields (profit, spend) never reach a CLIENT's browser.
@@ -124,9 +136,14 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
   const dashboardContent = (
     <div className="space-y-5">
       {/* The client's monthly snapshot comes first. */}
-      <SnapshotPanel key={`snap-${visibilityKey}`} clientId={client.id} initial={snapshot} isCoach={isCoach} onRebuild={isCoach ? rebuildKpiHistory : undefined} />
-
-      <DashboardStats key={`stats-${visibilityKey}`} clientId={client.id} initial={stats} isCoach={isCoach} />
+      {hold ? (
+        <HoldNote />
+      ) : (
+        <>
+          <SnapshotPanel key={`snap-${visibilityKey}`} clientId={client.id} initial={snapshot} isCoach={isCoach} onRebuild={isCoach ? rebuildKpiHistory : undefined} />
+          <DashboardStats key={`stats-${visibilityKey}`} clientId={client.id} initial={stats} isCoach={isCoach} />
+        </>
+      )}
 
       <div className="grid grid-cols-3 gap-5">
         {/* Main column — the day-to-day, coaching-relevant activity */}
@@ -259,7 +276,7 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
     <div className="space-y-6">
       {/* Campaigns + spend load client-side (/api/ads) — Meta's live list once
           connected, else the manually tracked AdCampaign rows. */}
-      <AdsPanel clientId={client.id} isCoach={isCoach} onSetReporting={setCampaignReporting} />
+      {hold ? <HoldNote /> : <AdsPanel clientId={client.id} isCoach={isCoach} onSetReporting={setCampaignReporting} />}
       {/* Hive OS — Meta Marketing API connection for this client, merged in
           alongside the original coaching app's own manually-tracked AdCampaign rows above. */}
       <MetaAdsCard clientId={client.id} connected={Boolean(client.metaAdAccountId)} adAccountId={client.metaAdAccountId} />
@@ -290,6 +307,7 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
       hasSheet={Boolean(clientSheet)}
       clientSlug={client.slug}
       startDate={client.startDate?.toISOString() ?? null}
+      reportsHold={hold}
       lastSyncedAt={clientSheet?.lastSyncedAt?.toISOString() ?? null}
       lastSyncError={clientSheet?.lastSyncError ?? null}
       onSync={syncClientLeads}
@@ -318,12 +336,30 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
         </div>
       </div>
 
+      {isCoach && (
+        <ClientAlertsBanner
+          clientId={client.id}
+          onRecheck={recheckClientHealth}
+          initial={openAlerts.map((a) => ({
+            id: a.id,
+            clientName: client.name,
+            clientSlug: client.slug,
+            severity: a.severity,
+            title: a.title,
+            detail: a.detail,
+            fixHint: a.fixHint,
+            fixUrl: a.fixUrl,
+            lastSeenAt: a.lastSeenAt.toISOString(),
+          }))}
+        />
+      )}
+
       <ClientTabsShell
         tabs={[
           { key: "onboarding", label: "Onboarding", content: onboardingContent },
           { key: "dashboard", label: "Dashboard", content: dashboardContent },
           ...(clientSheet || isCoach ? [{ key: "leads", label: "Leads", content: leadsContent }] : []),
-          { key: "growth", label: "Growth", content: <GrowthPanel clientId={client.id} isCoach={isCoach} /> },
+          { key: "growth", label: "Growth", content: hold ? <HoldNote /> : <GrowthPanel clientId={client.id} isCoach={isCoach} /> },
           { key: "gameplan", label: "Gameplan", content: gameplanContent },
           { key: "playbooks", label: "Playbooks", content: playbooksContent },
           { key: "ads", label: "Ads", content: adsContent },

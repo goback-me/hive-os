@@ -163,3 +163,15 @@ export function getCachedCampaignInsights(adAccountId: string, encryptedAccessTo
   const { since, until } = metaDays(dateRange);
   return cachedInsights(adAccountId, encryptedAccessToken, since, until, daily);
 }
+
+// Whether a client's Meta token still works and when it runs out — Meta's
+// debug_token. expiresAt null = never expires (or unknown). Cached an hour.
+async function fetchMetaTokenInfo(encryptedAccessToken: string): Promise<{ valid: boolean; expiresAt: string | null; error: string | null }> {
+  const token = decryptToken(encryptedAccessToken);
+  const res = await fetch(`https://graph.facebook.com/v21.0/debug_token?input_token=${encodeURIComponent(token)}&access_token=${encodeURIComponent(token)}`, { cache: "no-store" });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.error) return { valid: false, expiresAt: null, error: data?.error?.message ?? `Meta returned ${res.status}` };
+  const d = data.data ?? {};
+  return { valid: !!d.is_valid, expiresAt: d.expires_at ? new Date(d.expires_at * 1000).toISOString() : null, error: d.error?.message ?? null };
+}
+export const getMetaTokenInfo = unstable_cache(fetchMetaTokenInfo, ["meta-token-info"], { revalidate: 3600 });

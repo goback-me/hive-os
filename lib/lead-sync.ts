@@ -3,6 +3,8 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getAdminGoogleConnection, getDropdownOptions, getValidAccessToken, getSheetValues, hasWriteScope } from "@/lib/google-sheets";
 import { automationWrites, queueWrites, type CellWrite } from "@/lib/sheet-writeback";
+import { countValues, reconcile, type SideCounts } from "@/lib/reconcile";
+import { runHealthChecks } from "@/lib/data-health";
 import { clampRange, getReportingScope, scopedSpend } from "@/lib/reporting-scope";
 import { classifyHive, classifyProspect, isPendingUpdate, parseMapping, resolveStatus } from "@/lib/status-classifier";
 import { NOTES_KEYWORDS, parseNotes, type ParsedNote } from "@/lib/notes-parser";
@@ -84,7 +86,7 @@ export async function syncLeadsFromSheet(clientId: string): Promise<SyncSummary>
 
   try {
     sheet = await refreshDropdownOptions(sheet);
-    const { summary, unmapped, automation } = await runSync(clientId, sheet);
+    const { summary, unmapped, automation, recon } = await runSync(clientId, sheet);
     await prisma.clientSheet.update({
       where: { clientId },
       data: { lastSyncedAt: new Date(), lastSyncError: null, unmappedStatuses: unmapped },
@@ -94,12 +96,45 @@ export async function syncLeadsFromSheet(clientId: string): Promise<SyncSummary>
     if (automation.length && hasWriteScope(await getAdminGoogleConnection())) {
       for (const a of automation) await queueWrites(clientId, a.leadId, a.writes);
     }
+    await saveReconciliation(clientId, recon);
     return summary;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await prisma.clientSheet.update({ where: { clientId }, data: { lastSyncError: message.slice(0, 500) } }).catch(() => {});
     throw err;
+  } finally {
+    // Data health after every sync, pass or fail (lib/data-health.ts).
+    await runHealthChecks(clientId).catch((e) => console.error("Health checks failed:", e));
   }
+}
+
+type ReconInput = { sheet: SideCounts; seenIds: string[]; badOptInLeadIds: string[] };
+
+// Raw sheet vs what HQ now holds (lib/reconcile.ts), saved per sync — the
+// last 50 are kept. Leads with a newer HQ change are left out of "won" on
+// both sides (the sheet catches up via write-back).
+async function saveReconciliation(clientId: string, recon: ReconInput) {
+  const leads = await prisma.lead.findMany({
+    where: { clientId, deletedAt: null, externalKey: { not: null } },
+    select: { id: true, hiveStatusRaw: true, prospectStatusRaw: true, sheetStage: true, value: true, hqStatusUpdatedAt: true, sheetStatusUpdatedAt: true },
+  });
+  const hqNewer = (l: (typeof leads)[number]) => !!l.hqStatusUpdatedAt && (!l.sheetStatusUpdatedAt || l.hqStatusUpdatedAt > l.sheetStatusUpdatedAt);
+  const won = leads.filter((l) => l.sheetStage === "WON" && !hqNewer(l));
+  const seen = new Set(recon.seenIds);
+  const hq: SideCounts = {
+    rows: leads.length,
+    hive: countValues(leads.map((l) => l.hiveStatusRaw)),
+    prospect: countValues(leads.map((l) => l.prospectStatusRaw)),
+    won: won.length,
+    wonValue: won.reduce((s, l) => s + Number(l.value ?? 0), 0),
+    unmatched: leads.filter((l) => !seen.has(l.id)).length,
+  };
+  const diffs = reconcile(recon.sheet, hq);
+  await prisma.syncReconciliation.create({
+    data: { clientId, sheetCounts: { ...recon.sheet, badOptInLeadIds: recon.badOptInLeadIds }, hqCounts: hq, diffs, ok: diffs.length === 0 },
+  });
+  const old = await prisma.syncReconciliation.findMany({ where: { clientId }, orderBy: { createdAt: "desc" }, skip: 50, select: { id: true } });
+  if (old.length) await prisma.syncReconciliation.deleteMany({ where: { id: { in: old.map((o) => o.id) } } });
 }
 
 type Sheet = NonNullable<Awaited<ReturnType<typeof prisma.clientSheet.findUnique>>>;
@@ -192,7 +227,7 @@ function reasonFields(target: StageTarget & { stage: LeadStageValue }, dqPhase: 
 async function runSync(
   clientId: string,
   sheet: Sheet
-): Promise<{ summary: SyncSummary; unmapped: UnmappedStatuses; automation: { leadId: string; writes: CellWrite[] }[] }> {
+): Promise<{ summary: SyncSummary; unmapped: UnmappedStatuses; automation: { leadId: string; writes: CellWrite[] }[]; recon: ReconInput }> {
   const accessToken = await getValidAccessToken();
   const { headers, rows, cells } = await getSheetValues(accessToken, sheet.spreadsheetId, sheet.sheetName, { unformatted: true });
 
@@ -259,6 +294,9 @@ async function runSync(
   const claimed = new Map<string, number>(); // leadId -> row index that claimed it
   const pending = new Map<string, PendingUpdate>();
   const automation: { key: string; writes: CellWrite[] }[] = []; // key = lead id, or externalKey for a new lead
+  // For reconciliation: every identified row as the sheet has it.
+  const sheetRows: { hive: string; prospect: string; won: boolean; value: number | null }[] = [];
+  const badOptIn: string[] = []; // lead id, or externalKey for a new lead
   const creates = new Map<string, { data: Record<string, unknown>; events: PlannedEvent[]; noteJob?: NoteJob }>(); // externalKey -> new lead
   let identifiedRows = 0;
 
@@ -327,6 +365,8 @@ async function runSync(
     // month-attribution, the activity timeline, and time-to-convert. Only
     // set when the sheet actually has a parseable value — never invent one.
     const dateOptIn = dateOptInIdx !== -1 ? parseSheetDate(cells[rowIdx][dateOptInIdx]) : null;
+    if (dateOptInIdx !== -1 && !dateOptIn) badOptIn.push(existing?.id ?? externalKey);
+    sheetRows.push({ hive: rawStatus, prospect: rawResultStatus, won: final.stage === "WON" && !hqWins, value });
     const attempts = attemptsIdx !== -1 ? parseInt(row[attemptsIdx], 10) : NaN;
 
     // Feedback/notes cell → dated events, only when the cell changed since the
@@ -518,7 +558,20 @@ async function runSync(
     { timeout: 120_000, maxWait: 10_000 }
   );
 
+  const idOf = (key: string) => (creates.get(key)?.data.id as string | undefined) ?? key;
   return {
+    recon: {
+      sheet: {
+        rows: identifiedRows,
+        hive: countValues(sheetRows.map((r) => r.hive)),
+        prospect: countValues(sheetRows.map((r) => r.prospect)),
+        won: sheetRows.filter((r) => r.won).length,
+        wonValue: sheetRows.reduce((sum, r) => sum + (r.won ? r.value ?? 0 : 0), 0),
+        unmatched: identifiedRows - claimed.size - creates.size,
+      },
+      seenIds: [...Array.from(claimed.keys()), ...Array.from(creates.values()).map((c) => c.data.id as string)],
+      badOptInLeadIds: badOptIn.map(idOf),
+    },
     summary: { total: rows.length, leads: identifiedRows, created: creates.size, updated: updates.length - restored, removed: staleIds.length, restored },
     unmapped,
     automation: automation

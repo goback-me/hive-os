@@ -5,6 +5,7 @@ import { syncLeadsFromSheet } from "@/lib/lead-sync";
 import { freezeDueMonths } from "@/lib/kpi";
 import { processWriteBacks } from "@/lib/sheet-writeback";
 import { raiseReminders } from "@/lib/reminders";
+import { runHealthChecks } from "@/lib/data-health";
 
 // Called by n8n every 5 min (see DEPLOYMENT.md). Public in middleware.ts —
 // the x-cron-secret header is the only auth. Clients sync one at a time
@@ -59,6 +60,10 @@ export async function GET(req: NextRequest) {
   // HQ → sheet status write-back (max 50 cells a minute). Gets what's left
   // of the run's time; anything still queued goes on the next run.
   const writeBack = await processWriteBacks({ maxMs: 120_000 }).catch((err) => ({ error: err instanceof Error ? err.message : String(err) }));
+
+  // Data health for clients with no sheet (a sync already checked the rest).
+  const sheetless = await prisma.client.findMany({ where: { archivedAt: null, clientSheet: null }, select: { id: true } });
+  for (const c of sheetless) await runHealthChecks(c.id).catch((err) => console.error("Health checks failed:", err));
 
   // 7-day "needs your update" reminders (deduped per lead, so every run is fine).
   const reminders = await raiseReminders().catch((err) => ({ error: err instanceof Error ? err.message : String(err) }));

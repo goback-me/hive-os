@@ -30,6 +30,7 @@ import DateRangePicker, { useReportRange } from "@/components/DateRangePicker";
 import LeadCompareChart from "@/components/LeadCompareChart";
 import LeadWinsCard from "@/components/LeadWinsCard";
 import ClientUpdatesPanel from "@/components/ClientUpdatesPanel";
+import HoldNote from "@/components/HoldNote";
 import { StartDateWarning } from "@/components/StartDateField";
 
 type LeadRow = {
@@ -130,6 +131,7 @@ export default function LeadsPanel({
   hasSheet,
   clientSlug,
   startDate,
+  reportsHold = false,
   lastSyncedAt: initialLastSyncedAt,
   lastSyncError,
   onSync,
@@ -141,6 +143,7 @@ export default function LeadsPanel({
   hasSheet: boolean;
   clientSlug: string;
   startDate: string | null;
+  reportsHold?: boolean; // client view while a data problem is fixed — no report numbers
   lastSyncedAt: string | null;
   lastSyncError: string | null;
   onSync: (clientId: string) => Promise<{ summary: SyncSummary } | { error: string }>;
@@ -445,8 +448,8 @@ export default function LeadsPanel({
 
       <div className="flex items-center gap-2">
         <SubTabButton active={activeSubTab === "leads"} label="Leads" icon="person_search" onClick={() => setActiveSubTab("leads")} />
-        <SubTabButton active={activeSubTab === "breakdown"} label="Breakdown" icon="filter_alt" onClick={() => setActiveSubTab("breakdown")} />
-        <SubTabButton active={activeSubTab === "sales"} label="Sales" icon="handshake" onClick={() => setActiveSubTab("sales")} />
+        {!reportsHold && <SubTabButton active={activeSubTab === "breakdown"} label="Breakdown" icon="filter_alt" onClick={() => setActiveSubTab("breakdown")} />}
+        {!reportsHold && <SubTabButton active={activeSubTab === "sales"} label="Sales" icon="handshake" onClick={() => setActiveSubTab("sales")} />}
       </div>
 
       {activeSubTab === "breakdown" && (
@@ -459,7 +462,7 @@ export default function LeadsPanel({
       {activeSubTab === "sales" && <SalesPanel clientId={clientId} rangeQuery={rangeQuery} rangeLabel={rangeLabel} isCoach={isCoach} reloadKey={reloadKey} />}
 
       {/* TODO pending Aizal Loom spec — top of the Leads tab, don't redesign yet. */}
-      {activeSubTab === "leads" && <LeadWinsCard clientId={clientId} reloadKey={reloadKey} />}
+      {activeSubTab === "leads" && (reportsHold ? <HoldNote /> : <LeadWinsCard clientId={clientId} reloadKey={reloadKey} />)}
 
       {activeSubTab === "leads" && <ClientUpdatesPanel clientId={clientId} onUpdateStage={onUpdateStage} reloadKey={reloadKey} onSaved={reload} />}
 

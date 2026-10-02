@@ -11,6 +11,8 @@ type ClientCard = {
   status: string;
   scope: string | null;
   revenue: number;
+  // Open data alerts (lib/data-health.ts): mismatch = a report-breaking one.
+  alerts: { mismatch: boolean; count: number };
 };
 
 const STATUS_STYLE: Record<string, { dot: string; bg: string; color: string; label: string }> = {
@@ -178,6 +180,15 @@ export default function ClientsGrid({
                 </div>
                 <div className="min-w-0">
                   <p className="font-semibold text-sm" style={{ color: "var(--text-primary)" }}>{client.name}</p>
+                  {client.alerts.mismatch ? (
+                    <span className="inline-block mt-0.5 px-2 py-0.5 rounded-full text-[10px] font-bold" style={{ background: "var(--danger-tint)", color: "var(--danger)" }}>
+                      Data mismatch
+                    </span>
+                  ) : client.alerts.count > 0 ? (
+                    <span className="inline-block mt-0.5 px-2 py-0.5 rounded-full text-[10px] font-bold" style={{ background: "var(--tag-amber-bg)", color: "var(--tag-amber-fg)" }}>
+                      Data issues ({client.alerts.count})
+                    </span>
+                  ) : null}
                   <p className="text-xs truncate" style={{ color: "var(--text-secondary)" }}>
                     {client.description || " "}
                   </p>
