@@ -5,13 +5,7 @@ import { DURATION_KEYS, DURATION_LABELS, biggestDrop, type DqBreakdown, type Fun
 import HiddenBadge from "@/components/HiddenBadge";
 
 const fmtPct = (v: number | null) => (v == null ? "—" : `${Math.round(v)}%`);
-const fmtMoney = (v: number | null) => (v == null ? "—" : `$${v.toLocaleString("en-US", { maximumFractionDigits: v < 100 ? 2 : 0 })}`);
 const fmtDays = (v: number | null) => (v == null ? "—" : v < 1 ? `${Math.round(v * 24)}h` : `${v.toFixed(1)}d`);
-
-function displayCampaignName(name: string) {
-  const trimmed = name.trim();
-  return !trimmed || trimmed === "-" ? "Unattributed" : trimmed;
-}
 
 // The main-path steps shown in the funnel bar, in order.
 const STEPS: { key: keyof FunnelCounts; label: string }[] = [
@@ -31,12 +25,10 @@ export default function FunnelPanel({
   data,
   loading,
   isCoach,
-  onViewCampaign,
 }: {
   data: FunnelResponse | null;
   loading: boolean;
   isCoach: boolean;
-  onViewCampaign: (campaign: string) => void;
 }) {
   // Not loaded yet — placeholder in the funnel's shape.
   if (!data) {
@@ -53,13 +45,12 @@ export default function FunnelPanel({
     );
   }
   const { funnel, dq, visibility } = data;
-  const showCost = isCoach || visibility.showCostMetrics;
   const funnelBadge = isCoach && !visibility.showFunnel ? <HiddenBadge reason="Funnel is off in Client view settings" /> : null;
   const dqBadge = isCoach && !visibility.showDqBreakdown ? <HiddenBadge reason="DQ & lost breakdown is off in Client view settings" /> : null;
 
   if (!funnel) return dq ? <DqSection dq={dq} badge={dqBadge} /> : null;
 
-  const { overall, campaigns } = funnel;
+  const { overall } = funnel;
   const c = overall.counts;
   const drop = biggestDrop(c);
 
@@ -149,64 +140,6 @@ export default function FunnelPanel({
 
       {dq && <DqSection dq={dq} badge={dqBadge} />}
 
-      {/* Per campaign */}
-      <div>
-        <p className="text-sm font-semibold mb-3 flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
-          {campaigns.length} campaigns
-          {isCoach && !visibility.showCostMetrics && <HiddenBadge reason="Spend and cost columns are hidden (cost metrics off)" />}
-        </p>
-        <div className="card rounded-2xl overflow-x-auto">
-          <table className="w-full text-left text-sm min-w-[1100px]">
-            <thead>
-              <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                {["Campaign", "Leads", "Contacted", "Qualified", "Consults", "Won", "Contact %", "Show %", "Close %", "Overall %", ...(showCost ? ["Spend", "CPL", "Cost/qualified", "Cost/consult", "Cost/won"] : []), ""].map((h) => (
-                  <th key={h} className="py-2 px-3 text-xs font-bold whitespace-nowrap" style={{ color: "var(--text-secondary)" }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {[...campaigns, overall].map((row) => {
-                const isAll = row === overall;
-                return (
-                  <tr key={row.campaign} style={{ borderBottom: "1px solid var(--border)", background: isAll ? "var(--surface-hover)" : undefined }}>
-                    <td className="py-2 px-3 font-medium max-w-[220px] truncate" title={row.campaign} style={{ color: "var(--text-primary)" }}>
-                      {isAll ? <strong>All campaigns</strong> : displayCampaignName(row.campaign)}
-                    </td>
-                    <Td>{row.counts.leads}</Td>
-                    <Td>{row.counts.contacted}</Td>
-                    <Td>{row.counts.qualified}</Td>
-                    <Td>{row.counts.consultsBooked}</Td>
-                    <td className="py-2 px-3 font-semibold" style={{ color: "var(--primary)" }}>{row.counts.won}</td>
-                    <Td>{fmtPct(row.rates.contactRate)}</Td>
-                    <Td>{fmtPct(row.rates.showRate)}</Td>
-                    <Td>{fmtPct(row.rates.closeRate)}</Td>
-                    <Td>{fmtPct(row.rates.overallConversion)}</Td>
-                    {showCost && (
-                      <>
-                        <Td>
-                          {fmtMoney(row.spend)}
-                          {row.spendSource && <span style={{ color: "var(--text-muted)" }}> ({row.spendSource})</span>}
-                        </Td>
-                        <Td>{fmtMoney(row.costPerLead)}</Td>
-                        <Td>{fmtMoney(row.costPerQualified)}</Td>
-                        <Td>{fmtMoney(row.costPerConsult)}</Td>
-                        <Td>{fmtMoney(row.costPerWon)}</Td>
-                      </>
-                    )}
-                    <td className="py-2 px-3">
-                      {!isAll && (
-                        <button onClick={() => onViewCampaign(row.campaign)} className="text-xs font-semibold whitespace-nowrap" style={{ color: "var(--primary)" }}>
-                          View leads
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
     </div>
   );
 }
@@ -250,10 +183,6 @@ function DqTotal({ dq }: { dq: DqBreakdown }) {
       )}
     </div>
   );
-}
-
-function Td({ children }: { children: React.ReactNode }) {
-  return <td className="py-2 px-3 whitespace-nowrap" style={{ color: "var(--text-secondary)" }}>{children}</td>;
 }
 
 function Stat({ label, value, strong }: { label: string; value: string; strong?: boolean }) {

@@ -24,7 +24,6 @@ import type { SyncSummary } from "@/lib/lead-sync";
 const OVERRIDDEN_BY_HQ = "Sheet change overridden by HQ";
 import type { FunnelResponse } from "@/lib/funnel";
 import FunnelPanel from "@/components/FunnelPanel";
-import ProfitRoiPanel from "@/components/ProfitRoiPanel";
 import SalesPanel from "@/components/SalesPanel";
 import { reportRangeLabel, reportRangeQuery, type ReportRange } from "@/lib/date-range";
 import DateRangePicker, { useReportRange } from "@/components/DateRangePicker";
@@ -166,7 +165,6 @@ export default function LeadsPanel({
   const [statusFilter, setStatusFilter] = useState<LeadStageValue | "">("");
   const [sheetStatusFilter, setSheetStatusFilter] = useState<string | null>(null);
   const [sheetStatusCounts, setSheetStatusCounts] = useState<Record<string, number>>({});
-  const [campaignFilter, setCampaignFilter] = useState<string | null>(null);
   // Coach data cleanup: DQ/lost with no reason, won with no job value.
   const [needsFixing, setNeedsFixing] = useState(false);
   const [needsFixingCount, setNeedsFixingCount] = useState<number | null>(null);
@@ -219,7 +217,6 @@ export default function LeadsPanel({
     setLoadingLeads(true);
     const params = new URLSearchParams(`clientId=${clientId}&page=${page}&pageSize=${PAGE_SIZE}&${rangeQuery}`);
     if (statusFilter) params.set("stage", statusFilter);
-    if (campaignFilter) params.set("campaign", campaignFilter);
     if (sheetStatusFilter) params.set("sheetStatus", sheetStatusFilter);
     if (needsFixing) params.set("needsFixing", "1");
     fetch(`/api/leads?${params.toString()}`)
@@ -262,7 +259,7 @@ export default function LeadsPanel({
   useEffect(() => {
     loadLeads();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, statusFilter, sheetStatusFilter, campaignFilter, needsFixing, hasSheet, rangeQuery, reloadKey]);
+  }, [page, statusFilter, sheetStatusFilter, needsFixing, hasSheet, rangeQuery, reloadKey]);
 
   // The funnel (incl. a live Meta spend call) only loads when the Campaign
   // performance tab is actually open.
@@ -388,12 +385,6 @@ export default function LeadsPanel({
       .finally(() => setSavingNote(false));
   }
 
-  function viewCampaignLeads(campaign: string) {
-    setCampaignFilter(campaign);
-    setStatusFilter("");
-    setPage(1);
-    setActiveSubTab("leads");
-  }
 
   if (!hasSheet) {
     return (
@@ -452,11 +443,10 @@ export default function LeadsPanel({
         <div className="space-y-5">
           <SalesPanel clientId={clientId} rangeQuery={rangeQuery} rangeLabel={rangeLabel} isCoach={isCoach} reloadKey={reloadKey} />
 
-          <ProfitRoiPanel clientId={clientId} rangeQuery={rangeQuery} rangeLabel={rangeLabel} isCoach={isCoach} />
 
           <LeadCompareChart clientId={clientId} rangeQuery={rangeQuery} rangeLabel={rangeLabel} reloadKey={reloadKey} />
 
-          <FunnelPanel data={funnel} loading={loadingFunnel} isCoach={isCoach} onViewCampaign={viewCampaignLeads} />
+          <FunnelPanel data={funnel} loading={loadingFunnel} isCoach={isCoach} />
         </div>
       )}
 
@@ -474,16 +464,6 @@ export default function LeadsPanel({
               </p>
             ) : (
               <span className="skeleton h-4 w-24" />
-            )}
-            {campaignFilter && (
-              <button
-                onClick={() => setCampaignFilter(null)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold"
-                style={{ background: "var(--primary-tint)", color: "var(--primary)" }}
-              >
-                Campaign: {displayCampaignName(campaignFilter)}
-                <span className="material-symbols-outlined text-[14px]">close</span>
-              </button>
             )}
           </div>
 

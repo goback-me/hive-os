@@ -22,10 +22,13 @@ const startOf = (key: string) => {
   return sydneyLocalToDate(y, m, d)!;
 };
 
+// Scoped to the client's reporting start date: "first 60 days" starts at their
+// first lead on/after it, and earlier leads never count.
 export async function getLeadWins(clientId: string, window: WinsWindow, now = new Date()): Promise<LeadWins | null> {
+  const since = (await prisma.client.findUnique({ where: { id: clientId }, select: { startDate: true } }))?.startDate ?? new Date(0);
   let start: string;
   if (window === "first") {
-    const first = await prisma.lead.findFirst({ where: { clientId, deletedAt: null }, orderBy: { createdAt: "asc" }, select: { createdAt: true } });
+    const first = await prisma.lead.findFirst({ where: { clientId, deletedAt: null, createdAt: { gte: since } }, orderBy: { createdAt: "asc" }, select: { createdAt: true } });
     if (!first) return null;
     start = dayKey(first.createdAt);
   } else {
@@ -36,11 +39,11 @@ export async function getLeadWins(clientId: string, window: WinsWindow, now = ne
   const to = startOf(addDays(keys[keys.length - 1], 1));
 
   const [leads, wins] = await Promise.all([
-    prisma.lead.findMany({ where: { clientId, deletedAt: null, createdAt: { gte: from, lt: to } }, select: { createdAt: true } }),
+    prisma.lead.findMany({ where: { clientId, deletedAt: null, createdAt: { gte: from > since ? from : since, lt: to } }, select: { createdAt: true } }),
     prisma.$queryRaw<{ value: unknown; closed_at: Date }[]>`
       SELECT l.value, ${wonAtSql()} AS closed_at
       FROM "Lead" l
-      WHERE l."clientId" = ${clientId} AND l."deletedAt" IS NULL AND l.stage = 'WON'
+      WHERE l."clientId" = ${clientId} AND l."deletedAt" IS NULL AND l.stage = 'WON' AND l."createdAt" >= ${since}
     `,
   ]);
 

@@ -18,24 +18,34 @@ const key = (d: Date) => sydneyDay(d).slice(0, 7); // Sydney "2026-09"
 // One dated amount: a manual month (dated the 1st) or a won lead (dated won).
 export type RevenueEntry = { clientId: string; at: Date; amount: number };
 
-// `leadsSince` drops won leads that came in before it (a client's reporting
-// start date — see lib/reporting-scope.ts).
-export async function getRevenueEntries(clientIds?: string[], { leadsSince }: { leadsSince?: Date | null } = {}): Promise<RevenueEntry[]> {
+// Scoped to each client's reporting start date (lib/reporting-scope.ts):
+// nothing from before it counts anywhere — not a won lead that came in or
+// closed before it, nor a manual month before its month.
+export async function getRevenueEntries(clientIds?: string[]): Promise<RevenueEntry[]> {
   if (clientIds && !clientIds.length) return [];
   const clientFilter = clientIds ? { clientId: { in: clientIds } } : { client: { archivedAt: null } };
   const clientSql = clientIds
     ? Prisma.sql`l."clientId" IN (${Prisma.join(clientIds)})`
     : Prisma.sql`l."clientId" IN (SELECT id FROM "Client" WHERE "archivedAt" IS NULL)`;
-  const [manual, won] = await Promise.all([
+  const [manualRows, won, starts] = await Promise.all([
     prisma.revenueMonthly.findMany({ where: clientFilter, select: { clientId: true, month: true, amount: true } }),
     prisma.$queryRaw<{ clientId: string; value: unknown; at: Date }[]>`
-      SELECT l."clientId", l.value, ${wonAtSql()} AS at
-      FROM "Lead" l
-      WHERE ${clientSql} AND l."deletedAt" IS NULL AND l.stage = 'WON' AND l.value IS NOT NULL
-        AND l."createdAt" >= ${leadsSince ?? new Date(0)}
+      SELECT * FROM (
+        SELECT l."clientId", l.value, ${wonAtSql()} AS at, c."startDate"
+        FROM "Lead" l JOIN "Client" c ON c.id = l."clientId"
+        WHERE ${clientSql} AND l."deletedAt" IS NULL AND l.stage = 'WON' AND l.value IS NOT NULL
+          AND (c."startDate" IS NULL OR l."createdAt" >= c."startDate")
+      ) w
+      WHERE w."startDate" IS NULL OR w.at >= w."startDate"
     `,
+    prisma.client.findMany({ where: clientIds ? { id: { in: clientIds } } : { archivedAt: null }, select: { id: true, startDate: true } }),
   ]);
 
+  const startMonth = new Map(starts.map((c) => [c.id, c.startDate ? key(c.startDate) : null]));
+  const manual = manualRows.filter((r) => {
+    const start = startMonth.get(r.clientId);
+    return !start || key(r.month) >= start;
+  });
   const manualMonths = new Set(manual.map((r) => `${r.clientId}:${key(r.month)}`));
   const entries: RevenueEntry[] = manual.map((r) => ({ clientId: r.clientId, at: r.month, amount: Number(r.amount) }));
   for (const l of won) {

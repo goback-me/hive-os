@@ -50,7 +50,7 @@ export async function getClientStats(clientId: string, requested: { from?: Date;
   const scope = await getReportingScope(clientId);
   const range = clampRange(requested, scope.startDate);
   const [entries, scoped] = await Promise.all([
-    getRevenueEntries([clientId], { leadsSince: scope.startDate }),
+    getRevenueEntries([clientId]),
     scopedSpend(scope, range),
   ]);
 
