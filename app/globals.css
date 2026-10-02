@@ -33,6 +33,7 @@ html.fonts-loaded .material-symbols-outlined {
   --primary: #0071E3;
   --primary-hover: #0077ED;
   --primary-tint: #E8F2FE;
+  --series-compare: #eb6834; /* "previous period" bars next to --primary (validated pair, see LeadCompareChart) */
   --secondary: #0071E3;      /* same as primary — no second accent hue */
   --danger: #dc2626;
   --danger-tint: #fee2e2;
@@ -61,6 +62,7 @@ html.fonts-loaded .material-symbols-outlined {
   --primary: #0071E3;
   --primary-hover: #2B95FF;
   --primary-tint: #0A2540;
+  --series-compare: #d95926;
   --secondary: #0071E3;
   --danger: #f87171;
   --danger-tint: #3a1414;

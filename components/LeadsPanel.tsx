@@ -24,7 +24,7 @@ import ProfitRoiPanel from "@/components/ProfitRoiPanel";
 import SalesPanel from "@/components/SalesPanel";
 import { reportRangeLabel, reportRangeQuery, type ReportRange } from "@/lib/date-range";
 import DateRangePicker, { useReportRange } from "@/components/DateRangePicker";
-import LeadTimelineChart, { type TimeSeriesPoint } from "@/components/LeadTimelineChart";
+import LeadCompareChart from "@/components/LeadCompareChart";
 import LeadWinsCard from "@/components/LeadWinsCard";
 import { StartDateWarning } from "@/components/StartDateField";
 
@@ -151,8 +151,6 @@ export default function LeadsPanel({
   const rangeLabel = reportRangeLabel(dateRange);
   const [funnel, setFunnel] = useState<FunnelResponse | null>(null);
   const [loadingFunnel, setLoadingFunnel] = useState(false);
-  const [series, setSeries] = useState<TimeSeriesPoint[]>([]);
-  const [loadingSeries, setLoadingSeries] = useState(false);
 
   const [leads, setLeads] = useState<LeadRow[]>([]);
   const [total, setTotal] = useState(0);
@@ -246,19 +244,6 @@ export default function LeadsPanel({
       .finally(() => req === funnelReq.current && setLoadingFunnel(false));
   }
 
-  function loadSeries() {
-    if (!hasSheet) return;
-    setLoadingSeries(true);
-    fetch(`/api/leads/timeseries?clientId=${clientId}&${rangeQuery}`)
-      .then((r) => r.json())
-      .then((data) => {
-        if (data.error) throw new Error(data.error);
-        setSeries(data.points);
-      })
-      .catch((e) => setError(e.message))
-      .finally(() => setLoadingSeries(false));
-  }
-
   // `reloadKey` bumps after a sync or a stage change to refetch everything.
   const [reloadKey, setReloadKey] = useState(0);
   const reload = () => setReloadKey((k) => k + 1);
@@ -269,12 +254,11 @@ export default function LeadsPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, statusFilter, sheetStatusFilter, campaignFilter, hasSheet, rangeQuery, reloadKey]);
 
-  // The funnel (incl. a live Meta spend call) and chart only load when the
-  // Campaign performance tab is actually open.
+  // The funnel (incl. a live Meta spend call) only loads when the Campaign
+  // performance tab is actually open.
   useEffect(() => {
     if (activeSubTab !== "campaigns") return;
     loadFunnel();
-    loadSeries();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSubTab, rangeQuery, reloadKey]);
 
@@ -463,13 +447,7 @@ export default function LeadsPanel({
 
           <ProfitRoiPanel clientId={clientId} rangeQuery={rangeQuery} rangeLabel={rangeLabel} isCoach={isCoach} />
 
-          <div className="card rounded-2xl p-5">
-            <div className="flex items-center justify-between mb-1">
-              <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Lead activity over time</p>
-              {loadingSeries && <span className="text-xs" style={{ color: "var(--text-muted)" }}>Updating…</span>}
-            </div>
-            <LeadTimelineChart points={series} />
-          </div>
+          <LeadCompareChart clientId={clientId} rangeQuery={rangeQuery} rangeLabel={rangeLabel} reloadKey={reloadKey} />
 
           <FunnelPanel data={funnel} loading={loadingFunnel} isCoach={isCoach} onViewCampaign={viewCampaignLeads} />
         </div>
