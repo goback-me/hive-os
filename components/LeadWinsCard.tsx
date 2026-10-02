@@ -1,3 +1,4 @@
+// TODO pending Aizal Loom spec — this card is the top of the Leads tab; leave the design as is until then.
 "use client";
 
 import { useEffect, useRef, useState } from "react";

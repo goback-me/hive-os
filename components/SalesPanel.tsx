@@ -8,6 +8,7 @@ import HiddenBadge from "@/components/HiddenBadge";
 
 const money = (v: number | null) => (v == null ? "—" : `$${v.toLocaleString("en-US", { maximumFractionDigits: v < 100 ? 2 : 0 })}`);
 const sydDate = (iso: string) => new Date(iso).toLocaleDateString("en-AU", { timeZone: "Australia/Sydney", day: "numeric", month: "short", year: "numeric" });
+const shortDate = (iso: string) => new Date(iso).toLocaleDateString("en-AU", { timeZone: "Australia/Sydney", day: "numeric", month: "numeric" });
 const PREVIEW_ROWS = 5;
 const PAGE_SIZE = 50;
 
@@ -84,7 +85,7 @@ export default function SalesPanel({ clientId, rangeQuery, rangeLabel, isCoach, 
             <table className="w-full text-left text-sm min-w-[700px]">
               <thead>
                 <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                  {["Won", "Lead", "Campaign", "Job value", "Days to won", ...(showCost ? ["Cost of sale"] : [])].map((h) => (
+                  {["Won", "Lead", "Campaign", "Job value", "Opt-in → quote → won", "Days to won", ...(showCost ? ["Cost of sale"] : [])].map((h) => (
                     <th key={h} className="py-2 pr-4 text-xs font-bold whitespace-nowrap" style={{ color: "var(--text-secondary)" }}>
                       {h}
                       {h === "Cost of sale" && costBadge && <span className="ml-1.5">{costBadge}</span>}
@@ -99,6 +100,9 @@ export default function SalesPanel({ clientId, rangeQuery, rangeLabel, isCoach, 
                     <td className="py-2 pr-4 font-medium whitespace-nowrap" style={{ color: "var(--text-primary)" }}>{r.name || "—"}</td>
                     <td className="py-2 pr-4 whitespace-nowrap max-w-[240px] truncate" style={{ color: "var(--text-secondary)" }} title={r.campaign ?? undefined}>{displayCampaignName(r.campaign)}</td>
                     <td className="py-2 pr-4 whitespace-nowrap font-semibold" style={{ color: "var(--text-primary)" }}>{money(r.value)}</td>
+                    <td className="py-2 pr-4 whitespace-nowrap text-xs" style={{ color: "var(--text-muted)" }}>
+                      {shortDate(r.optInAt)} → {r.quoteAt ? shortDate(r.quoteAt) : "—"} → {shortDate(r.wonAt)}
+                    </td>
                     <td className="py-2 pr-4 whitespace-nowrap" style={{ color: "var(--text-secondary)" }}>{r.daysToWon == null ? "—" : `${r.daysToWon}d`}</td>
                     {showCost && <td className="py-2 pr-4 whitespace-nowrap" style={{ color: "var(--text-secondary)" }}>{money(r.costOfSale)}</td>}
                   </tr>

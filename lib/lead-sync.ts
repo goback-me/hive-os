@@ -539,6 +539,11 @@ function campaignKey(campaign: string | null) {
 
 const ALL = "__all__";
 
+// Median + sample size for every duration column, in DURATION_KEYS order.
+const medianColumns = Prisma.raw(
+  DURATION_KEYS.map((k) => `percentile_cont(0.5) WITHIN GROUP (ORDER BY "${k}") FILTER (WHERE "${k}" >= 0) AS "${k}_med", COUNT(*) FILTER (WHERE "${k}" >= 0) AS "${k}_n"`).join(", ")
+);
+
 // Days from b to a. Note dates are whole days (Sydney midnight) while opt-in
 // has a time, so a same-day gap can come out slightly negative — anything
 // within a day clamps to 0; a real negative (bad data) stays NULL.
@@ -563,6 +568,7 @@ async function getFunnelDurations(clientId: string, dateRange?: { from?: Date; t
       SELECT l.id, l.campaign, l."createdAt",
         ${milestoneSql("CONTACTED")} AS contacted,
         ${milestoneSql(HANDOVER_STAGES)} AS handover,
+        ${milestoneSql("HANDOVER_LIVE")} AS live,
         ${milestoneSql("CONSULT_BOOKED")} AS booked,
         ${milestoneSql("CONSULT_ATTENDED")} AS attended,
         ${milestoneSql("QUOTE_SENT")} AS quote,
@@ -572,25 +578,15 @@ async function getFunnelDurations(clientId: string, dateRange?: { from?: Date; t
       SELECT campaign,
         ${gapDays("contacted", '"createdAt"')} AS "leadToContacted",
         ${gapDays("handover", "contacted")} AS "contactedToHandover",
+        ${gapDays("live", '"createdAt"')} AS "leadToLiveTransfer",
+        ${gapDays("booked", '"createdAt"')} AS "leadToBooking",
         ${gapDays("booked", "handover")} AS "handoverToBooked",
         ${gapDays("quote", "attended")} AS "consultToQuote",
         ${gapDays("won", "quote")} AS "quoteToWon",
         ${gapDays("won", '"createdAt"')} AS "leadToWon"
       FROM t
     )
-    SELECT CASE WHEN GROUPING(campaign) = 1 THEN '__all__' ELSE campaign END AS campaign,
-      percentile_cont(0.5) WITHIN GROUP (ORDER BY "leadToContacted") FILTER (WHERE "leadToContacted" >= 0) AS "leadToContacted_med",
-      COUNT(*) FILTER (WHERE "leadToContacted" >= 0) AS "leadToContacted_n",
-      percentile_cont(0.5) WITHIN GROUP (ORDER BY "contactedToHandover") FILTER (WHERE "contactedToHandover" >= 0) AS "contactedToHandover_med",
-      COUNT(*) FILTER (WHERE "contactedToHandover" >= 0) AS "contactedToHandover_n",
-      percentile_cont(0.5) WITHIN GROUP (ORDER BY "handoverToBooked") FILTER (WHERE "handoverToBooked" >= 0) AS "handoverToBooked_med",
-      COUNT(*) FILTER (WHERE "handoverToBooked" >= 0) AS "handoverToBooked_n",
-      percentile_cont(0.5) WITHIN GROUP (ORDER BY "consultToQuote") FILTER (WHERE "consultToQuote" >= 0) AS "consultToQuote_med",
-      COUNT(*) FILTER (WHERE "consultToQuote" >= 0) AS "consultToQuote_n",
-      percentile_cont(0.5) WITHIN GROUP (ORDER BY "quoteToWon") FILTER (WHERE "quoteToWon" >= 0) AS "quoteToWon_med",
-      COUNT(*) FILTER (WHERE "quoteToWon" >= 0) AS "quoteToWon_n",
-      percentile_cont(0.5) WITHIN GROUP (ORDER BY "leadToWon") FILTER (WHERE "leadToWon" >= 0) AS "leadToWon_med",
-      COUNT(*) FILTER (WHERE "leadToWon" >= 0) AS "leadToWon_n"
+    SELECT CASE WHEN GROUPING(campaign) = 1 THEN '__all__' ELSE campaign END AS campaign, ${medianColumns}
     FROM d
     GROUP BY GROUPING SETS ((campaign), ())
   `;

@@ -94,7 +94,9 @@ function stageText(lead: Pick<LeadRow, "stage" | "dqReason" | "dqPhase" | "lostR
   return STAGE_LABELS[lead.stage];
 }
 
-const PAGE_SIZE = 25;
+// The list previews a few rows; "View all leads" opens it up, paged.
+const PREVIEW_SIZE = 10;
+const PAGE_SIZE = 50;
 
 function displayCampaignName(name: string) {
   const trimmed = name.trim();
@@ -147,7 +149,7 @@ export default function LeadsPanel({
 }) {
   const isCoach = viewerRole === "COACH";
 
-  const [activeSubTab, setActiveSubTab] = useState<"leads" | "campaigns">("leads");
+  const [activeSubTab, setActiveSubTab] = useState<"leads" | "breakdown" | "sales">("leads");
 
   // One range for the whole tab, kept in the URL (see DateRangePicker).
   const [dateRange, setDateRange] = useReportRange();
@@ -168,6 +170,11 @@ export default function LeadsPanel({
   // Coach data cleanup: DQ/lost with no reason, won with no job value.
   const [needsFixing, setNeedsFixing] = useState(false);
   const [needsFixingCount, setNeedsFixingCount] = useState<number | null>(null);
+  // Handed to the client and waiting on their update.
+  const [awaitingFilter, setAwaitingFilter] = useState(false);
+  const [awaitingCount, setAwaitingCount] = useState(0);
+  const [showAll, setShowAll] = useState(false);
+  const pageSize = showAll ? PAGE_SIZE : PREVIEW_SIZE;
   const [loadingLeads, setLoadingLeads] = useState(false);
   const [leadsLoaded, setLeadsLoaded] = useState(false); // false until the first page arrives
 
@@ -189,7 +196,7 @@ export default function LeadsPanel({
   const [pendingValue, setPendingValue] = useState("");
   const [, startTransition] = useTransition();
 
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const allStatusCount = useMemo(() => Object.values(stageCounts).reduce((a, b) => a + b, 0), [stageCounts]);
   // Every distinct raw value the sheet's status column has for this client —
   // "__none__" (no status column configured, or a blank cell) sorts last.
@@ -215,10 +222,11 @@ export default function LeadsPanel({
     if (!hasSheet) return;
     const req = ++leadsReq.current;
     setLoadingLeads(true);
-    const params = new URLSearchParams(`clientId=${clientId}&page=${page}&pageSize=${PAGE_SIZE}&${rangeQuery}`);
+    const params = new URLSearchParams(`clientId=${clientId}&page=${page}&pageSize=${pageSize}&${rangeQuery}`);
     if (statusFilter) params.set("stage", statusFilter);
     if (sheetStatusFilter) params.set("sheetStatus", sheetStatusFilter);
     if (needsFixing) params.set("needsFixing", "1");
+    if (awaitingFilter) params.set("awaiting", "1");
     fetch(`/api/leads?${params.toString()}`)
       .then((r) => r.json())
       .then((data) => {
@@ -229,6 +237,7 @@ export default function LeadsPanel({
         if (data.stageCounts) setStageCounts(data.stageCounts);
         if (data.sheetStatusCounts) setSheetStatusCounts(data.sheetStatusCounts);
         setNeedsFixingCount(data.needsFixingCount ?? null);
+        setAwaitingCount(data.awaitingCount ?? 0);
         setLeadsLoaded(true);
       })
       .catch((e) => req === leadsReq.current && setError(e.message))
@@ -259,12 +268,12 @@ export default function LeadsPanel({
   useEffect(() => {
     loadLeads();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, statusFilter, sheetStatusFilter, needsFixing, hasSheet, rangeQuery, reloadKey]);
+  }, [page, pageSize, statusFilter, sheetStatusFilter, needsFixing, awaitingFilter, hasSheet, rangeQuery, reloadKey]);
 
   // The funnel (incl. a live Meta spend call) only loads when the Campaign
   // performance tab is actually open.
   useEffect(() => {
-    if (activeSubTab !== "campaigns") return;
+    if (activeSubTab !== "breakdown") return;
     loadFunnel();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSubTab, rangeQuery, reloadKey]);
@@ -436,20 +445,20 @@ export default function LeadsPanel({
 
       <div className="flex items-center gap-2">
         <SubTabButton active={activeSubTab === "leads"} label="Leads" icon="person_search" onClick={() => setActiveSubTab("leads")} />
-        <SubTabButton active={activeSubTab === "campaigns"} label="Campaign performance" icon="campaign" onClick={() => setActiveSubTab("campaigns")} />
+        <SubTabButton active={activeSubTab === "breakdown"} label="Breakdown" icon="filter_alt" onClick={() => setActiveSubTab("breakdown")} />
+        <SubTabButton active={activeSubTab === "sales"} label="Sales" icon="handshake" onClick={() => setActiveSubTab("sales")} />
       </div>
 
-      {activeSubTab === "campaigns" && (
+      {activeSubTab === "breakdown" && (
         <div className="space-y-5">
-          <SalesPanel clientId={clientId} rangeQuery={rangeQuery} rangeLabel={rangeLabel} isCoach={isCoach} reloadKey={reloadKey} />
-
-
           <LeadCompareChart clientId={clientId} rangeQuery={rangeQuery} rangeLabel={rangeLabel} reloadKey={reloadKey} />
-
           <FunnelPanel data={funnel} loading={loadingFunnel} isCoach={isCoach} />
         </div>
       )}
 
+      {activeSubTab === "sales" && <SalesPanel clientId={clientId} rangeQuery={rangeQuery} rangeLabel={rangeLabel} isCoach={isCoach} reloadKey={reloadKey} />}
+
+      {/* TODO pending Aizal Loom spec — top of the Leads tab, don't redesign yet. */}
       {activeSubTab === "leads" && <LeadWinsCard clientId={clientId} reloadKey={reloadKey} />}
 
       {activeSubTab === "leads" && <ClientUpdatesPanel clientId={clientId} onUpdateStage={onUpdateStage} reloadKey={reloadKey} onSaved={reload} />}
@@ -511,6 +520,17 @@ export default function LeadsPanel({
                 >
                   <span className="material-symbols-outlined text-[14px]">build</span>
                   Needs fixing · {needsFixingCount ?? 0}
+                </button>
+              ) : null}
+              {awaitingCount > 0 || awaitingFilter ? (
+                <button
+                  onClick={() => { setAwaitingFilter(!awaitingFilter); setPage(1); }}
+                  className="px-3 py-1.5 rounded-full text-xs font-bold flex items-center gap-1.5 whitespace-nowrap"
+                  style={{ background: awaitingFilter ? "var(--tag-amber-fg)" : "var(--tag-amber-bg)", color: awaitingFilter ? "#fff" : "var(--tag-amber-fg)" }}
+                  title="Handed to the client, and Prospect Status hasn't been updated yet"
+                >
+                  <span className="material-symbols-outlined text-[14px]">hourglass_top</span>
+                  Awaiting client update · {awaitingCount}
                 </button>
               ) : null}
               <TabButton active={statusFilter === ""} label="All" count={allStatusCount} onClick={() => { setStatusFilter(""); setPage(1); }} />
@@ -598,8 +618,18 @@ export default function LeadsPanel({
                 </tbody>
               </table>
 
+              {!showAll ? (
+                total > PREVIEW_SIZE && (
+                  <button onClick={() => { setShowAll(true); setPage(1); }} className="mt-4 text-xs font-bold" style={{ color: "var(--primary)" }}>
+                    View all leads ({total.toLocaleString()})
+                  </button>
+                )
+              ) : (
               <div className="flex items-center justify-between mt-4">
-                <p className="text-xs" style={{ color: "var(--text-muted)" }}>Page {page} of {totalPages}</p>
+                <p className="text-xs flex items-center gap-3" style={{ color: "var(--text-muted)" }}>
+                  Page {page} of {totalPages}
+                  <button onClick={() => { setShowAll(false); setPage(1); }} className="font-bold" style={{ color: "var(--primary)" }}>Show fewer</button>
+                </p>
                 <div className="flex gap-2">
                   <button
                     onClick={() => setPage((p) => Math.max(1, p - 1))}
@@ -619,6 +649,7 @@ export default function LeadsPanel({
                   </button>
                 </div>
               </div>
+              )}
             </>
           )}
         </div>
@@ -855,24 +886,24 @@ function FixCell({ lead, onFix }: { lead: LeadRow; onFix: (target: string, value
       </div>
     );
   }
-  if (lead.stage === "WON") {
+  if (lead.stage === "WON" || lead.stage === "QUOTE_SENT") {
     const n = Number(value);
     const ok = value.trim() !== "" && Number.isFinite(n) && n >= 0;
     return (
       <div>
-        {missing("No job value")}
+        {missing(lead.stage === "WON" ? "No job value" : "No quote value")}
         <div className="flex gap-1.5">
           <input
             type="number"
             min={0}
             value={value}
             onChange={(e) => setValue(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter" && ok) onFix("WON", n); }}
+            onKeyDown={(e) => { if (e.key === "Enter" && ok) onFix(lead.stage, n); }}
             placeholder="e.g. 12000"
             className="w-24 px-2 py-1 rounded-lg text-xs outline-none"
             style={selectStyle}
           />
-          <button disabled={!ok} onClick={() => onFix("WON", n)} className="px-2 py-1 rounded-lg text-xs font-bold disabled:opacity-40" style={{ background: "var(--primary)", color: "#fff" }}>
+          <button disabled={!ok} onClick={() => onFix(lead.stage, n)} className="px-2 py-1 rounded-lg text-xs font-bold disabled:opacity-40" style={{ background: "var(--primary)", color: "#fff" }}>
             Save
           </button>
         </div>

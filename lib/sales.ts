@@ -1,6 +1,6 @@
 import { prisma } from "./prisma";
 import { sydneyDay } from "./sheet-parse";
-import { wonAtSql } from "./milestones";
+import { milestoneSql, wonAtSql } from "./milestones";
 import { metaDays } from "./meta-ads";
 import { addMonths, monthKeyOf, toneFor, type Tone } from "./kpi";
 import { dailySpend, getReportingScope, type Range } from "./reporting-scope";
@@ -21,6 +21,8 @@ export type SaleRow = {
   campaign: string | null;
   value: number | null;
   daysToWon: number | null;
+  optInAt: string;
+  quoteAt: string | null; // quote milestone (lib/milestones.ts), when known
   costOfSale: number | null;
 };
 
@@ -55,8 +57,8 @@ export async function getSales(
   const scope = await getReportingScope(clientId);
   const since = scope.startDate ?? new Date(0);
 
-  const rows = await prisma.$queryRaw<{ id: string; name: string | null; campaign: string | null; value: unknown; createdAt: Date; won_at: Date }[]>`
-    SELECT l.id, l.name, l.campaign, l.value, l."createdAt", ${wonAtSql()} AS won_at
+  const rows = await prisma.$queryRaw<{ id: string; name: string | null; campaign: string | null; value: unknown; createdAt: Date; won_at: Date; quote_at: Date | null }[]>`
+    SELECT l.id, l.name, l.campaign, l.value, l."createdAt", ${wonAtSql()} AS won_at, ${milestoneSql("QUOTE_SENT")} AS quote_at
     FROM "Lead" l
     WHERE l."clientId" = ${clientId} AND l."deletedAt" IS NULL AND l.stage = 'WON' AND l."createdAt" >= ${since}
   `;
@@ -80,6 +82,8 @@ export async function getSales(
       campaign: r.campaign,
       value: r.value == null ? null : Number(r.value),
       daysToWon: r.won_at >= r.createdAt ? Math.round((r.won_at.getTime() - r.createdAt.getTime()) / DAY) : null,
+      optInAt: r.createdAt.toISOString(),
+      quoteAt: r.quote_at?.toISOString() ?? null,
       costOfSale: hasSpend ? costs[i] : null,
     };
   });

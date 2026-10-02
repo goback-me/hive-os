@@ -124,7 +124,7 @@ export default function FunnelPanel({
       {/* Median time between steps */}
       <div className="card rounded-2xl p-5">
         <p className="text-sm font-semibold mb-3" style={{ color: "var(--text-primary)" }}>Median time between steps</p>
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           {DURATION_KEYS.map((k) => (
             <div key={k} className="p-3 rounded-lg" style={{ background: "var(--surface-hover)" }}>
               <p className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>{DURATION_LABELS[k]}</p>

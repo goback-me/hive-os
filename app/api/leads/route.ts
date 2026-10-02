@@ -47,16 +47,19 @@ export async function GET(req: NextRequest) {
   const createdAt = from || to ? { ...(from ? { gte: from } : {}), ...(to ? { lt: to } : {}) } : undefined;
 
   // "Needs fixing" (coach data cleanup): DQ'd with no reason, won with no
-  // job value, lost with no reason. In an AND so it can't clash with the
-  // campaign filter's own OR.
+  // job value, lost with no reason, quoted with no quote value. In an AND so
+  // it can't clash with the campaign filter's own OR.
   const needsFixing = req.nextUrl.searchParams.get("needsFixing") === "1" && user.role === "COACH";
   const needsWhere = {
     OR: [
       { stage: "DISQUALIFIED" as const, OR: [{ dqReason: "UNKNOWN" as const }, { dqReason: null }] },
       { stage: "WON" as const, value: null },
       { stage: "LOST" as const, OR: [{ lostReason: "UNKNOWN" as const }, { lostReason: null }] },
+      { stage: "QUOTE_SENT" as const, value: null },
     ],
   };
+  // Handed to the client and waiting on their update (lib/lead-status.ts).
+  const awaiting = req.nextUrl.searchParams.get("awaiting") === "1";
 
   const where = {
     clientId,
@@ -65,13 +68,14 @@ export async function GET(req: NextRequest) {
     ...(createdAt ? { createdAt } : {}),
     ...sheetStatusWhere,
     AND: [campaignWhere ?? {}, needsFixing ? needsWhere : {}],
+    ...(awaiting ? { awaitingClientUpdate: true } : {}),
   };
   // Same filter minus `stage`/`sheetStatus` — powers each tab's own count
   // regardless of which tab is currently selected.
   const whereForStatusCounts = { clientId, deletedAt: null, ...(createdAt ? { createdAt } : {}), ...campaignWhere, ...sheetStatusWhere };
   const whereForSheetStatusCounts = { clientId, deletedAt: null, ...(createdAt ? { createdAt } : {}), ...campaignWhere, ...(stage ? { stage } : {}) };
 
-  const [total, leads, statusGroups, sheetStatusGroups, needsFixingCount] = await Promise.all([
+  const [total, leads, statusGroups, sheetStatusGroups, needsFixingCount, awaitingCount] = await Promise.all([
     prisma.lead.count({ where }),
     prisma.lead.findMany({
       where,
@@ -86,6 +90,7 @@ export async function GET(req: NextRequest) {
     user.role === "COACH"
       ? prisma.lead.count({ where: { clientId, deletedAt: null, ...(createdAt ? { createdAt } : {}), AND: [campaignWhere ?? {}, needsWhere] } })
       : Promise.resolve(null),
+    prisma.lead.count({ where: { clientId, deletedAt: null, ...(createdAt ? { createdAt } : {}), awaitingClientUpdate: true, AND: [campaignWhere ?? {}] } }),
   ]);
 
   const stageCounts = Object.fromEntries(LEAD_STAGES.map((s) => [s, 0])) as Record<string, number>;
@@ -103,6 +108,7 @@ export async function GET(req: NextRequest) {
     stageCounts,
     sheetStatusCounts,
     needsFixingCount,
+    awaitingCount,
     leads: leads.map((l) => ({
       id: l.id,
       name: l.name,

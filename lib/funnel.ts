@@ -54,13 +54,24 @@ export type FunnelRates = {
   overallConversion: number | null;
 };
 
-export const DURATION_KEYS = ["leadToContacted", "contactedToHandover", "handoverToBooked", "consultToQuote", "quoteToWon", "leadToWon"] as const;
+export const DURATION_KEYS = [
+  "leadToContacted",
+  "contactedToHandover",
+  "leadToLiveTransfer",
+  "leadToBooking",
+  "handoverToBooked",
+  "consultToQuote",
+  "quoteToWon",
+  "leadToWon",
+] as const;
 export type DurationKey = (typeof DURATION_KEYS)[number];
 export type Durations = Record<DurationKey, { medianDays: number | null; n: number }>;
 
 export const DURATION_LABELS: Record<DurationKey, string> = {
   leadToContacted: "Lead → first contact",
   contactedToHandover: "Contacted → handover",
+  leadToLiveTransfer: "Lead → live transfer",
+  leadToBooking: "Lead → booking",
   handoverToBooked: "Handover → consult booked",
   consultToQuote: "Consult → quote",
   quoteToWon: "Quote → won",
@@ -195,12 +206,12 @@ export function biggestDrop(c: FunnelCounts): BiggestDrop | null {
       from: c.handovers,
       to: c.consultsBooked,
       denom: c.handovers,
-      advice: "Handover issue — train team / faster client callback",
+      advice: "DQs after handover — handover / team training, faster client callback",
       evidence: c.dqByPhase.POST_HANDOVER ? `${c.dqByPhase.POST_HANDOVER} DQ'd after handover (${dqShare("POST_HANDOVER")}% of DQs)` : undefined,
     },
-    { step: "Booked → attended", rate: r.showRate ?? NaN, from: c.consultsBooked, to: c.consultsAttended, denom: c.consultsBooked, advice: "Add consult reminders" },
-    { step: "Consult → quote", rate: r.quoteRate ?? NaN, from: c.consultsAttended, to: c.quotes, denom: c.consultsAttended, advice: "Client-side sales" },
-    { step: "Quote → won", rate: r.closeRate ?? NaN, from: c.quotes, to: c.won, denom: c.quotes, advice: "Client-side sales" },
+    { step: "Booked → attended", rate: r.showRate ?? NaN, from: c.consultsBooked, to: c.consultsAttended, denom: c.consultsBooked, advice: "Low show rate — add consult reminders" },
+    { step: "Consult → quote", rate: r.quoteRate ?? NaN, from: c.consultsAttended, to: c.quotes, denom: c.consultsAttended, advice: "Client selling — work through the sales Playbooks with them" },
+    { step: "Quote → won", rate: r.closeRate ?? NaN, from: c.quotes, to: c.won, denom: c.quotes, advice: "Client selling — work through the sales Playbooks with them" },
   ];
   const candidates = steps.filter((s) => s.denom >= MIN_SAMPLE && Number.isFinite(s.rate));
   if (!candidates.length) return null;
