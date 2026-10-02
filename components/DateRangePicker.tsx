@@ -24,6 +24,7 @@ export function useReportRange(): [ReportRange, (r: ReportRange) => void] {
 // One picker at the top of a tab; every report section below follows it.
 export default function DateRangePicker({ value, onChange }: { value: ReportRange; onChange: (r: ReportRange) => void }) {
   const [open, setOpen] = useState(false);
+  const [showCustom, setShowCustom] = useState(value.preset === "custom");
   const [from, setFrom] = useState(value.from ?? "");
   const [to, setTo] = useState(value.to ?? "");
   const ref = useRef<HTMLDivElement>(null);
@@ -55,17 +56,14 @@ export default function DateRangePicker({ value, onChange }: { value: ReportRang
           style={{ background: "var(--surface-card)", border: "1px solid var(--border)", boxShadow: "0 20px 40px -16px rgba(0,0,0,0.25)" }}
         >
           {REPORT_PRESETS.map((p) => {
-            const active = p === value.preset;
+            const active = showCustom ? p === "custom" : p === value.preset;
             return (
               <button
                 key={p}
                 onClick={() => {
-                  if (p === "custom") {
-                    if (!from || !to) return; // fill the dates below first
-                    onChange({ preset: "custom", from: from <= to ? from : to, to: from <= to ? to : from });
-                  } else {
-                    onChange({ preset: p });
-                  }
+                  if (p === "custom") return setShowCustom(true); // pick the dates below, then Apply
+                  setShowCustom(false);
+                  onChange({ preset: p });
                   setOpen(false);
                 }}
                 className="w-full text-left px-3 py-2 text-sm"
@@ -80,7 +78,7 @@ export default function DateRangePicker({ value, onChange }: { value: ReportRang
               </button>
             );
           })}
-          <div className="px-3 pb-2 pt-1 space-y-1.5" style={{ borderTop: "1px solid var(--border)" }}>
+          {showCustom && <div className="px-3 pb-2 pt-2 space-y-1.5" style={{ borderTop: "1px solid var(--border)" }}>
             <label className="flex items-center justify-between gap-2 text-xs" style={{ color: "var(--text-muted)" }}>
               From <input type="date" value={from} max={to || undefined} onChange={(e) => setFrom(e.target.value)} className="px-2 py-1 rounded-md text-xs outline-none" style={inputStyle} />
             </label>
@@ -97,7 +95,7 @@ export default function DateRangePicker({ value, onChange }: { value: ReportRang
             >
               Apply custom range
             </button>
-          </div>
+          </div>}
         </div>
       )}
     </div>

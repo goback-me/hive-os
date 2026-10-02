@@ -1,9 +1,9 @@
 "use client";
 
 import { useRef, useState } from "react";
-import DateRangeDropdown from "@/components/DateRangeDropdown";
+import DateRangePicker from "@/components/DateRangePicker";
 import HiddenBadge from "@/components/HiddenBadge";
-import { DATE_RANGE_LABELS, type DateRangePreset } from "@/lib/date-range";
+import { reportRangeLabel, reportRangeQuery, type ReportRange } from "@/lib/date-range";
 import type { ViewerStats } from "@/lib/client-stats";
 
 const money = (v: number) => `${v < 0 ? "-" : ""}$${Math.abs(v).toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
@@ -14,18 +14,18 @@ const money = (v: number) => `${v < 0 ? "-" : ""}$${Math.abs(v).toLocaleString("
 // Profit is never on a client's dashboard — it lives in the Leads tab's
 // Profit / ROI section, behind the coach's showProfit setting.
 export default function DashboardStats({ clientId, initial, isCoach }: { clientId: string; initial: ViewerStats; isCoach: boolean }) {
-  const [range, setRange] = useState<DateRangePreset>("this_month");
+  const [range, setRange] = useState<ReportRange>({ preset: "this_month" });
   const [stats, setStats] = useState(initial);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const req = useRef(0);
 
-  function change(next: DateRangePreset) {
+  function change(next: ReportRange) {
     setRange(next);
     const id = ++req.current;
     setLoading(true);
     setError(null);
-    fetch(`/api/clients/stats?clientId=${clientId}&range=${next}`)
+    fetch(`/api/clients/stats?clientId=${clientId}&${reportRangeQuery(next)}`)
       .then((r) => r.json())
       .then((data) => {
         if (id !== req.current) return; // a newer range was picked meanwhile
@@ -36,7 +36,7 @@ export default function DashboardStats({ clientId, initial, isCoach }: { clientI
       .finally(() => id === req.current && setLoading(false));
   }
 
-  const label = DATE_RANGE_LABELS[range];
+  const label = reportRangeLabel(range);
   const v = stats.visibility;
   const cards = [
     <Card key="rev" icon="payments" label="Revenue" sub={label} value={money(stats.revenue)} />,
@@ -69,7 +69,7 @@ export default function DashboardStats({ clientId, initial, isCoach }: { clientI
       <div className="flex items-center justify-end gap-3 mb-3">
         {error && <span className="text-xs" style={{ color: "var(--danger)" }}>{error}</span>}
         {loading && <span className="material-symbols-outlined text-[18px] animate-spin" style={{ color: "var(--text-muted)" }}>progress_activity</span>}
-        <DateRangeDropdown value={range} onChange={change} />
+        <DateRangePicker value={range} onChange={change} />
       </div>
       <div className={`grid gap-4 transition-opacity ${cards.length >= 4 ? "grid-cols-2 lg:grid-cols-4" : "grid-cols-2 lg:grid-cols-3"}`} style={{ opacity: loading ? 0.55 : 1 }}>
         {cards}

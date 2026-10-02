@@ -23,7 +23,7 @@ import { checkAndGrantAwards } from "@/lib/awards";
 import { STAGE_LABELS, STAGE_STYLE } from "@/lib/lead-status";
 import { sydneyDay } from "@/lib/sheet-parse";
 import { getClientStats, statsForViewer } from "@/lib/client-stats";
-import { resolveDateRange } from "@/lib/date-range";
+import { resolveReportRange } from "@/lib/date-range";
 import { getSnapshot } from "@/lib/kpi";
 import { parseVisibility } from "@/lib/report-visibility";
 import DashboardStats from "@/components/DashboardStats";
@@ -82,7 +82,7 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
     // payment landing doesn't require an unrelated action to unlock it.
     checkAndGrantAwards(client.id),
     // Dashboard cards' first paint (This month); the range picker refetches.
-    getClientStats(client.id, resolveDateRange("this_month"), false),
+    getClientStats(client.id, resolveReportRange({ preset: "this_month" }), false),
     // Snapshot KPI cards (current Sydney month); the month picker refetches.
     getSnapshot(client.id, null, viewer, visibility),
     // Lazily provisions a referral link for clients that existed before this
