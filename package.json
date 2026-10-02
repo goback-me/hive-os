@@ -10,7 +10,8 @@
     "db:demo": "tsx prisma/demo-seed.ts",
     "db:studio": "prisma studio",
     "db:backfill-kpis": "tsx prisma/backfill-kpis.ts",
-    "create-admin": "tsx prisma/create-admin.ts"
+    "create-admin": "tsx prisma/create-admin.ts",
+    "promote-coaches": "tsx prisma/promote-coaches.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.128.0",

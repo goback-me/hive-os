@@ -414,7 +414,7 @@ export default function LeadsPanel({
           {isCoach ? (
             <>Connect this client's Google Sheet on the <Link href={`/leads?client=${clientSlug}`} className="font-semibold" style={{ color: "var(--primary)" }}>Leads page</Link> first.</>
           ) : (
-            "Ask your coach to connect your lead sheet."
+            "Ask the Hive team to connect your lead sheet."
           )}
         </p>
       </div>

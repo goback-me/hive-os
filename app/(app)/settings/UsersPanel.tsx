@@ -16,7 +16,7 @@ type UserRow = {
 
 const ROLE_LABELS: Record<UserRow["role"], string> = {
   ADMIN: "Admin (all clients + integrations)",
-  COACH: "Account manager (all clients)",
+  COACH: "Manager (all clients)",
   CLIENT: "Client (their data only)",
 };
 
@@ -56,7 +56,7 @@ export default function UsersPanel({
         <AddClientModal action={onCreateClient} />
       </div>
       <p className="text-sm mb-4" style={{ color: "var(--text-secondary)" }}>
-        Admins and account managers see every client; only admins manage the Google connection and other admins. Client logins only ever see their own data. Need a new client first? Use "Add Client" above.
+        Admins and managers see every client; only admins manage the Google connection and other admins. Client logins only ever see their own data. Need a new client first? Use "Add Client" above.
       </p>
 
       <div className="space-y-2 mb-5">
