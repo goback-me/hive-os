@@ -610,6 +610,7 @@ model MonthlyKpi {
   client         Client   @relation(fields: [clientId], references: [id])
   month          String // "2026-09" — Sydney calendar month
   leads          Int
+  contacted      Int       @default(0) // leads first contacted in the month
   liveTransfers  Int
   consultsBooked Int
   quotes         Int

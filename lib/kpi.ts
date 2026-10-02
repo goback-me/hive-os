@@ -9,6 +9,7 @@ import type { ReportVisibility } from "./report-visibility";
 // Snapshot KPIs — activity-based, bucketed by Sydney calendar month.
 //
 // leads           opt-in date (Lead.createdAt) in the window
+// contacted       distinct leads first contacted in the window
 // liveTransfers   distinct leads whose live handover happened in the window
 // consultsBooked  distinct leads whose consult was booked in the window
 // quotes          distinct leads whose quote went out in the window
@@ -27,6 +28,7 @@ type Window = { from: Date; to: Date; since: string; until: string }; // to excl
 
 export type KpiValues = {
   leads: number;
+  contacted: number;
   liveTransfers: number;
   consultsBooked: number;
   quotes: number;
@@ -92,11 +94,12 @@ export function isFreezable(k: MonthKey, now = new Date()) {
 
 async function countKpis(clientId: string, w: Window, startDate: Date | null) {
   const since = startDate ?? new Date(0);
-  const [row] = await prisma.$queryRaw<{ leads: bigint; live: bigint; booked: bigint; quotes: bigint; sales: bigint; revenue: unknown }[]>`
+  const [row] = await prisma.$queryRaw<{ leads: bigint; contacted: bigint; live: bigint; booked: bigint; quotes: bigint; sales: bigint; revenue: unknown }[]>`
     WITH l AS (
       SELECT id, "createdAt", stage, value FROM "Lead" WHERE "clientId" = ${clientId} AND "deletedAt" IS NULL AND "createdAt" >= ${since}
     ), m AS (
       SELECT l."createdAt" AS opt_in, l.value,
+        ${milestoneSql("CONTACTED")} AS contacted,
         ${milestoneSql("HANDOVER_LIVE")} AS live,
         ${milestoneSql("CONSULT_BOOKED")} AS booked,
         ${milestoneSql("QUOTE_SENT")} AS quote,
@@ -105,6 +108,7 @@ async function countKpis(clientId: string, w: Window, startDate: Date | null) {
     )
     SELECT
       COUNT(*) FILTER (WHERE opt_in >= ${w.from} AND opt_in < ${w.to}) AS leads,
+      COUNT(*) FILTER (WHERE contacted >= ${w.from} AND contacted < ${w.to}) AS contacted,
       COUNT(*) FILTER (WHERE live >= ${w.from} AND live < ${w.to}) AS live,
       COUNT(*) FILTER (WHERE booked >= ${w.from} AND booked < ${w.to}) AS booked,
       COUNT(*) FILTER (WHERE quote >= ${w.from} AND quote < ${w.to}) AS quotes,
@@ -114,6 +118,7 @@ async function countKpis(clientId: string, w: Window, startDate: Date | null) {
   `;
   return {
     leads: Number(row.leads),
+    contacted: Number(row.contacted),
     liveTransfers: Number(row.live),
     consultsBooked: Number(row.booked),
     quotes: Number(row.quotes),
@@ -153,6 +158,7 @@ type KpiRow = NonNullable<Awaited<ReturnType<typeof prisma.monthlyKpi.findUnique
 const fromRow = (row: KpiRow): KpiValues =>
   withCosts({
     leads: row.leads,
+    contacted: row.contacted,
     liveTransfers: row.liveTransfers,
     consultsBooked: row.consultsBooked,
     quotes: row.quotes,
@@ -191,6 +197,19 @@ export async function getKpiHistory(clientId: string, k: MonthKey, n: number, no
   );
 }
 
+// This month so far, and the same days of last month — a like-for-like pair.
+export async function getMonthToDateVsLast(clientId: string, now = new Date()) {
+  const scope = await getReportingScope(clientId);
+  const k = monthKeyOf(now);
+  const today = sydneyParts(now).d;
+  const opts = { cached: true, strictSpend: false };
+  const [current, previous] = await Promise.all([
+    computeWindow(scope, { ...monthWindow(k), to: now }, opts),
+    computeWindow(scope, monthWindow(addMonths(k, -1), today), opts),
+  ]);
+  return { current, previous, today, daysInMonth: daysIn(parseKey(k).y, parseKey(k).m) };
+}
+
 // ── Month-end freeze + backfill ────────────────────────────────────────────
 
 // Stores a closed month. FROZEN rows are final — never overwritten, not even
@@ -202,6 +221,7 @@ async function storeMonth(scope: ReportingScope, k: MonthKey, source: "BACKFILL"
   const v = await computeWindow(scope, monthWindow(k), { cached, strictSpend: true });
   const data = {
     leads: v.leads,
+    contacted: v.contacted,
     liveTransfers: v.liveTransfers,
     consultsBooked: v.consultsBooked,
     quotes: v.quotes,

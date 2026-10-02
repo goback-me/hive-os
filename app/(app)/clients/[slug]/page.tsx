@@ -44,6 +44,7 @@ import GoalsCard from "@/components/GoalsCard";
 import StartDateField from "@/components/StartDateField";
 import ClientUpdatesPanel from "@/components/ClientUpdatesPanel";
 import ClientTypeField from "@/components/ClientTypeField";
+import GrowthPanel from "@/components/GrowthPanel";
 
 // Forces this page to render fresh on every single request — no static
 // caching, no ISR.
@@ -322,6 +323,7 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
           { key: "onboarding", label: "Onboarding", content: onboardingContent },
           { key: "dashboard", label: "Dashboard", content: dashboardContent },
           ...(clientSheet || isCoach ? [{ key: "leads", label: "Leads", content: leadsContent }] : []),
+          { key: "growth", label: "Growth", content: <GrowthPanel clientId={client.id} isCoach={isCoach} /> },
           { key: "gameplan", label: "Gameplan", content: gameplanContent },
           { key: "playbooks", label: "Playbooks", content: playbooksContent },
           { key: "ads", label: "Ads", content: adsContent },
