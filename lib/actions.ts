@@ -233,7 +233,8 @@ export async function updateLeadStage(leadId: string, target: string, value?: nu
       data: {
         stage,
         dqReason: stage === "DISQUALIFIED" ? parsed.dqReason ?? "UNKNOWN" : null,
-        dqPhase: stage === "DISQUALIFIED" ? plan.dqPhase : null,
+        // Re-picking the reason on an already-DQ'd lead keeps how far it got.
+        dqPhase: stage === "DISQUALIFIED" ? (lead.stage === "DISQUALIFIED" && lead.dqPhase ? lead.dqPhase : plan.dqPhase) : null,
         lostReason: stage === "LOST" ? parsed.lostReason ?? "UNKNOWN" : null,
         statusManuallySetAt: now,
         ...(value !== undefined ? { value } : {}),

@@ -4,8 +4,10 @@ import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import {
   DQ_PHASE_LABELS,
+  DQ_REASONS,
   DQ_REASON_LABELS,
   LEAD_STAGES,
+  LOST_REASONS,
   LOST_REASON_LABELS,
   STAGE_LABELS,
   STAGE_RANK,
@@ -162,6 +164,9 @@ export default function LeadsPanel({
   const [sheetStatusFilter, setSheetStatusFilter] = useState<string | null>(null);
   const [sheetStatusCounts, setSheetStatusCounts] = useState<Record<string, number>>({});
   const [campaignFilter, setCampaignFilter] = useState<string | null>(null);
+  // Coach data cleanup: DQ/lost with no reason, won with no job value.
+  const [needsFixing, setNeedsFixing] = useState(false);
+  const [needsFixingCount, setNeedsFixingCount] = useState<number | null>(null);
   const [loadingLeads, setLoadingLeads] = useState(false);
   const [leadsLoaded, setLeadsLoaded] = useState(false); // false until the first page arrives
 
@@ -213,6 +218,7 @@ export default function LeadsPanel({
     if (statusFilter) params.set("stage", statusFilter);
     if (campaignFilter) params.set("campaign", campaignFilter);
     if (sheetStatusFilter) params.set("sheetStatus", sheetStatusFilter);
+    if (needsFixing) params.set("needsFixing", "1");
     fetch(`/api/leads?${params.toString()}`)
       .then((r) => r.json())
       .then((data) => {
@@ -222,6 +228,7 @@ export default function LeadsPanel({
         setTotal(data.total);
         if (data.stageCounts) setStageCounts(data.stageCounts);
         if (data.sheetStatusCounts) setSheetStatusCounts(data.sheetStatusCounts);
+        setNeedsFixingCount(data.needsFixingCount ?? null);
         setLeadsLoaded(true);
       })
       .catch((e) => req === leadsReq.current && setError(e.message))
@@ -252,7 +259,7 @@ export default function LeadsPanel({
   useEffect(() => {
     loadLeads();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, statusFilter, sheetStatusFilter, campaignFilter, hasSheet, rangeQuery, reloadKey]);
+  }, [page, statusFilter, sheetStatusFilter, campaignFilter, needsFixing, hasSheet, rangeQuery, reloadKey]);
 
   // The funnel (incl. a live Meta spend call) only loads when the Campaign
   // performance tab is actually open.
@@ -317,6 +324,16 @@ export default function LeadsPanel({
     setPendingChange(null);
     startTransition(() => {
       onUpdateStage(lead.id, target, Number.isFinite(value) ? value : undefined)
+        .then(() => refreshAfterChange(lead.id))
+        .catch((e) => setError(e.message));
+    });
+  }
+
+  // "Needs fixing" quick edit — the normal stage-change flow, so it's logged
+  // and locks the stage like any manual change; the row drops off the list.
+  function quickFix(lead: LeadRow, target: string, value?: number) {
+    startTransition(() => {
+      onUpdateStage(lead.id, target, value)
         .then(() => refreshAfterChange(lead.id))
         .catch((e) => setError(e.message));
     });
@@ -513,6 +530,17 @@ export default function LeadsPanel({
           {leadsLoaded && <div className="mb-4 fade-in">
             <p className="text-[10px] font-bold tracking-wide mb-1.5" style={{ color: "var(--text-muted)" }}>PIPELINE STATUS</p>
             <div className="flex items-center gap-1.5 flex-wrap">
+              {isCoach && (needsFixingCount || needsFixing) ? (
+                <button
+                  onClick={() => { setNeedsFixing(!needsFixing); setPage(1); }}
+                  className="px-3 py-1.5 rounded-full text-xs font-bold flex items-center gap-1.5 whitespace-nowrap"
+                  style={{ background: needsFixing ? "var(--danger)" : "var(--danger-tint)", color: needsFixing ? "#fff" : "var(--danger)" }}
+                  title="Disqualified or lost with no reason, or won with no job value"
+                >
+                  <span className="material-symbols-outlined text-[14px]">build</span>
+                  Needs fixing · {needsFixingCount ?? 0}
+                </button>
+              ) : null}
               <TabButton active={statusFilter === ""} label="All" count={allStatusCount} onClick={() => { setStatusFilter(""); setPage(1); }} />
               {LEAD_STAGES.filter((s) => (stageCounts[s] ?? 0) > 0 || statusFilter === s).map((s) => (
                 <TabButton
@@ -539,7 +567,7 @@ export default function LeadsPanel({
               <table className="w-full text-left text-sm min-w-[760px] fade-in transition-opacity" style={{ opacity: loadingLeads ? 0.5 : 1 }}>
                 <thead>
                   <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                    {["Name", "Phone", "Email", "Source", "Campaign", "Status", "Value", ""].map((h, i) => (
+                    {["Name", "Phone", "Email", "Source", "Campaign", "Status", "Value", ...(needsFixing ? ["Needs fixing"] : []), ""].map((h, i) => (
                       <th key={i} className="py-2 pr-4 text-xs font-bold whitespace-nowrap" style={{ color: "var(--text-secondary)" }}>{h}</th>
                     ))}
                   </tr>
@@ -577,6 +605,11 @@ export default function LeadsPanel({
                         <td className="py-2 pr-4 whitespace-nowrap" style={{ color: "var(--text-primary)" }}>
                           {lead.value != null ? `$${lead.value.toLocaleString()}` : "—"}
                         </td>
+                        {needsFixing && (
+                          <td className="py-2 pr-4" onClick={(e) => e.stopPropagation()}>
+                            <FixCell lead={lead} onFix={(target, value) => quickFix(lead, target, value)} />
+                          </td>
+                        )}
                         <td className="py-2 pr-4">
                           <button
                             onClick={(e) => { e.stopPropagation(); openDetail(lead.id); }}
@@ -831,6 +864,55 @@ export default function LeadsPanel({
       )}
     </div>
   );
+}
+
+// What a "Needs fixing" row is missing, with an in-place control to fill it.
+function FixCell({ lead, onFix }: { lead: LeadRow; onFix: (target: string, value?: number) => void }) {
+  const [value, setValue] = useState("");
+  const missing = (text: string) => <p className="text-[10px] font-bold mb-1" style={{ color: "var(--danger)" }}>{text}</p>;
+  const selectStyle = { background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" };
+
+  if (lead.stage === "DISQUALIFIED" || lead.stage === "LOST") {
+    const dq = lead.stage === "DISQUALIFIED";
+    const reasons = (dq ? DQ_REASONS : LOST_REASONS).filter((r) => r !== "UNKNOWN");
+    const labels: Record<string, string> = dq ? DQ_REASON_LABELS : LOST_REASON_LABELS;
+    return (
+      <div>
+        {missing(dq ? "No DQ reason" : "No lost reason")}
+        <select value="" onChange={(e) => e.target.value && onFix(`${lead.stage}:${e.target.value}`)} className="px-2 py-1 rounded-lg text-xs outline-none" style={selectStyle}>
+          <option value="">Pick reason…</option>
+          {reasons.map((r) => (
+            <option key={r} value={r}>{labels[r]}</option>
+          ))}
+        </select>
+      </div>
+    );
+  }
+  if (lead.stage === "WON") {
+    const n = Number(value);
+    const ok = value.trim() !== "" && Number.isFinite(n) && n >= 0;
+    return (
+      <div>
+        {missing("No job value")}
+        <div className="flex gap-1.5">
+          <input
+            type="number"
+            min={0}
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter" && ok) onFix("WON", n); }}
+            placeholder="e.g. 12000"
+            className="w-24 px-2 py-1 rounded-lg text-xs outline-none"
+            style={selectStyle}
+          />
+          <button disabled={!ok} onClick={() => onFix("WON", n)} className="px-2 py-1 rounded-lg text-xs font-bold disabled:opacity-40" style={{ background: "var(--primary)", color: "#fff" }}>
+            Save
+          </button>
+        </div>
+      </div>
+    );
+  }
+  return null;
 }
 
 // First-load placeholder in the table's shape, so the tab never shows "0 leads".
