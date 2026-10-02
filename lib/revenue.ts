@@ -1,15 +1,19 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
+import { sydneyDay } from "./sheet-parse";
+import { wonAtSql } from "./milestones";
 
 // One place every screen gets revenue from, so the client card, the agency
 // dashboard, the trend chart and awards always agree.
 //
-// Per client per month: a RevenueMonthly row (manual / Stripe) when one
-// exists for that month, otherwise the sum of that month's won-lead values
-// from the sheet. A lead is dated by when the app saw it become Won
-// (SYNC/MANUAL event); one that arrived already won uses its opt-in date.
+// Revenue = cash collected: only Won leads count (never booked, attended or
+// quoted). Per client per Sydney month: a RevenueMonthly row (manual /
+// Stripe) when one exists for that month, otherwise the sum of that month's
+// won-lead values from the sheet. A won lead is dated by its won date — the
+// same rule as the Sales section (wonAtSql in lib/milestones.ts) — and still
+// belongs to the lead's own campaign.
 
-export const monthStartOf = (d: Date) => new Date(d.getFullYear(), d.getMonth(), 1);
-const key = (d: Date) => monthStartOf(d).getTime();
+const key = (d: Date) => sydneyDay(d).slice(0, 7); // Sydney "2026-09"
 
 // One dated amount: a manual month (dated the 1st) or a won lead (dated won).
 export type RevenueEntry = { clientId: string; at: Date; amount: number };
@@ -17,25 +21,25 @@ export type RevenueEntry = { clientId: string; at: Date; amount: number };
 // `leadsSince` drops won leads that came in before it (a client's reporting
 // start date — see lib/reporting-scope.ts).
 export async function getRevenueEntries(clientIds?: string[], { leadsSince }: { leadsSince?: Date | null } = {}): Promise<RevenueEntry[]> {
+  if (clientIds && !clientIds.length) return [];
   const clientFilter = clientIds ? { clientId: { in: clientIds } } : { client: { archivedAt: null } };
+  const clientSql = clientIds
+    ? Prisma.sql`l."clientId" IN (${Prisma.join(clientIds)})`
+    : Prisma.sql`l."clientId" IN (SELECT id FROM "Client" WHERE "archivedAt" IS NULL)`;
   const [manual, won] = await Promise.all([
     prisma.revenueMonthly.findMany({ where: clientFilter, select: { clientId: true, month: true, amount: true } }),
-    prisma.lead.findMany({
-      where: { ...clientFilter, deletedAt: null, stage: "WON", value: { not: null }, ...(leadsSince ? { createdAt: { gte: leadsSince } } : {}) },
-      select: {
-        clientId: true,
-        value: true,
-        createdAt: true,
-        stageEvents: { where: { stage: "WON", source: { in: ["SYNC", "MANUAL"] } }, select: { at: true }, orderBy: { at: "asc" }, take: 1 },
-      },
-    }),
+    prisma.$queryRaw<{ clientId: string; value: unknown; at: Date }[]>`
+      SELECT l."clientId", l.value, ${wonAtSql()} AS at
+      FROM "Lead" l
+      WHERE ${clientSql} AND l."deletedAt" IS NULL AND l.stage = 'WON' AND l.value IS NOT NULL
+        AND l."createdAt" >= ${leadsSince ?? new Date(0)}
+    `,
   ]);
 
   const manualMonths = new Set(manual.map((r) => `${r.clientId}:${key(r.month)}`));
   const entries: RevenueEntry[] = manual.map((r) => ({ clientId: r.clientId, at: r.month, amount: Number(r.amount) }));
   for (const l of won) {
-    const at = l.stageEvents[0]?.at ?? l.createdAt;
-    if (!manualMonths.has(`${l.clientId}:${key(at)}`)) entries.push({ clientId: l.clientId, at, amount: Number(l.value) });
+    if (!manualMonths.has(`${l.clientId}:${key(l.at)}`)) entries.push({ clientId: l.clientId, at: l.at, amount: Number(l.value) });
   }
   return entries;
 }
@@ -55,7 +59,7 @@ export function revenueBetween(entries: RevenueEntry[], range: { from?: Date; to
   return total;
 }
 
-export type RevenueByMonth = Map<string, Map<number, number>>; // clientId → month start (ms) → amount
+export type RevenueByMonth = Map<string, Map<string, number>>; // clientId → Sydney month ("2026-09") → amount
 
 export async function getRevenueByMonth(clientIds?: string[]): Promise<RevenueByMonth> {
   const out: RevenueByMonth = new Map();

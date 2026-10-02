@@ -1,5 +1,5 @@
 import { prisma } from "./prisma";
-import { wonAtSql } from "./lead-wins";
+import { milestoneSql, wonAtSql } from "./milestones";
 import { clampRange, getReportingScope, type Range } from "./reporting-scope";
 
 // Leads tab comparison chart: what happened in the selected period vs the
@@ -11,9 +11,8 @@ import { clampRange, getReportingScope, type Range } from "./reporting-scope";
 // quotes          leads whose quote went out in the window
 // won             leads won in the window (wonAtSql, same as the Sales section)
 //
-// A step's date is the team's dated note when there is one, else the stage
-// change the app saw live (SYNC/MANUAL). Only leads on/after the client's
-// reporting start date count.
+// Each step is dated by its milestone (lib/milestones.ts). Only leads
+// on/after the client's reporting start date count.
 
 export const COMPARE_METRICS = ["leads", "handovers", "consultsBooked", "quotes", "won"] as const;
 export type CompareMetric = (typeof COMPARE_METRICS)[number];
@@ -24,26 +23,22 @@ async function countPeriod(clientId: string, since: Date, r: Range): Promise<Per
   const to = r.to ?? new Date();
   const [row] = await prisma.$queryRaw<Record<CompareMetric, bigint>[]>`
     WITH l AS (
-      SELECT id FROM "Lead" WHERE "clientId" = ${clientId} AND "deletedAt" IS NULL AND "createdAt" >= ${since}
-    ), ev AS (
-      SELECT e."leadId", CASE WHEN e.stage IN ('HANDOVER_LIVE', 'HANDOVER_TEXT') THEN 'HANDOVER' ELSE e.stage::text END AS step, e.at, false AS note
-      FROM "LeadStageEvent" e JOIN l ON l.id = e."leadId"
-      WHERE e.source IN ('SYNC', 'MANUAL') AND e.stage IN ('HANDOVER_LIVE', 'HANDOVER_TEXT', 'CONSULT_BOOKED', 'QUOTE_SENT')
-      UNION ALL
-      SELECT ne."leadId", CASE WHEN ne.event IN ('HANDOVER_LIVE', 'HANDOVER_TEXT') THEN 'HANDOVER' ELSE ne.event::text END, ne.at, true
-      FROM "LeadNoteEvent" ne JOIN l ON l.id = ne."leadId"
-      WHERE ne.event IN ('HANDOVER_LIVE', 'HANDOVER_TEXT', 'CONSULT_BOOKED', 'QUOTE_SENT')
-    ), first AS (
-      SELECT "leadId", step, COALESCE(MIN(at) FILTER (WHERE note), MIN(at)) AS at
-      FROM ev GROUP BY "leadId", step
+      SELECT id, "createdAt", stage FROM "Lead" WHERE "clientId" = ${clientId} AND "deletedAt" IS NULL AND "createdAt" >= ${since}
+    ), m AS (
+      SELECT l."createdAt" AS opt_in,
+        ${milestoneSql(["HANDOVER_LIVE", "HANDOVER_TEXT"])} AS handover,
+        ${milestoneSql("CONSULT_BOOKED")} AS booked,
+        ${milestoneSql("QUOTE_SENT")} AS quote,
+        CASE WHEN l.stage = 'WON' THEN ${wonAtSql()} END AS won
+      FROM l
     )
     SELECT
-      (SELECT COUNT(*) FROM "Lead" WHERE "clientId" = ${clientId} AND "deletedAt" IS NULL AND "createdAt" >= ${from} AND "createdAt" < ${to}) AS leads,
-      (SELECT COUNT(*) FROM first WHERE step = 'HANDOVER' AND at >= ${from} AND at < ${to}) AS handovers,
-      (SELECT COUNT(*) FROM first WHERE step = 'CONSULT_BOOKED' AND at >= ${from} AND at < ${to}) AS "consultsBooked",
-      (SELECT COUNT(*) FROM first WHERE step = 'QUOTE_SENT' AND at >= ${from} AND at < ${to}) AS quotes,
-      (SELECT COUNT(*) FROM "Lead" l WHERE l."clientId" = ${clientId} AND l."deletedAt" IS NULL AND l.stage = 'WON' AND l."createdAt" >= ${since}
-        AND ${wonAtSql()} >= ${from} AND ${wonAtSql()} < ${to}) AS won
+      COUNT(*) FILTER (WHERE opt_in >= ${from} AND opt_in < ${to}) AS leads,
+      COUNT(*) FILTER (WHERE handover >= ${from} AND handover < ${to}) AS handovers,
+      COUNT(*) FILTER (WHERE booked >= ${from} AND booked < ${to}) AS "consultsBooked",
+      COUNT(*) FILTER (WHERE quote >= ${from} AND quote < ${to}) AS quotes,
+      COUNT(*) FILTER (WHERE won >= ${from} AND won < ${to}) AS won
+    FROM m
   `;
   return Object.fromEntries(COMPARE_METRICS.map((k) => [k, Number(row[k])])) as PeriodCounts;
 }

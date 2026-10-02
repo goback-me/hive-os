@@ -56,6 +56,14 @@ assert.deepEqual(rolled.map((n) => formatSheetDate(n.at)), ["28/11/2025", "03/01
 const trailing = parseNotes("number disconnected hs 20/7", parseSheetDate("14/07/2026")!);
 assert.deepEqual(trailing.map((n) => [formatSheetDate(n.at), n.who, n.event]), [["20/07/2026", "hs", "DQ_SPAM"]]);
 
+// A rollover that lands in the future is a typo, not a real date — dropped
+const augOptIn = parseSheetDate("04/08/2026")!;
+const now = new Date("2026-10-02T00:00:00Z");
+assert.deepEqual(
+  parseNotes("hs 4/8 self booked for aug 7, maddy 4/4 np", augOptIn, now).map((n) => [formatSheetDate(n.at), n.event]),
+  [["04/08/2026", "CONSULT_BOOKED"]]
+);
+
 // Junk: leading undated text dropped, impossible dates skipped, empty cell
 assert.deepEqual(parseNotes("called twice, HS 31/2 np", optIn), []);
 assert.deepEqual(parseNotes("", optIn), []);

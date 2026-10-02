@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import { SHEET_TZ, sydneyLocalToDate } from "./sheet-parse";
 import { getReportingScope, scopedSpend, type ReportingScope } from "./reporting-scope";
+import { milestoneSql } from "./milestones";
 import type { ReportVisibility } from "./report-visibility";
 
 // Snapshot KPIs — activity-based, bucketed by Sydney calendar month.
@@ -11,12 +12,11 @@ import type { ReportVisibility } from "./report-visibility";
 // consultsBooked  distinct leads whose consult was booked in the window
 // quotes          distinct leads whose quote went out in the window
 //
-// "Happened" = the team's own dated note for that step when there is one,
-// else the stage change the app saw live (SYNC/MANUAL) — the same rule the
-// funnel's timings use. IMPORT/INFERRED stage events are skipped: their
-// timestamp is just when we first synced, which would pile a client's whole
-// history into their first month. Each lead counts once per step, in the
-// month it first reached it. Only leads that came in on/after the client's
+// "Happened" = the step's milestone date (lib/milestones.ts): the team's
+// dated note, else the stage change the app saw live — never IMPORT/INFERRED,
+// whose timestamp is just when we first synced and would pile a client's
+// whole history into their first month. Each lead counts once per step, in
+// the month it first reached it. Only leads that came in on/after the client's
 // reporting start date count, and only included campaigns' spend
 // (lib/reporting-scope.ts).
 
@@ -94,25 +94,19 @@ async function countKpis(clientId: string, w: Window, startDate: Date | null) {
   const [row] = await prisma.$queryRaw<{ leads: bigint; live: bigint; booked: bigint; quotes: bigint }[]>`
     WITH l AS (
       SELECT id, "createdAt" FROM "Lead" WHERE "clientId" = ${clientId} AND "deletedAt" IS NULL AND "createdAt" >= ${since}
-    ), ev AS (
-      SELECT e."leadId", e.stage::text AS step, e.at, false AS note
-      FROM "LeadStageEvent" e JOIN l ON l.id = e."leadId"
-      WHERE e.source IN ('SYNC', 'MANUAL') AND e.stage IN ('HANDOVER_LIVE', 'CONSULT_BOOKED', 'QUOTE_SENT')
-      UNION ALL
-      SELECT ne."leadId", ne.event::text, ne.at, true
-      FROM "LeadNoteEvent" ne JOIN l ON l.id = ne."leadId"
-      WHERE ne.event IN ('HANDOVER_LIVE', 'CONSULT_BOOKED', 'QUOTE_SENT')
-    ), first AS (
-      -- The team's dated note wins over when our sync noticed the change.
-      SELECT "leadId", step, COALESCE(MIN(at) FILTER (WHERE note), MIN(at)) AS at
-      FROM ev GROUP BY "leadId", step
+    ), m AS (
+      SELECT l."createdAt" AS opt_in,
+        ${milestoneSql("HANDOVER_LIVE")} AS live,
+        ${milestoneSql("CONSULT_BOOKED")} AS booked,
+        ${milestoneSql("QUOTE_SENT")} AS quote
+      FROM l
     )
     SELECT
-      (SELECT COUNT(*) FROM l WHERE "createdAt" >= ${w.from} AND "createdAt" < ${w.to}) AS leads,
-      COUNT(*) FILTER (WHERE step = 'HANDOVER_LIVE' AND at >= ${w.from} AND at < ${w.to}) AS live,
-      COUNT(*) FILTER (WHERE step = 'CONSULT_BOOKED' AND at >= ${w.from} AND at < ${w.to}) AS booked,
-      COUNT(*) FILTER (WHERE step = 'QUOTE_SENT' AND at >= ${w.from} AND at < ${w.to}) AS quotes
-    FROM first
+      COUNT(*) FILTER (WHERE opt_in >= ${w.from} AND opt_in < ${w.to}) AS leads,
+      COUNT(*) FILTER (WHERE live >= ${w.from} AND live < ${w.to}) AS live,
+      COUNT(*) FILTER (WHERE booked >= ${w.from} AND booked < ${w.to}) AS booked,
+      COUNT(*) FILTER (WHERE quote >= ${w.from} AND quote < ${w.to}) AS quotes
+    FROM m
   `;
   return { leads: Number(row.leads), liveTransfers: Number(row.live), consultsBooked: Number(row.booked), quotes: Number(row.quotes) };
 }

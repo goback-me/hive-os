@@ -6,7 +6,9 @@ import { clampRange, getReportingScope, scopedSpend } from "@/lib/reporting-scop
 import { classifyHive, classifyProspect, isPendingUpdate, type ClassifiedStatus } from "@/lib/status-classifier";
 import { NOTES_KEYWORDS, parseNotes, type ParsedNote } from "@/lib/notes-parser";
 import { classifyNotesWithAI } from "@/lib/notes-ai";
+import { milestoneSql } from "@/lib/milestones";
 import {
+  HANDOVER_STAGES,
   awaitingClientUpdate,
   combineTargets,
   parseTarget,
@@ -514,10 +516,10 @@ const gapDays = (a: string, b: string) =>
   Prisma.raw(`CASE WHEN ${a} - ${b} > INTERVAL '-1 day' THEN GREATEST(EXTRACT(EPOCH FROM (${a} - ${b})) / 86400, 0) END`);
 
 // Median days between stages, per campaign plus client-wide (GROUPING SETS).
-// Each step's time is the team's dated note (LeadNoteEvent: first call
-// attempt, handover, consult booked/attended, quote) when there is one, else
-// our SYNC/MANUAL stage event — IMPORT/INFERRED timestamps are guesses and
-// never used. "Lead" is the opt-in date. n = sample size behind each median.
+// Each step is dated by its milestone (lib/milestones.ts): the team's dated
+// note, else the stage change the app saw live — IMPORT/INFERRED timestamps
+// are guesses and never used. "Lead" is the opt-in date. n = sample size
+// behind each median.
 async function getFunnelDurations(clientId: string, dateRange?: { from?: Date; to?: Date }): Promise<Map<string, Durations>> {
   const fromClause = dateRange?.from ? Prisma.sql`AND "createdAt" >= ${dateRange.from}` : Prisma.empty;
   const toClause = dateRange?.to ? Prisma.sql`AND "createdAt" < ${dateRange.to}` : Prisma.empty;
@@ -527,40 +529,15 @@ async function getFunnelDurations(clientId: string, dateRange?: { from?: Date; t
       SELECT id, "createdAt", COALESCE(NULLIF(TRIM(campaign), ''), 'Unattributed') AS campaign
       FROM "Lead"
       WHERE "clientId" = ${clientId} AND "deletedAt" IS NULL ${fromClause} ${toClause}
-    ), f AS (
-      SELECT e."leadId",
-        MIN(e.at) FILTER (WHERE e.stage = 'CONTACTED') AS contacted,
-        MIN(e.at) FILTER (WHERE e.stage IN ('HANDOVER_ATTEMPTED', 'HANDOVER_LIVE', 'HANDOVER_TEXT')) AS handover,
-        MIN(e.at) FILTER (WHERE e.stage = 'CONSULT_BOOKED') AS booked,
-        MIN(e.at) FILTER (WHERE e.stage = 'CONSULT_ATTENDED') AS attended,
-        MIN(e.at) FILTER (WHERE e.stage = 'QUOTE_SENT') AS quote,
-        MIN(e.at) FILTER (WHERE e.stage = 'WON') AS won
-      FROM "LeadStageEvent" e
-      JOIN l ON l.id = e."leadId"
-      WHERE e.source IN ('SYNC', 'MANUAL')
-      GROUP BY e."leadId"
-    ), n AS (
-      -- The team's own dated notes win over when our sync noticed a change.
-      SELECT ne."leadId",
-        MIN(ne.at) FILTER (WHERE ne.event = 'CALL_ATTEMPT') AS contacted,
-        MIN(ne.at) FILTER (WHERE ne.event IN ('HANDOVER_LIVE', 'HANDOVER_TEXT')) AS handover,
-        MIN(ne.at) FILTER (WHERE ne.event = 'CONSULT_BOOKED') AS booked,
-        MIN(ne.at) FILTER (WHERE ne.event = 'CONSULT_ATTENDED') AS attended,
-        MIN(ne.at) FILTER (WHERE ne.event = 'QUOTE_SENT') AS quote
-      FROM "LeadNoteEvent" ne
-      JOIN l ON l.id = ne."leadId"
-      GROUP BY ne."leadId"
     ), t AS (
       SELECT l.id, l.campaign, l."createdAt",
-        COALESCE(n.contacted, f.contacted) AS contacted,
-        COALESCE(n.handover, f.handover) AS handover,
-        COALESCE(n.booked, f.booked) AS booked,
-        COALESCE(n.attended, f.attended) AS attended,
-        COALESCE(n.quote, f.quote) AS quote,
-        f.won
+        ${milestoneSql("CONTACTED")} AS contacted,
+        ${milestoneSql(HANDOVER_STAGES)} AS handover,
+        ${milestoneSql("CONSULT_BOOKED")} AS booked,
+        ${milestoneSql("CONSULT_ATTENDED")} AS attended,
+        ${milestoneSql("QUOTE_SENT")} AS quote,
+        ${milestoneSql("WON")} AS won
       FROM l
-      LEFT JOIN f ON f."leadId" = l.id
-      LEFT JOIN n ON n."leadId" = l.id
     ), d AS (
       SELECT campaign,
         ${gapDays("contacted", '"createdAt"')} AS "leadToContacted",

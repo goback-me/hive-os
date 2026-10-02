@@ -63,8 +63,11 @@ function sydneyYearMonth(d: Date) {
 
 // Undated fragments ("vm left" after "HS 12/3> NP,") belong to the entry
 // before them — the comma split them, the team didn't. Fragments before the
-// first dated entry have no date to hang on and are dropped.
-export function parseNotes(cell: string, optIn: Date): ParsedNote[] {
+// first dated entry have no date to hang on and are dropped. So is an entry
+// whose date lands in the future: a typo like "4/4" on an August lead rolls
+// over to next April, and a future date would skew timings and revenue
+// months (the un-rolled date is before opt-in, so it's no better).
+export function parseNotes(cell: string, optIn: Date, now = new Date()): ParsedNote[] {
   const { year: optInYear, month: optInMonth } = sydneyYearMonth(optIn);
   const entries: { who: string; day: number; month: number; text: string }[] = [];
 
@@ -84,6 +87,7 @@ export function parseNotes(cell: string, optIn: Date): ParsedNote[] {
     const year = e.month < optInMonth ? optInYear + 1 : optInYear;
     const at = sydneyLocalToDate(year, e.month, e.day);
     if (!at) continue; // e.g. 31/2
+    if (at.getTime() > now.getTime() + 86_400_000) continue; // can't have happened yet
     out.push({ at, who: e.who, event: classifyNoteText(e.text), rawText: e.text });
   }
   return out;

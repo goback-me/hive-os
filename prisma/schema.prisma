@@ -296,7 +296,8 @@ enum LostReason {
   UNKNOWN
 }
 
-// SYNC / MANUAL events carry a real timestamp and feed the duration medians.
+// SYNC / MANUAL / NOTE events carry a real timestamp and feed the duration
+// medians (lib/milestones.ts).
 // IMPORT (lead first seen already at that stage) and INFERRED (a skipped
 // stage filled in on a jump) only count toward "reached", never durations.
 enum StageEventSource {
@@ -304,6 +305,7 @@ enum StageEventSource {
   MANUAL
   IMPORT
   INFERRED
+  NOTE // dated from the team's notes cell — timed, like SYNC/MANUAL
 }
 
 // ── Leads (Hive OS) — synced from each client's assigned Google Sheet ───

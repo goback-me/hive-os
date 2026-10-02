@@ -1,5 +1,5 @@
-import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
+import { wonAtSql } from "./milestones";
 import { SHEET_TZ, sydneyLocalToDate } from "./sheet-parse";
 
 // Leads tab headline: won-lead revenue over a 60-day window, plus a daily
@@ -21,18 +21,6 @@ const startOf = (key: string) => {
   const [y, m, d] = key.split("-").map(Number);
   return sydneyLocalToDate(y, m, d)!;
 };
-
-// A win's date: when the app saw it turn Won (sync or manual change). A lead
-// that was already Won when first imported has no real close time, so its
-// last dated note stands in, else its opt-in date. Needs the lead aliased `l`.
-// Shared with the Sales section (lib/sales.ts) so both date a sale the same.
-// A function, not a constant: LeadWinsCard imports this module in the
-// browser, where building Prisma.sql at load time throws.
-export const wonAtSql = () => Prisma.sql`COALESCE(
-  (SELECT MIN(e.at) FROM "LeadStageEvent" e WHERE e."leadId" = l.id AND e.stage = 'WON' AND e.source IN ('SYNC', 'MANUAL')),
-  (SELECT MAX(ne.at) FROM "LeadNoteEvent" ne WHERE ne."leadId" = l.id),
-  l."createdAt"
-)`;
 
 export async function getLeadWins(clientId: string, window: WinsWindow, now = new Date()): Promise<LeadWins | null> {
   let start: string;
