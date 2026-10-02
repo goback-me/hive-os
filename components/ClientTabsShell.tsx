@@ -1,9 +1,19 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
+import { useSearchParams } from "next/navigation";
 
+// The open tab is kept in the URL (?tab=leads) alongside the report range, so
+// a refresh or a shared link lands on the same tab and period.
 export default function ClientTabsShell({ tabs }: { tabs: { key: string; label: string; content: ReactNode }[] }) {
-  const [active, setActive] = useState(tabs[0]?.key);
+  const fromUrl = useSearchParams().get("tab");
+  const [active, setActiveState] = useState(tabs.some((t) => t.key === fromUrl) ? fromUrl! : tabs[0]?.key);
+  function setActive(key: string) {
+    setActiveState(key);
+    const params = new URLSearchParams(window.location.search);
+    params.set("tab", key);
+    window.history.replaceState(null, "", `?${params.toString()}`);
+  }
 
   return (
     <div>

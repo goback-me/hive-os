@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { StartDateWarning } from "@/components/StartDateField";
+import DateRangePicker, { useReportRange } from "@/components/DateRangePicker";
+import { reportRangeLabel, reportRangeQuery } from "@/lib/date-range";
 
 type Campaign = {
   id: string;
@@ -49,6 +51,8 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 export default function AdsPanel({ clientId, isCoach, onSetReporting }: { clientId: string; isCoach: boolean; onSetReporting: SetReporting }) {
+  const [range, setRange] = useReportRange();
+  const rangeQuery = reportRangeQuery(range);
   const [data, setData] = useState<AdsData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const req = useRef(0);
@@ -56,7 +60,7 @@ export default function AdsPanel({ clientId, isCoach, onSetReporting }: { client
   function load() {
     const id = ++req.current;
     setError(null);
-    fetch(`/api/ads?clientId=${clientId}`)
+    fetch(`/api/ads?clientId=${clientId}&${rangeQuery}`)
       .then((r) => r.json())
       .then((d) => {
         if (id !== req.current) return;
@@ -65,7 +69,7 @@ export default function AdsPanel({ clientId, isCoach, onSetReporting }: { client
       })
       .catch((e) => id === req.current && setError(e.message));
   }
-  useEffect(load, [clientId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(load, [clientId, rangeQuery]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Ticking back to the default clears the override rather than pinning it.
   function toggle(c: Campaign) {
@@ -101,6 +105,9 @@ export default function AdsPanel({ clientId, isCoach, onSetReporting }: { client
 
   return (
     <div>
+      <div className="flex justify-end mb-4">
+        <DateRangePicker value={range} onChange={setRange} />
+      </div>
       {isCoach && !data.startDate && <StartDateWarning />}
       {error && <p className="text-xs mb-3" style={{ color: "var(--danger)" }}>{error}</p>}
       {!isConnected && (
@@ -116,7 +123,7 @@ export default function AdsPanel({ clientId, isCoach, onSetReporting }: { client
       <div className="grid grid-cols-4 gap-4 mb-4">
         <div className="card rounded-2xl p-4">
           <p className="text-xs" style={{ color: "var(--text-secondary)" }}>
-            Total Spend{source === "meta" && <span style={{ color: "var(--text-muted)" }}> · all-time</span>}
+            Total Spend<span style={{ color: "var(--text-muted)" }}> · {source === "meta" ? reportRangeLabel(range) : "all-time"}</span>
             {excluded > 0 && <span style={{ color: "var(--text-muted)" }}> · {excluded} excluded</span>}
           </p>
           <p className="font-heading text-2xl font-bold mt-1" style={{ color: "var(--text-primary)" }}>${totals.spend.toLocaleString()}</p>

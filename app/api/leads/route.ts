@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/auth";
 import { LEAD_STAGES, type LeadStageValue } from "@/lib/lead-status";
-import { DATE_RANGE_PRESETS, resolveDateRange, type DateRangePreset } from "@/lib/date-range";
+import { rangeFromParams } from "@/lib/date-range";
 
 // Paginated — the Leads tab can have 1000+ rows once a real sheet is synced,
 // so the client never receives more than one page (with its `raw` JSON blob
@@ -43,11 +43,7 @@ export async function GET(req: NextRequest) {
       ? { sheetStatus: sheetStatusParam }
       : undefined;
 
-  const rangeParam = req.nextUrl.searchParams.get("range");
-  const preset: DateRangePreset = DATE_RANGE_PRESETS.includes(rangeParam as DateRangePreset)
-    ? (rangeParam as DateRangePreset)
-    : "maximum";
-  const { from, to } = resolveDateRange(preset);
+  const { from, to } = rangeFromParams(req.nextUrl.searchParams).range;
   const createdAt = from || to ? { ...(from ? { gte: from } : {}), ...(to ? { lt: to } : {}) } : undefined;
 
   const where = { clientId, deletedAt: null, ...(stage ? { stage } : {}), ...(createdAt ? { createdAt } : {}), ...campaignWhere, ...sheetStatusWhere };

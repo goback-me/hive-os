@@ -1,5 +1,4 @@
 import { prisma } from "./prisma";
-import { resolveDateRange, type DateRangePreset } from "./date-range";
 import { clampRange, getReportingScope, scopedSpend } from "./reporting-scope";
 import { getRevenueEntries, revenueBetween } from "./revenue";
 import { parseVisibility, type ReportVisibility } from "./report-visibility";
@@ -47,9 +46,9 @@ export async function getReportVisibility(clientId: string): Promise<ReportVisib
 // render and by /api/clients/stats when the range changes, so both agree.
 // Scoped to the client's reporting start date and included campaigns
 // (lib/reporting-scope.ts): "Maximum" = start date → today.
-export async function getClientStats(clientId: string, preset: DateRangePreset): Promise<ClientStats> {
+export async function getClientStats(clientId: string, requested: { from?: Date; to?: Date }, allTime: boolean): Promise<ClientStats> {
   const scope = await getReportingScope(clientId);
-  const range = clampRange(resolveDateRange(preset), scope.startDate);
+  const range = clampRange(requested, scope.startDate);
   const [entries, scoped] = await Promise.all([
     getRevenueEntries([clientId], { leadsSince: scope.startDate }),
     scopedSpend(scope, range),
@@ -62,7 +61,7 @@ export async function getClientStats(clientId: string, preset: DateRangePreset):
     revenue,
     spend,
     spendSource,
-    spendAllTime: spendSource === "manual" && preset !== "maximum",
+    spendAllTime: spendSource === "manual" && !allTime,
     profit: revenue - spend,
     lifetimeRevenue: revenueBetween(entries, clampRange({}, scope.startDate)),
   };

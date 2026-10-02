@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import HiddenBadge from "@/components/HiddenBadge";
-import { DATE_RANGE_LABELS, type DateRangePreset } from "@/lib/date-range";
 import type { ViewerStats } from "@/lib/client-stats";
 
 const money = (v: number) => `${v < 0 ? "-" : ""}$${Math.abs(v).toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
@@ -10,7 +9,7 @@ const money = (v: number) => `${v < 0 ? "-" : ""}$${Math.abs(v).toLocaleString("
 // Leads tab → Campaign performance: revenue vs ad spend for the selected
 // range. The server only sends profit/ROI to a client when the coach has
 // turned showProfit on — otherwise this renders nothing for them.
-export default function ProfitRoiPanel({ clientId, range, isCoach }: { clientId: string; range: DateRangePreset; isCoach: boolean }) {
+export default function ProfitRoiPanel({ clientId, rangeQuery, rangeLabel, isCoach }: { clientId: string; rangeQuery: string; rangeLabel: string; isCoach: boolean }) {
   const [stats, setStats] = useState<ViewerStats | null>(null);
   const [error, setError] = useState<string | null>(null);
   const req = useRef(0);
@@ -18,7 +17,7 @@ export default function ProfitRoiPanel({ clientId, range, isCoach }: { clientId:
   useEffect(() => {
     const id = ++req.current;
     setError(null);
-    fetch(`/api/clients/stats?clientId=${clientId}&range=${range}`)
+    fetch(`/api/clients/stats?clientId=${clientId}&${rangeQuery}`)
       .then((r) => r.json())
       .then((data) => {
         if (id !== req.current) return;
@@ -26,7 +25,7 @@ export default function ProfitRoiPanel({ clientId, range, isCoach }: { clientId:
         setStats(data);
       })
       .catch((e) => id === req.current && setError(e.message));
-  }, [clientId, range]);
+  }, [clientId, rangeQuery]);
 
   if (error) return <p className="text-xs" style={{ color: "var(--danger)" }}>{error}</p>;
   if (!stats) return <div className="card rounded-2xl p-5"><span className="skeleton h-4 w-40 block mb-4" /><span className="skeleton h-8 w-full block" /></div>;
@@ -40,7 +39,7 @@ export default function ProfitRoiPanel({ clientId, range, isCoach }: { clientId:
         <div>
           <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Profit / ROI</p>
           <p className="text-[11px] mt-0.5" style={{ color: "var(--text-muted)" }}>
-            {DATE_RANGE_LABELS[range]}
+            {rangeLabel}
             {stats.spendAllTime && " · spend is all-time (manual campaigns have no dates)"}
           </p>
         </div>

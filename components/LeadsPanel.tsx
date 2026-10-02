@@ -22,8 +22,8 @@ import type { FunnelResponse } from "@/lib/funnel";
 import FunnelPanel from "@/components/FunnelPanel";
 import ProfitRoiPanel from "@/components/ProfitRoiPanel";
 import SalesPanel from "@/components/SalesPanel";
-import { DATE_RANGE_LABELS, type DateRangePreset } from "@/lib/date-range";
-import DateRangeDropdown from "@/components/DateRangeDropdown";
+import { reportRangeLabel, reportRangeQuery, type ReportRange } from "@/lib/date-range";
+import DateRangePicker, { useReportRange } from "@/components/DateRangePicker";
 import LeadTimelineChart, { type TimeSeriesPoint } from "@/components/LeadTimelineChart";
 import LeadWinsCard from "@/components/LeadWinsCard";
 import { StartDateWarning } from "@/components/StartDateField";
@@ -145,7 +145,10 @@ export default function LeadsPanel({
 
   const [activeSubTab, setActiveSubTab] = useState<"leads" | "campaigns">("leads");
 
-  const [dateRange, setDateRange] = useState<DateRangePreset>("maximum");
+  // One range for the whole tab, kept in the URL (see DateRangePicker).
+  const [dateRange, setDateRange] = useReportRange();
+  const rangeQuery = reportRangeQuery(dateRange);
+  const rangeLabel = reportRangeLabel(dateRange);
   const [funnel, setFunnel] = useState<FunnelResponse | null>(null);
   const [loadingFunnel, setLoadingFunnel] = useState(false);
   const [series, setSeries] = useState<TimeSeriesPoint[]>([]);
@@ -208,7 +211,7 @@ export default function LeadsPanel({
     if (!hasSheet) return;
     const req = ++leadsReq.current;
     setLoadingLeads(true);
-    const params = new URLSearchParams({ clientId, page: String(page), pageSize: String(PAGE_SIZE), range: dateRange });
+    const params = new URLSearchParams(`clientId=${clientId}&page=${page}&pageSize=${PAGE_SIZE}&${rangeQuery}`);
     if (statusFilter) params.set("stage", statusFilter);
     if (campaignFilter) params.set("campaign", campaignFilter);
     if (sheetStatusFilter) params.set("sheetStatus", sheetStatusFilter);
@@ -232,7 +235,7 @@ export default function LeadsPanel({
     if (!hasSheet) return;
     const req = ++funnelReq.current;
     setLoadingFunnel(true);
-    fetch(`/api/leads/funnel?clientId=${clientId}&range=${dateRange}`)
+    fetch(`/api/leads/funnel?clientId=${clientId}&${rangeQuery}`)
       .then((r) => r.json())
       .then((data) => {
         if (req !== funnelReq.current) return;
@@ -246,7 +249,7 @@ export default function LeadsPanel({
   function loadSeries() {
     if (!hasSheet) return;
     setLoadingSeries(true);
-    fetch(`/api/leads/timeseries?clientId=${clientId}&range=${dateRange}`)
+    fetch(`/api/leads/timeseries?clientId=${clientId}&${rangeQuery}`)
       .then((r) => r.json())
       .then((data) => {
         if (data.error) throw new Error(data.error);
@@ -264,7 +267,7 @@ export default function LeadsPanel({
   useEffect(() => {
     loadLeads();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, statusFilter, sheetStatusFilter, campaignFilter, hasSheet, dateRange, reloadKey]);
+  }, [page, statusFilter, sheetStatusFilter, campaignFilter, hasSheet, rangeQuery, reloadKey]);
 
   // The funnel (incl. a live Meta spend call) and chart only load when the
   // Campaign performance tab is actually open.
@@ -273,9 +276,9 @@ export default function LeadsPanel({
     loadFunnel();
     loadSeries();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeSubTab, dateRange, reloadKey]);
+  }, [activeSubTab, rangeQuery, reloadKey]);
 
-  function changeDateRange(range: DateRangePreset) {
+  function changeDateRange(range: ReportRange) {
     setDateRange(range);
     setPage(1);
   }
@@ -435,7 +438,7 @@ export default function LeadsPanel({
           {error && <p className="text-xs mt-0.5" style={{ color: "var(--danger)" }}>{error}</p>}
         </div>
         <div className="flex items-center gap-2">
-          <DateRangeDropdown value={dateRange} onChange={changeDateRange} />
+          <DateRangePicker value={dateRange} onChange={changeDateRange} />
           {isCoach && (
             <button
               onClick={sync}
@@ -456,9 +459,9 @@ export default function LeadsPanel({
 
       {activeSubTab === "campaigns" && (
         <div className="space-y-5">
-          <SalesPanel clientId={clientId} rangeQuery={`range=${dateRange}`} rangeLabel={DATE_RANGE_LABELS[dateRange]} isCoach={isCoach} reloadKey={reloadKey} />
+          <SalesPanel clientId={clientId} rangeQuery={rangeQuery} rangeLabel={rangeLabel} isCoach={isCoach} reloadKey={reloadKey} />
 
-          <ProfitRoiPanel clientId={clientId} range={dateRange} isCoach={isCoach} />
+          <ProfitRoiPanel clientId={clientId} rangeQuery={rangeQuery} rangeLabel={rangeLabel} isCoach={isCoach} />
 
           <div className="card rounded-2xl p-5">
             <div className="flex items-center justify-between mb-1">
