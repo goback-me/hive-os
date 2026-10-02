@@ -13,6 +13,7 @@ type Row = {
   value: number | null;
   awaitingClientUpdate: boolean;
   createdAt: string;
+  remindedAt: string | null; // a 7-day reminder is out — this is a task
 };
 
 // Quick outcomes a client can report. Quoted / Won need the amount; Lost /
@@ -46,6 +47,7 @@ export default function ClientUpdatesPanel({
 }) {
   const [rows, setRows] = useState<Row[] | null>(null);
   const [total, setTotal] = useState(0);
+  const [reminders, setReminders] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   const req = useRef(0);
@@ -59,6 +61,7 @@ export default function ClientUpdatesPanel({
         if (d.error) throw new Error(d.error);
         setRows(d.leads);
         setTotal(d.total);
+        setReminders(d.reminders ?? 0);
       })
       .catch((e) => id === req.current && setError(e.message));
   }, [clientId, reloadKey, tick]);
@@ -76,6 +79,12 @@ export default function ClientUpdatesPanel({
         </p>
       </div>
       <p className="text-xs mb-4" style={{ color: "var(--text-muted)" }}>Tell us what happened with each lead — oldest first. It updates your sheet too.</p>
+      {reminders > 0 && (
+        <p className="text-xs mb-3 px-3 py-2 rounded-lg flex items-center gap-1.5" style={{ background: "var(--tag-amber-bg)", color: "var(--tag-amber-fg)" }}>
+          <span className="material-symbols-outlined text-[14px]">notifications_active</span>
+          {reminders} lead{reminders === 1 ? " has" : "s have"} been waiting 7+ days — mark each as won (with the job value) or lost.
+        </p>
+      )}
       {error && <p className="text-xs mb-2" style={{ color: "var(--danger)" }}>{error}</p>}
       <div className="space-y-2">
         {rows.map((r) => (
@@ -126,6 +135,11 @@ function UpdateRow({ row, onSave }: { row: Row; onSave: (target: string, value?:
           {[row.phone, `in ${sydDate(row.createdAt)} (${daysAgo(row.createdAt)}d ago)`].filter(Boolean).join(" · ")}
         </p>
       </div>
+      {row.remindedAt && (
+        <span className="px-2 py-1 rounded-full text-[10px] font-bold whitespace-nowrap" style={{ background: "var(--tag-amber-bg)", color: "var(--tag-amber-fg)" }}>
+          Reminder sent
+        </span>
+      )}
       <span className="px-2 py-1 rounded-full text-[10px] font-bold whitespace-nowrap" style={{ background: st.bg, color: st.color }}>
         {row.awaitingClientUpdate ? "Awaiting your update" : STAGE_LABELS[row.stage]}
       </span>

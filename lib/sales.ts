@@ -5,6 +5,7 @@ import { metaDays } from "./meta-ads";
 import { addMonths, monthKeyOf, toneFor, type Tone } from "./kpi";
 import { dailySpend, getReportingScope, type Range } from "./reporting-scope";
 import type { ReportVisibility } from "./report-visibility";
+import type { ClientTypeValue } from "./client-terms";
 
 // Sales section (Leads tab): a sale = a Won lead, dated by its won date
 // (wonAtSql — same rule as the revenue-closed card). Only leads that came
@@ -43,6 +44,7 @@ export type SalesResponse = {
   spendSource: "meta" | "daily" | "manual" | null;
   costHidden: boolean; // CLIENT without showCostMetrics — costs left out
   clientSeesCost: boolean; // for the coach's "hidden from client" badge
+  clientType: ClientTypeValue; // TRADE → "Job won" wording
 };
 
 const DAY = 86_400_000;
@@ -123,6 +125,7 @@ export async function getSales(
     spendSource: costHidden ? null : spend.source,
     costHidden,
     clientSeesCost: visibility.showCostMetrics,
+    clientType: (await prisma.client.findUnique({ where: { id: clientId }, select: { clientType: true } }))?.clientType ?? "OTHER",
   };
 }
 

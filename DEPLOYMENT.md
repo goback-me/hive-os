@@ -73,6 +73,8 @@ Copy `.env.example` to `.env` and fill in:
 | `TOKEN_ENCRYPTION_KEY` | Generate with `openssl rand -hex 32` — encrypts stored Google/Meta tokens at rest |
 | `CRON_SECRET` | Generate with `openssl rand -hex 32` — auth for the lead-sync cron (see below) |
 | `ANTHROPIC_API_KEY` | Optional. console.anthropic.com → API Keys — classifies lead-note entries the regex rules miss; without it they stay as plain notes |
+| `RESEND_API_KEY` | Optional. resend.com → API Keys — emails clients their 7-day "leads waiting on your update" reminders; without it the reminders only show in the app |
+| `EMAIL_FROM` | Required with `RESEND_API_KEY` — a sender on a domain verified in Resend, e.g. `Hive Social <updates@hivesocial.agency>` |
 
 Also double check in the **Clerk dashboard** → User & Authentication →
 Restrictions: **"Allow sign-ups" must be OFF** — accounts are only ever

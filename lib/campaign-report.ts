@@ -3,6 +3,7 @@ import { milestoneSql, wonAtSql } from "./milestones";
 import { getMetaAllCampaigns } from "./meta-ads";
 import { clampRange, getReportingScope, type Range, type ScopeCampaign } from "./reporting-scope";
 import type { ReportVisibility } from "./report-visibility";
+import type { ClientTypeValue } from "./client-terms";
 
 // Ads tab: per-campaign results for a period. Every lead, live transfer,
 // booking, quote and sale is credited to the campaign that generated the
@@ -39,6 +40,7 @@ export type AdsReport = {
   campaigns: (ScopeCampaign & { spend: number })[] | null; // coach only — every campaign, for the include/exclude ticks
   costHidden: boolean; // CLIENT without cost metrics — spend/cost left out
   clientSeesCost: boolean;
+  clientType: ClientTypeValue; // TRADE → "Onsite quote" / "Job won" wording
 };
 
 type Activity = { campaign: string; leads: bigint; live: bigint; booked: bigint; quotes: bigint; sales: bigint; revenue: unknown };
@@ -171,5 +173,6 @@ export async function getAdsReport(clientId: string, requested: Range, viewer: {
     campaigns: isCoach ? campaigns : null,
     costHidden,
     clientSeesCost: visibility.showCostMetrics,
+    clientType: (await prisma.client.findUnique({ where: { id: clientId }, select: { clientType: true } }))?.clientType ?? "OTHER",
   };
 }

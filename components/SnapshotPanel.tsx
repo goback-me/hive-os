@@ -8,8 +8,9 @@ const ICONS: Record<SnapshotCard["key"], string> = {
   liveTransfers: "call",
   consultsBooked: "event_available",
   quotes: "request_quote",
-  costPerBooking: "price_check",
+  sales: "handshake",
   costPerQuote: "receipt_long",
+  costPerSale: "price_check",
   leads: "person_add",
 };
 
@@ -25,7 +26,17 @@ const fmt = (card: Pick<SnapshotCard, "kind">, v: number | null) =>
 // Monthly KPI cards. Everything a CLIENT shouldn't see was already dropped by
 // the server (lib/kpi.ts getSnapshot); coaches get every card, with the ones
 // the client doesn't see greyed and badged.
-export default function SnapshotPanel({ clientId, initial, isCoach }: { clientId: string; initial: Snapshot; isCoach: boolean }) {
+export default function SnapshotPanel({
+  clientId,
+  initial,
+  isCoach,
+  onRebuild,
+}: {
+  clientId: string;
+  initial: Snapshot;
+  isCoach: boolean;
+  onRebuild?: (clientId: string) => Promise<{ months: number }>;
+}) {
   const [snap, setSnap] = useState(initial);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -46,6 +57,22 @@ export default function SnapshotPanel({ clientId, initial, isCoach }: { clientId
       .finally(() => id === req.current && setLoading(false));
   }
 
+  // Coach: recompute every closed month that isn't frozen (Rebuild history).
+  const [rebuilding, setRebuilding] = useState(false);
+  const [rebuilt, setRebuilt] = useState<string | null>(null);
+  function rebuild() {
+    if (!onRebuild) return;
+    setRebuilding(true);
+    setError(null);
+    onRebuild(clientId)
+      .then((r) => {
+        setRebuilt(`Rebuilt ${r.months} month${r.months === 1 ? "" : "s"}`);
+        pickMonth(snap.month);
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : "Rebuild failed"))
+      .finally(() => setRebuilding(false));
+  }
+
   const clientSeesNothing = snap.cards.every((c) => c.hiddenFromClient);
 
   return (
@@ -60,6 +87,21 @@ export default function SnapshotPanel({ clientId, initial, isCoach }: { clientId
         <div className="flex items-center gap-2">
           {error && <span className="text-xs" style={{ color: "var(--danger)" }}>{error}</span>}
           {loading && <span className="material-symbols-outlined text-[18px] animate-spin" style={{ color: "var(--text-muted)" }}>progress_activity</span>}
+          {rebuilt && <span className="text-xs" style={{ color: "var(--text-muted)" }}>{rebuilt}</span>}
+          {isCoach && onRebuild && (
+            <button
+              onClick={rebuild}
+              disabled={rebuilding}
+              className="px-3 py-2 rounded-lg text-xs font-bold disabled:opacity-50"
+              style={{ border: "1px solid var(--border)", color: "var(--text-secondary)" }}
+              title="Recompute every past month from the opt-in dates and notes (months frozen at month end are kept)"
+            >
+              {rebuilding ? "Rebuilding…" : "Rebuild history"}
+            </button>
+          )}
+          <a href="?tab=leads" className="text-xs font-bold whitespace-nowrap" style={{ color: "var(--primary)" }}>
+            Full breakdown →
+          </a>
           <select
             value={snap.month}
             onChange={(e) => pickMonth(e.target.value)}
@@ -88,7 +130,7 @@ export default function SnapshotPanel({ clientId, initial, isCoach }: { clientId
           <p className="text-xs mt-1" style={{ color: "var(--text-secondary)" }}>Your first results will show here.</p>
         </div>
       ) : (
-        <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 transition-opacity" style={{ opacity: loading ? 0.55 : 1 }}>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 transition-opacity" style={{ opacity: loading ? 0.55 : 1 }}>
           {snap.cards.map((c) => (
             <KpiCard key={c.key} card={c} isCoach={isCoach} />
           ))}
@@ -99,7 +141,7 @@ export default function SnapshotPanel({ clientId, initial, isCoach }: { clientId
         <p className="text-[10px] mt-3" style={{ color: "var(--text-muted)" }}>
           Counts are by when each step happened (the team&apos;s dated notes, else the stage change seen live), in Sydney time.{" "}
           {snap.spendSource === "meta" ? "Spend from Meta." : snap.spendSource === "daily" ? "Spend from daily spend records." : "No dated spend source — connect Meta for cost cards."}
-          {!snap.isCurrent && " Closed months are frozen 3 days after month end."}
+          {" "}Past months are frozen on the 1st; &ldquo;Rebuild history&rdquo; recomputes any month that isn&apos;t frozen yet.
         </p>
       )}
     </div>
@@ -134,9 +176,35 @@ function KpiCard({ card, isCoach }: { card: SnapshotCard; isCoach: boolean }) {
           </span>
         ) : null}
         <span className="text-[10px]" style={{ color: "var(--text-muted)" }}>
-          {card.previous == null ? "No comparison yet" : diff === 0 ? `Same as before (${fmt(card, card.previous)})` : `was ${fmt(card, card.previous)}`}
+          {card.previous == null
+            ? "No comparison yet"
+            : card.previous === 0
+            ? "— (none before)"
+            : diff === 0
+            ? `Same as before (${fmt(card, card.previous)})`
+            : `was ${fmt(card, card.previous)}`}
         </span>
       </div>
+      {card.pace != null && <p className="text-[10px] mt-0.5" style={{ color: "var(--text-secondary)" }}>On pace for ~{card.pace.toLocaleString()}</p>}
+      <MiniBars history={card.history} kind={card.kind} />
+    </div>
+  );
+}
+
+// Last 6 months, oldest → newest (the selected month is the last bar).
+function MiniBars({ history, kind }: { history: SnapshotCard["history"]; kind: SnapshotCard["kind"] }) {
+  const max = Math.max(...history.map((h) => h.value ?? 0), 0);
+  if (!max) return null;
+  return (
+    <div className="flex items-end gap-1 h-8 mt-2" aria-hidden="true">
+      {history.map((h, i) => (
+        <div
+          key={h.month}
+          className="flex-1 rounded-t-[2px]"
+          title={`${h.month}: ${h.value == null ? "—" : kind === "cost" ? `$${Math.round(h.value).toLocaleString()}` : h.value.toLocaleString()}`}
+          style={{ height: `${Math.max(((h.value ?? 0) / max) * 100, h.value ? 6 : 0)}%`, background: i === history.length - 1 ? "var(--primary)" : "var(--primary-tint)" }}
+        />
+      ))}
     </div>
   );
 }

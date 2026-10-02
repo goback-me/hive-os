@@ -22,17 +22,21 @@ assert.equal(monthWindow("2026-02", 31).to.toISOString(), monthWindow("2026-03")
 assert.equal(addMonths("2026-01", -1), "2025-12");
 assert.equal(addMonths("2026-12", 1), "2027-01");
 
-// Freeze only after month end + 3-day grace
-assert.equal(isFreezable("2026-09", new Date("2026-10-02T00:00:00Z")), false);
-assert.equal(isFreezable("2026-09", new Date("2026-10-03T14:00:00Z")), true);
+// Freeze from the 1st of the next month (Sydney): 1 Oct 00:00 AEST = 30 Sep 14:00Z
+assert.equal(isFreezable("2026-09", new Date("2026-09-30T13:59:00Z")), false);
+assert.equal(isFreezable("2026-09", new Date("2026-09-30T14:00:00Z")), true);
 
-// Tones: counts up = green; costs inverted (down = green); ±10% = amber
+// Tones: green if at least as good (costs: as low or lower), amber within
+// 10% worse, red otherwise; nothing to compare with (prev 0 / missing) = none
 assert.equal(toneFor("count", 12, 10), "green");
+assert.equal(toneFor("count", 10, 10), "green");
+assert.equal(toneFor("count", 9.5, 10), "amber");
+assert.equal(toneFor("count", 9, 10), "amber");
 assert.equal(toneFor("count", 8, 10), "red");
-assert.equal(toneFor("count", 10.5, 10), "amber");
 assert.equal(toneFor("cost", 80, 100), "green");
+assert.equal(toneFor("cost", 105, 100), "amber");
 assert.equal(toneFor("cost", 120, 100), "red");
-assert.equal(toneFor("count", 3, 0), "green");
+assert.equal(toneFor("count", 3, 0), null);
 assert.equal(toneFor("cost", 50, null), null);
 
 // Visibility: defaults fill in, junk ignored

@@ -7,6 +7,7 @@ import ProfitRoiPanel from "@/components/ProfitRoiPanel";
 import HiddenBadge from "@/components/HiddenBadge";
 import { reportRangeLabel, reportRangeQuery } from "@/lib/date-range";
 import type { AdsReport, CampaignRow } from "@/lib/campaign-report";
+import { terms } from "@/lib/client-terms";
 
 type SetReporting = (clientId: string, campaign: { id: string; name: string; source: "meta" | "manual" }, included: boolean | null) => Promise<void>;
 type Campaign = NonNullable<AdsReport["campaigns"]>[number];
@@ -59,6 +60,7 @@ export default function AdsPanel({ clientId, isCoach, onSetReporting }: { client
   }
 
   const showCost = !!data && !data.costHidden;
+  const t = terms(data?.clientType);
   const costBadge = isCoach && data && !data.clientSeesCost ? <HiddenBadge reason="Cost metrics are off in Client view settings" /> : null;
 
   return (
@@ -83,15 +85,15 @@ export default function AdsPanel({ clientId, isCoach, onSetReporting }: { client
             {showCost && <Card label="Ad spend" value={money(data.cards.spend)} sub={data.spendAllTime ? "All-time (manual campaigns have no dates)" : rangeLabel} badge={costBadge} />}
             <Card label="Total leads" value={data.cards.leads.toLocaleString()} sub={rangeLabel} />
             {showCost && <Card label="Avg cost per lead" value={money(data.cards.costPerLead)} sub={rangeLabel} badge={costBadge} />}
-            <Card label="Total quotes" value={data.cards.quotes.toLocaleString()} sub={rangeLabel} />
-            <Card label="Sales" value={data.cards.sales.toLocaleString()} sub={rangeLabel} />
+            <Card label={`Total ${t.quotes.toLowerCase()}`} value={data.cards.quotes.toLocaleString()} sub={rangeLabel} />
+            <Card label={t.sales} value={data.cards.sales.toLocaleString()} sub={rangeLabel} />
           </div>
 
           <div className="card rounded-2xl overflow-x-auto">
             <table className="w-full text-left text-sm min-w-[1000px]">
               <thead>
                 <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                  {["Campaign", "Status", ...(showCost ? ["Spend"] : []), "Leads", "Live transfers", "Quotes", "Sales", "Revenue", ...(showCost ? ["Cost/lead", "Cost/live transfer", "Cost/quote", "Cost/sale"] : [])].map((h) => (
+                  {["Campaign", "Status", ...(showCost ? ["Spend"] : []), "Leads", "Live transfers", t.quotes, t.sales, "Revenue", ...(showCost ? ["Cost/lead", "Cost/live transfer", `Cost/${t.quote.toLowerCase()}`, `Cost/${t.sale.toLowerCase()}`] : [])].map((h) => (
                     <th key={h} className="py-3 px-3 text-xs font-bold whitespace-nowrap" style={{ color: "var(--text-secondary)" }}>{h}</th>
                   ))}
                 </tr>

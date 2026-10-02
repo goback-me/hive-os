@@ -16,6 +16,8 @@ import {
   saveReportVisibility,
   saveClientStartDate,
   setCampaignReporting,
+  rebuildKpiHistory,
+  saveClientType,
 } from "@/lib/actions";
 import { requireClientAccess } from "@/lib/auth";
 import { checkAndGrantAwards } from "@/lib/awards";
@@ -41,6 +43,7 @@ import MetaAdsCard from "@/components/MetaAdsCard";
 import GoalsCard from "@/components/GoalsCard";
 import StartDateField from "@/components/StartDateField";
 import ClientUpdatesPanel from "@/components/ClientUpdatesPanel";
+import ClientTypeField from "@/components/ClientTypeField";
 
 // Forces this page to render fresh on every single request — no static
 // caching, no ISR.
@@ -119,9 +122,10 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
 
   const dashboardContent = (
     <div className="space-y-5">
-      <DashboardStats key={`stats-${visibilityKey}`} clientId={client.id} initial={stats} isCoach={isCoach} />
+      {/* The client's monthly snapshot comes first. */}
+      <SnapshotPanel key={`snap-${visibilityKey}`} clientId={client.id} initial={snapshot} isCoach={isCoach} onRebuild={isCoach ? rebuildKpiHistory : undefined} />
 
-      <SnapshotPanel key={`snap-${visibilityKey}`} clientId={client.id} initial={snapshot} isCoach={isCoach} />
+      <DashboardStats key={`stats-${visibilityKey}`} clientId={client.id} initial={stats} isCoach={isCoach} />
 
       <div className="grid grid-cols-3 gap-5">
         {/* Main column — the day-to-day, coaching-relevant activity */}
@@ -185,6 +189,7 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
               {client.scope && <DetailRow icon="task_alt" label="Scope" value={client.scope} />}
               <DetailRow icon="calendar_today" label="Joined" value={client.joinedAt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })} />
               <StartDateField clientId={client.id} initial={client.startDate ? sydneyDay(client.startDate) : ""} isCoach={isCoach} onSave={saveClientStartDate} />
+              <ClientTypeField clientId={client.id} initial={client.clientType} isCoach={isCoach} onSave={saveClientType} />
             </dl>
           </div>
 

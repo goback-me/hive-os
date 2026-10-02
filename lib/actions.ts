@@ -9,6 +9,7 @@ import { syncLeadsFromSheet, type SyncSummary } from "@/lib/lead-sync";
 import { parseTarget, planStageEvents } from "@/lib/lead-status";
 import { parseVisibility, type ReportVisibility } from "@/lib/report-visibility";
 import { kickWriteBacks, queueLeadChange } from "@/lib/sheet-writeback";
+import { rebuildHistory } from "@/lib/kpi";
 import { sydneyLocalToDate } from "@/lib/sheet-parse";
 
 function slugify(name: string) {
@@ -288,9 +289,9 @@ export async function saveReportVisibility(clientId: string, flags: Partial<Repo
 }
 
 // Coach-only: the client's onboarding date ("YYYY-MM-DD", Sydney; "" clears
-// it). Reports only count leads/sales/spend from this day on. Frozen months
-// were computed under the old scope, so they're dropped and recompute live
-// (re-freeze with `npm run db:backfill-kpis`).
+// it). Reports only count leads/sales/spend from this day on. Stored months
+// rebuilt under the old scope (BACKFILL) are dropped and recompute live until
+// "Rebuild history"; FROZEN months are never touched.
 export async function saveClientStartDate(clientId: string, day: string) {
   await requireCoach();
   const m = day.match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -298,7 +299,7 @@ export async function saveClientStartDate(clientId: string, day: string) {
   if (day && !startDate) throw new Error("Invalid date");
   await prisma.$transaction([
     prisma.client.update({ where: { id: clientId }, data: { startDate } }),
-    prisma.monthlyKpi.deleteMany({ where: { clientId } }),
+    prisma.monthlyKpi.deleteMany({ where: { clientId, source: "BACKFILL" } }),
   ]);
   revalidatePath(`/clients`);
 }
@@ -320,8 +321,25 @@ export async function setCampaignReporting(
           update: { name: campaign.name, includedInReporting: included },
         })
       : prisma.adCampaign.update({ where: { id: campaign.id, clientId }, data: { includedInReporting: included } }),
-    prisma.monthlyKpi.deleteMany({ where: { clientId } }),
+    prisma.monthlyKpi.deleteMany({ where: { clientId, source: "BACKFILL" } }),
   ]);
+}
+
+// Coach-only: recompute Snapshot history for every closed month that isn't
+// frozen (lib/kpi.ts rebuildHistory).
+export async function rebuildKpiHistory(clientId: string) {
+  await requireCoach();
+  const months = await rebuildHistory(clientId);
+  revalidatePath(`/clients`);
+  return { months: months.length };
+}
+
+// Coach-only: TRADE / SERVICE / OTHER — changes report wording (lib/client-terms.ts).
+export async function saveClientType(clientId: string, clientType: string) {
+  await requireCoach();
+  if (!["TRADE", "SERVICE", "OTHER"].includes(clientType)) throw new Error("Invalid client type");
+  await prisma.client.update({ where: { id: clientId }, data: { clientType: clientType as "TRADE" | "SERVICE" | "OTHER" } });
+  revalidatePath(`/clients`);
 }
 
 // ── Playbooks / lessons ──────────────────────────────────────────────────
@@ -523,6 +541,7 @@ export async function deleteClientPermanently(clientId: string) {
           prisma.leadStageEvent.deleteMany({ where: { leadId: { in: leadIds } } }),
           prisma.leadNoteEvent.deleteMany({ where: { leadId: { in: leadIds } } }),
           prisma.writeBackJob.deleteMany({ where: { leadId: { in: leadIds } } }),
+          prisma.leadReminder.deleteMany({ where: { leadId: { in: leadIds } } }),
         ]
       : []),
     prisma.lead.deleteMany({ where: { clientId } }),

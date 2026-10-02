@@ -22,6 +22,12 @@ enum SessionStatus {
   NO_SHOW
 }
 
+enum ClientType {
+  TRADE
+  SERVICE
+  OTHER
+}
+
 enum ClientStatus {
   ACTIVE
   ONBOARDING
@@ -390,6 +396,7 @@ model Lead {
   createdAt   DateTime         @default(now())
   activity    LeadActivity[]
   writeBacks  WriteBackJob[]
+  reminders   LeadReminder[]
   notes       LeadNote[]
   stageEvents LeadStageEvent[]
   noteEvents  LeadNoteEvent[]
@@ -427,6 +434,24 @@ model WriteBackJob {
 
   @@index([status, runAfter])
   @@index([leadId, column])
+}
+
+// "This lead needs your update" — raised for a lead the client has owed an
+// update on for 7+ days (lib/reminders.ts): shown as a task on their
+// Dashboard and emailed when email is configured. At most one per lead per
+// 7 days; this table is that record.
+model LeadReminder {
+  id        String    @id @default(cuid())
+  clientId  String
+  client    Client    @relation(fields: [clientId], references: [id])
+  leadId    String
+  lead      Lead      @relation(fields: [leadId], references: [id])
+  reason    String // "awaiting" | "CONSULT_BOOKED" | "QUOTE_SENT"
+  createdAt DateTime  @default(now())
+  emailedAt DateTime?
+
+  @@index([leadId, createdAt])
+  @@index([clientId, createdAt])
 }
 
 // Free-text follow-up notes on an individual lead — separate from
@@ -567,6 +592,14 @@ model RevenueMonthly {
   @@unique([clientId, month])
 }
 
+// BACKFILL = rebuilt from history (opt-in dates + notes) by a coach's
+// "Rebuild history" or the backfill script — rebuilt again on request.
+// FROZEN = stored by the cron once the month ended; never overwritten.
+enum KpiSource {
+  BACKFILL
+  FROZEN
+}
+
 // ── Snapshot KPIs, frozen per Sydney calendar month (see lib/kpi.ts) ─────
 // A row exists once a month has ended and been frozen (month-end freeze in
 // the cron sync, or the backfill script) — later sheet edits never rewrite a
@@ -580,9 +613,12 @@ model MonthlyKpi {
   liveTransfers  Int
   consultsBooked Int
   quotes         Int
-  spend          Decimal? @db.Decimal(10, 2) // null = no dated spend source for that month
+  sales          Int       @default(0) // leads won in the month (won date)
+  revenue        Decimal   @default(0) @db.Decimal(12, 2) // their job values
+  spend          Decimal?  @db.Decimal(10, 2) // null = no dated spend source for that month
   spendSource    String? // "meta" | "daily"
-  frozenAt       DateTime @default(now())
+  source         KpiSource @default(FROZEN)
+  frozenAt       DateTime  @default(now())
 
   @@unique([clientId, month])
 }
@@ -697,6 +733,9 @@ model Client {
   // defaults in lib/report-visibility.ts. Enforced server-side: hidden data is
   // never sent to a CLIENT. Coaches always see everything.
   reportVisibility Json?
+  // TRADE clients' reports say "Onsite quote" / "Job won" instead of
+  // "Quote" / "Sale" (lib/client-terms.ts).
+  clientType       ClientType @default(OTHER)
 
   contracts      Contract[]
   monthlyKpis    MonthlyKpi[]
@@ -704,6 +743,7 @@ model Client {
   adSpendDaily   AdSpendDaily[]
   revenueMonthly RevenueMonthly[]
   leads          Lead[]
+  leadReminders  LeadReminder[]
   clientSheet    ClientSheet?
   referralLink   ReferralLink?
 }

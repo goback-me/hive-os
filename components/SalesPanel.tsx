@@ -5,6 +5,7 @@ import type { SaleRow, SalesResponse } from "@/lib/sales";
 import type { Tone } from "@/lib/kpi";
 import { TONE_STYLE } from "@/components/SnapshotPanel";
 import HiddenBadge from "@/components/HiddenBadge";
+import { terms } from "@/lib/client-terms";
 
 const money = (v: number | null) => (v == null ? "—" : `$${v.toLocaleString("en-US", { maximumFractionDigits: v < 100 ? 2 : 0 })}`);
 const sydDate = (iso: string) => new Date(iso).toLocaleDateString("en-AU", { timeZone: "Australia/Sydney", day: "numeric", month: "short", year: "numeric" });
@@ -47,6 +48,7 @@ export default function SalesPanel({ clientId, rangeQuery, rangeLabel, isCoach, 
   if (!data) return <div className="card rounded-2xl p-5"><span className="skeleton h-4 w-40 block mb-4" /><span className="skeleton h-16 w-full block" /></div>;
 
   const { summary: s, sales } = data;
+  const t = terms(data.clientType);
   const showCost = !data.costHidden;
   const costBadge = isCoach && !data.clientSeesCost ? <HiddenBadge reason="Cost metrics are off in Client view settings" /> : null;
   const pages = Math.max(1, Math.ceil(sales.length / PAGE_SIZE));
@@ -56,22 +58,22 @@ export default function SalesPanel({ clientId, rangeQuery, rangeLabel, isCoach, 
     <div className="card rounded-2xl p-5 fade-in">
       <div className="flex items-center justify-between gap-3 mb-4">
         <div>
-          <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Sales</p>
+          <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{t.sales}</p>
           <p className="text-[11px] mt-0.5" style={{ color: "var(--text-muted)" }}>Won leads, dated by when they were won · table: {rangeLabel}</p>
         </div>
         {loading && <span className="material-symbols-outlined text-[18px] animate-spin" style={{ color: "var(--text-muted)" }}>progress_activity</span>}
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5 transition-opacity" style={{ opacity: loading ? 0.55 : 1 }}>
-        <CompareCard icon="handshake" label="Sales this month" value={s.thisMonth.count.toLocaleString()} diff={s.thisMonth.count - s.lastMonthToDate.count} diffText={(d) => Math.abs(d).toLocaleString()} tone={s.tone.count} compare={`${s.compareLabel}: ${s.lastMonthToDate.count}`} sub={`Last month ${s.lastMonth.count} · Lifetime ${s.lifetime.count}`} />
+        <CompareCard icon="handshake" label={`${t.sales} this month`} value={s.thisMonth.count.toLocaleString()} diff={s.thisMonth.count - s.lastMonthToDate.count} diffText={(d) => Math.abs(d).toLocaleString()} tone={s.tone.count} compare={`${s.compareLabel}: ${s.lastMonthToDate.count}`} sub={`Last month ${s.lastMonth.count} · Lifetime ${s.lifetime.count}`} />
         <CompareCard icon="payments" label="Revenue this month" value={money(s.thisMonth.revenue)} diff={s.thisMonth.revenue - s.lastMonthToDate.revenue} diffText={(d) => money(Math.abs(d))} tone={s.tone.revenue} compare={`${s.compareLabel}: ${money(s.lastMonthToDate.revenue)}`} sub={`Last month ${money(s.lastMonth.revenue)} · Lifetime ${money(s.lifetime.revenue)}`} />
         {showCost && (
-          <Card icon="price_check" label="Cost per sale" badge={costBadge}>
+          <Card icon="price_check" label={`Cost per ${t.sale.toLowerCase()}`} badge={costBadge}>
             <p className="font-heading font-bold text-2xl" style={{ color: "var(--text-primary)" }}>{money(s.costPerSale)}</p>
             <p className="text-[10px] mt-1.5" style={{ color: "var(--text-muted)" }}>{s.costPerSale == null ? (data.spendSource ? "No sales in this range" : "No spend data") : rangeLabel}</p>
           </Card>
         )}
-        <Card icon="event" label="Last sale">
+        <Card icon="event" label={`Last ${t.sale.toLowerCase()}`}>
           <p className="font-heading font-bold text-2xl" style={{ color: "var(--text-primary)" }}>{s.lastSale ? sydDate(s.lastSale.wonAt) : "—"}</p>
           <p className="text-[10px] mt-1.5 truncate" style={{ color: "var(--text-muted)" }}>{s.lastSale?.name || (s.lastSale ? "Unnamed lead" : "No sales yet")}</p>
         </Card>
@@ -114,7 +116,7 @@ export default function SalesPanel({ clientId, rangeQuery, rangeLabel, isCoach, 
           <div className="flex items-center justify-between mt-3">
             {sales.length > PREVIEW_ROWS ? (
               <button onClick={() => { setExpanded((e) => !e); setPage(1); }} className="text-xs font-bold" style={{ color: "var(--primary)" }}>
-                {expanded ? "Show fewer" : `View all sales (${sales.length})`}
+                {expanded ? "Show fewer" : `View all (${sales.length})`}
               </button>
             ) : (
               <span />
