@@ -216,11 +216,38 @@ function DqSection({ dq, badge }: { dq: DqBreakdown; badge: React.ReactNode }) {
   return (
     <div>
       {badge && <div className="mb-2">{badge}</div>}
+      <DqTotal dq={dq} />
       <div className="grid md:grid-cols-3 gap-5">
         <Breakdown title="DQ by phase" total={dq.dq} rows={[...DQ_PHASES, "UNKNOWN" as const].map((p) => ({ label: p === "UNKNOWN" ? "Phase missing" : DQ_PHASE_LABELS[p], n: dq.dqByPhase[p] }))} />
         <Breakdown title="DQ by reason" total={dq.dq} rows={DQ_REASONS.map((r) => ({ label: DQ_REASON_LABELS[r], n: dq.dqByReason[r] }))} />
         <Breakdown title="Lost by reason" total={dq.lost} rows={LOST_REASONS.map((r) => ({ label: LOST_REASON_LABELS[r], n: dq.lostByReason[r] }))} />
       </div>
+    </div>
+  );
+}
+
+// Total DQ rate for the leads that came in this period, then how those DQs
+// split by how far each lead got.
+function DqTotal({ dq }: { dq: DqBreakdown }) {
+  const share = (n: number) => fmtPct(dq.dq > 0 ? (n / dq.dq) * 100 : null);
+  const phases = [...DQ_PHASES.map((p) => ({ label: DQ_PHASE_LABELS[p], n: dq.dqByPhase[p] })), { label: "Phase missing", n: dq.dqByPhase.UNKNOWN }].filter(
+    (p) => p.label !== "Phase missing" || p.n > 0
+  );
+  return (
+    <div className="card rounded-2xl p-5 mb-5">
+      <p className="font-heading font-bold text-lg" style={{ color: "var(--text-primary)" }}>
+        {fmtPct(dq.leads > 0 ? (dq.dq / dq.leads) * 100 : null)} of leads disqualified{" "}
+        <span className="text-sm font-normal" style={{ color: "var(--text-muted)" }}>({dq.dq.toLocaleString()} of {dq.leads.toLocaleString()})</span>
+      </p>
+      {dq.dq > 0 && (
+        <div className="flex flex-wrap gap-x-6 gap-y-1 mt-2">
+          {phases.map((p) => (
+            <p key={p.label} className="text-xs" style={{ color: p.label === "Phase missing" ? "var(--danger)" : "var(--text-secondary)" }}>
+              {p.label}: <strong style={{ color: "var(--text-primary)" }}>{p.n.toLocaleString()}</strong> ({share(p.n)} of DQs)
+            </p>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

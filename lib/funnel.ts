@@ -213,7 +213,8 @@ export function biggestDrop(c: FunnelCounts): BiggestDrop | null {
 // Strips hidden sections server-side for CLIENT users (Client.reportVisibility):
 // the data is left out of the response, not just hidden in the UI.
 
-export type DqBreakdown = Pick<FunnelCounts, "dq" | "lost" | "dqByPhase" | "dqByReason" | "lostByReason">;
+// `leads` = the cohort size, for the total DQ rate.
+export type DqBreakdown = Pick<FunnelCounts, "leads" | "dq" | "lost" | "dqByPhase" | "dqByReason" | "lostByReason">;
 export type FunnelResponse = {
   funnel: { overall: FunnelGroup; campaigns: FunnelGroup[] } | null; // null = funnel hidden from this client
   dq: DqBreakdown | null; // null = DQ/lost breakdown hidden from this client
@@ -228,7 +229,7 @@ export function funnelForViewer(
   const client = role === "CLIENT";
   const hideDq = client && !visibility.showDqBreakdown;
   const hideCost = client && !visibility.showCostMetrics;
-  const { dq, lost, dqByPhase, dqByReason, lostByReason } = f.overall.counts;
+  const { leads, dq, lost, dqByPhase, dqByReason, lostByReason } = f.overall.counts;
 
   const blank = emptyCounts();
   const strip = (g: FunnelGroup): FunnelGroup => ({
@@ -241,7 +242,7 @@ export function funnelForViewer(
 
   return {
     funnel: client && !visibility.showFunnel ? null : { overall: strip(f.overall), campaigns: f.campaigns.map(strip) },
-    dq: hideDq ? null : { dq, lost, dqByPhase, dqByReason, lostByReason },
+    dq: hideDq ? null : { leads, dq, lost, dqByPhase, dqByReason, lostByReason },
     visibility,
   };
 }
