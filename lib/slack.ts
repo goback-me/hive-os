@@ -10,12 +10,6 @@ import { terms } from "./client-terms";
 //      SLACK_ADMIN_CHANNEL (the agency's portfolio digest channel).
 
 export type SlackEvents = { sales: boolean; liveTransfers: boolean; weeklyUpdates: boolean; dailyDigest: boolean };
-export const SLACK_EVENT_LABELS: Record<keyof SlackEvents, string> = {
-  sales: "New sale",
-  liveTransfers: "New live transfer",
-  weeklyUpdates: "Weekly update published",
-  dailyDigest: "Daily 8am digest",
-};
 export function parseSlackEvents(raw: unknown): SlackEvents {
   const o = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
   const on = (k: keyof SlackEvents) => (typeof o[k] === "boolean" ? (o[k] as boolean) : true);

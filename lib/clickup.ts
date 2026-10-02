@@ -21,8 +21,6 @@ async function call<T>(key: string, path: string, init: RequestInit = {}): Promi
   return data as T;
 }
 
-export const clickupConfigured = async () => !!(await config());
-
 // Every list in the connected workspace, labelled "Space / Folder / List" —
 // for the client settings picker.
 export async function listClickUpLists(): Promise<{ id: string; name: string }[]> {

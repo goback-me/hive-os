@@ -56,56 +56,97 @@ refuse to apply.
 To restore a backup: `gunzip -c backups/<file>.sql.gz | docker compose exec -T postgres psql -U coach -d coach_os`
 (into an empty database — drop and recreate `coach_os` first).
 
-## `.env` — what has to be real before `deploy.sh` will proceed
+## `.env` — every variable
 
-Copy `.env.example` to `.env` and fill in:
+Copy `.env.example` to `.env` and fill in (it lists the same variables with
+comments). `deploy.sh` won't proceed while the placeholder password is there.
 
-| Variable | Where to get it |
-|---|---|
-| `POSTGRES_PASSWORD` | Pick a real password (not the placeholder) |
-| `DATABASE_URL` | Update to match the password above |
-| `NEXTAUTH_URL` | `https://hq.hivesocial.agency` |
-| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` / `CLERK_SECRET_KEY` | Clerk dashboard → your app → API Keys |
-| `CLERK_WEBHOOK_SECRET` | Clerk dashboard → Webhooks → endpoint at `/api/webhooks/clerk` |
-| `META_APP_ID` / `META_APP_SECRET` | Meta for Developers → your app |
-| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Google Cloud Console → Credentials |
-| `GOOGLE_REDIRECT_URI` | `https://hq.hivesocial.agency/api/google/callback` |
-| `TOKEN_ENCRYPTION_KEY` | Generate with `openssl rand -hex 32` — encrypts stored Google/Meta tokens at rest |
-| `CRON_SECRET` | Generate with `openssl rand -hex 32` — auth for the lead-sync cron (see below) |
-| `ANTHROPIC_API_KEY` | Optional. console.anthropic.com → API Keys — classifies lead-note entries the regex rules miss; without it they stay as plain notes |
-| `RESEND_API_KEY` | Optional. resend.com → API Keys — emails clients their 7-day "leads waiting on your update" reminders; without it the reminders only show in the app |
-| `EMAIL_FROM` | Required with `RESEND_API_KEY` — a sender on a domain verified in Resend, e.g. `Hive Social <updates@hivesocial.agency>` |
+| Variable | Required? | Where to get it / what it does |
+|---|---|---|
+| `POSTGRES_PASSWORD` | Yes | Pick a real password (not the placeholder) |
+| `DATABASE_URL` | Yes | Update to match the password above |
+| `NEXTAUTH_URL` | Yes | `https://hq.hivesocial.agency` — redirects, and the links in Slack / email / ClickUp |
+| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` / `CLERK_SECRET_KEY` | Yes | Clerk dashboard → your app → API Keys |
+| `NEXT_PUBLIC_CLERK_SIGN_IN_URL` / `..._FALLBACK_REDIRECT_URL` | Yes | `/login` and `/dashboard` (as in `.env.example`) |
+| `CLERK_WEBHOOK_SECRET` | Recommended | Clerk dashboard → Webhooks → endpoint at `/api/webhooks/clerk` |
+| `ADMIN_EMAIL` / `ADMIN_PASSWORD` / `ADMIN_NAME` | For `npm run create-admin` | Creates (or promotes) the bootstrap ADMIN login |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Yes | Google Cloud Console → Credentials (OAuth client). Scopes used: spreadsheets (read/write), drive.readonly, userinfo.email |
+| `GOOGLE_REDIRECT_URI` | Yes | `https://hq.hivesocial.agency/api/google/callback` |
+| `TOKEN_ENCRYPTION_KEY` | Yes | `openssl rand -hex 32` — encrypts stored Google / Meta tokens at rest. Meta needs no app keys: each client's ad account ID + token is pasted on their Ads tab |
+| `CRON_SECRET` | Yes | `openssl rand -hex 32` — auth for the cron (see below) |
+| `ANTHROPIC_API_KEY` | Optional | console.anthropic.com → API Keys — classifies lead-note entries the regex rules miss |
+| `RESEND_API_KEY` / `EMAIL_FROM` | Optional | resend.com — emails the 7-day "leads waiting on your update" reminders; `EMAIL_FROM` must be on a domain verified in Resend. Unset = in-app only. SMTP isn't supported |
+| `SLACK_BOT_TOKEN` | Optional | api.slack.com → your app → OAuth (bot token, `chat:write`). Invite the bot to every client channel and the admin channel |
+| `SLACK_ADMIN_CHANNEL` | Optional | Channel ID for the daily 8am portfolio digest |
+
+**ClickUp** isn't an env var: an admin enters the API key + Team ID in the
+app under Settings → Integrations, then picks each client's list on its page.
 
 Also double check in the **Clerk dashboard** → User & Authentication →
 Restrictions: **"Allow sign-ups" must be OFF** — accounts are only ever
 created from Settings → Users & logins inside the app.
 
-## Automatic lead sync (n8n)
+## The cron (VPS crontab, every 5 minutes)
 
-Every non-archived client with an assigned Google Sheet is synced into the
-Leads tab by `GET /api/cron/sync`, one client at a time. It's public at the routing level — the
-`x-cron-secret` header (must equal `CRON_SECRET` in `.env`) is its only
-auth; anything else gets a 401.
+`GET /api/cron/sync` runs all the background work, in order:
 
-In n8n, create a workflow:
+1. syncs every non-archived client's Google Sheet (one at a time) — each
+   sync also reconciles sheet vs HQ and re-runs the data health checks;
+2. freezes last month's Snapshot KPIs from the 1st;
+3. writes queued status changes back to the sheets (max 50 cells/min);
+4. raises 7-day client-update reminders (+ email);
+5. from 8am Sydney, once a day: Slack client digests, the admin portfolio
+   digest and the weekly ClickUp tasks;
+6. sends any queued Slack posts.
 
-1. **Schedule Trigger** — every 5 minutes.
-2. **HTTP Request** —
-   - Method: `GET`
-   - URL: `https://hq.hivesocial.agency/api/cron/sync`
-   - Headers: `x-cron-secret` = the `CRON_SECRET` value (store it as an n8n
-     credential — "Header Auth" — rather than pasting it into the node)
-   - Timeout: 300000 ms (clients sync one at a time; a big sheet takes a while)
+It's public at the routing level — the `x-cron-secret` header (must equal
+`CRON_SECRET` in `.env`) is its only auth; anything else gets a 401.
+
+On the VPS, `crontab -e` and add (adjust the path to the repo):
+
+```cron
+*/5 * * * * curl -fsS --max-time 290 -H "x-cron-secret: $(grep '^CRON_SECRET=' /opt/hive-os/.env | cut -d= -f2-)" https://hq.hivesocial.agency/api/cron/sync >> /var/log/hive-cron.log 2>&1
+```
+
+The VPS clock's timezone doesn't matter — the app checks Sydney time itself
+(8am digests, month freezes). Check it's running: `tail -f /var/log/hive-cron.log`.
+If you still have the old n8n workflow calling this URL, turn it off — two
+callers would just do the work twice.
 
 The response is JSON: `{ synced, failed, results: [{ client, ok, ms, total,
-leads, created, updated, removed, restored, error? }], frozen }` (`frozen` =
-Snapshot KPI months frozen on this run). A failing client doesn't stop the
-others; its error also shows on that client's Leads tab (`lastSyncError`).
+leads, created, updated, removed, restored, error? }], frozen, writeBack,
+reminders, daily, slack }`. A failing client doesn't stop the others; its
+error shows on that client's Leads tab and as a data alert (bell icon).
 Quick manual test from the VPS:
 
 ```bash
 curl -s -H "x-cron-secret: $CRON_SECRET" https://hq.hivesocial.agency/api/cron/sync
 ```
+
+## Manual setup checklist (after deploying this release)
+
+1. **Back up the database** (deploy.sh does this) — the stage-enum and
+   two-way-sync migrations rewrite data.
+2. **Make yourself an admin:** `docker compose exec app npm run promote-coaches`
+   (every existing coach login becomes ADMIN), then sign out and back in.
+3. **Reconnect Google with write access:** Leads page → "Reconnect Google"
+   banner (admin). Until then HQ can't write statuses back to the sheets.
+4. **Per client**, on Dashboard → Client Details:
+   - set the **start date** (onboarding day) and the **client type**
+     (Trade = "Onsite quote" / "Job won" wording);
+   - Integrations: **Slack channel ID** (+ "Send test message"; invite the
+     bot to the channel first) and the **ClickUp list**;
+   - Ads tab → **Campaigns in reports**: check the ticks (default = started
+     on/after the start date).
+5. **Clean up the sheet dropdowns:** Leads page → each client's sheet
+   settings — map any "not recognised" status values, and check the
+   "Writing back to the sheet" values each stage writes.
+6. **Rebuild history** per client (Snapshot card on the Dashboard), or once
+   for everyone: `docker compose exec app npm run db:backfill-kpis`.
+7. **Run a sync** (Leads tab → Sync now, or wait for the cron) and check the
+   **bell shows 0 mismatches** — fix anything red it lists.
+8. **ClickUp key + Team ID** under Settings → Integrations, if not already.
+9. **Crontab** (above) on the VPS; turn off the old n8n workflow.
 
 ## Which repo/branch is production?
 

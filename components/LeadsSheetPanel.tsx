@@ -78,7 +78,6 @@ export default function LeadsSheetPanel({
   const [statusLabels, setStatusLabels] = useState<Record<string, string>>({});
   const [resultStatusLabels, setResultStatusLabels] = useState<Record<string, string>>({});
   const [resultStatusValues, setResultStatusValues] = useState<string[]>([]);
-  const [resultStatusCounts, setResultStatusCounts] = useState<Record<string, number>>({});
   const [statusFilter, setStatusFilter] = useState<string>("__all__");
 
   const [loadingData, setLoadingData] = useState(false);
@@ -120,7 +119,6 @@ export default function LeadsSheetPanel({
         setStatusLabels(data.statusLabels ?? {});
         setResultStatusLabels(data.resultStatusLabels ?? {});
         setResultStatusValues(data.resultStatusValues ?? []);
-        setResultStatusCounts(data.resultStatusCounts ?? {});
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoadingData(false));

@@ -7,8 +7,7 @@ import { previousReportRange, resolveReportRange, type ReportRange } from "./dat
 // period vs the one before it, with a health dot, open data alerts, Needs
 // Action count and the last account-manager contact. At-risk first.
 
-export const PORTFOLIO_METRICS = ["leads", "liveTransfers", "quotes", "sales", "revenue", "costPerQuote", "costPerSale"] as const;
-export type PortfolioMetric = (typeof PORTFOLIO_METRICS)[number];
+export type PortfolioMetric = "leads" | "liveTransfers" | "quotes" | "sales" | "revenue" | "costPerQuote" | "costPerSale";
 type Values = Record<PortfolioMetric, number | null>;
 
 export type PortfolioRow = {

@@ -96,7 +96,7 @@ export async function runHealthChecks(clientId: string, now = new Date()) {
       f.push({ type: "SYNC_FAILED", severity: "DANGER", title: "Sync is failing", detail: err.slice(0, 300), fixHint: "Fix what the error says, then press Sync now on the Leads tab.", fixUrl: url.leads });
     }
     if (!sheet.lastSyncedAt || now.getTime() - sheet.lastSyncedAt.getTime() > HOUR) {
-      f.push({ type: "SYNC_STALE", severity: "WARNING", title: "Leads haven't synced in over an hour", detail: sheet.lastSyncedAt ? `Last successful sync ${sheet.lastSyncedAt.toLocaleString("en-AU", { timeZone: "Australia/Sydney" })}.` : "This sheet has never synced.", fixHint: "Check the 5-minute cron (n8n) is running, or press Sync now.", fixUrl: url.leads });
+      f.push({ type: "SYNC_STALE", severity: "WARNING", title: "Leads haven't synced in over an hour", detail: sheet.lastSyncedAt ? `Last successful sync ${sheet.lastSyncedAt.toLocaleString("en-AU", { timeZone: "Australia/Sydney" })}.` : "This sheet has never synced.", fixHint: "Check the VPS cron (every 5 min, DEPLOYMENT.md) is running, or press Sync now.", fixUrl: url.leads });
     }
 
     const unmapped = (sheet.unmappedStatuses ?? { status: {}, result: {} }) as { status: Record<string, number>; result: Record<string, number> };

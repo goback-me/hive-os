@@ -1,4 +1,3 @@
-import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import { SHEET_TZ, sydneyLocalToDate } from "./sheet-parse";
 import { getReportingScope, scopedSpend, type ReportingScope } from "./reporting-scope";

@@ -9,7 +9,7 @@ import { runHealthChecks } from "@/lib/data-health";
 import { runDailyJobs } from "@/lib/daily-jobs";
 import { deliverSlackPosts } from "@/lib/slack";
 
-// Called by n8n every 5 min (see DEPLOYMENT.md). Public in middleware.ts —
+// Called by the VPS crontab every 5 min (see DEPLOYMENT.md). Public in middleware.ts —
 // the x-cron-secret header is the only auth. Clients sync one at a time
 // (gentle on the Sheets API quota); one client's failure never stops the rest
 // and is recorded on its ClientSheet.lastSyncError by syncLeadsFromSheet.
