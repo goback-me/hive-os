@@ -3,7 +3,7 @@
 import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
-import { requireCoach, requireClientAccess } from "@/lib/auth";
+import { requireAdmin, requireCoach, requireClientAccess } from "@/lib/auth";
 import { getClerkAdminClient } from "@/lib/clerk-admin";
 import { syncLeadsFromSheet, type SyncSummary } from "@/lib/lead-sync";
 import { parseTarget, planStageEvents } from "@/lib/lead-status";
@@ -478,6 +478,13 @@ export async function saveIntegrationSettings(formData: FormData) {
     update: { clickupApiKey, clickupTeamId, crmType, crmApiKeyOrUrl },
     create: { id: "singleton", clickupApiKey, clickupTeamId, crmType, crmApiKeyOrUrl },
   });
+  revalidatePath("/settings");
+}
+
+// Forgets the "Add to Slack" token (Posts fall back to SLACK_BOT_TOKEN, if set).
+export async function disconnectSlack() {
+  await requireAdmin();
+  await prisma.integrationSettings.updateMany({ where: { id: "singleton" }, data: { slackBotToken: null, slackTeamName: null } });
   revalidatePath("/settings");
 }
 

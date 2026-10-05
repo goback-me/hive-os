@@ -48,7 +48,7 @@ export async function runDailyJobs(now = new Date()) {
   });
 
   // ── Client digests: yesterday's numbers + what needs doing ──
-  if (slackConfigured()) {
+  if (await slackConfigured()) {
     for (const c of clients) {
       if (!c.slackChannelId || !parseSlackEvents(c.slackEvents).dailyDigest) continue;
       const key = `client_digest:${c.id}:${today}`;

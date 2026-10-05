@@ -1,12 +1,12 @@
 import { prisma } from "@/lib/prisma";
-import { saveIntegrationSettings, createOnboardingStepTemplate, createModule, createClient } from "@/lib/actions";
+import { saveIntegrationSettings, disconnectSlack, createOnboardingStepTemplate, createModule, createClient } from "@/lib/actions";
 import { requireCoach } from "@/lib/auth";
 import UsersPanel from "./UsersPanel";
 import AddLessonForm from "@/components/AddLessonForm";
 
 export const dynamic = "force-dynamic";
 
-export default async function SettingsPage() {
+export default async function SettingsPage({ searchParams }: { searchParams: { slack_error?: string } }) {
   const me = await requireCoach();
 
   const [integration, onboardingSteps, awardTiers, modules, users, clients] = await Promise.all([
@@ -43,6 +43,28 @@ export default async function SettingsPage() {
           are managed on the <a href="/leads" style={{ color: "var(--primary)", fontWeight: 600 }}>Leads</a> page
           and each client's Ads tab.
         </p>
+        <div className="flex items-center justify-between gap-4 rounded-lg p-3 mb-4" style={{ background: "var(--surface)" }}>
+          <div>
+            <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Slack</p>
+            <p className="text-xs" style={{ color: "var(--text-secondary)" }}>
+              {integration?.slackBotToken
+                ? `Connected to ${integration.slackTeamName ?? "your workspace"} — set each client's channel in its Client Details → Integrations.`
+                : "Not connected — connect once to post sales, live transfers, weekly updates and digests to client channels."}
+            </p>
+            {searchParams.slack_error && <p className="text-xs mt-1" style={{ color: "var(--danger)" }}>Slack: {searchParams.slack_error}</p>}
+          </div>
+          {me.isAdmin &&
+            (integration?.slackBotToken ? (
+              <div className="flex gap-2 shrink-0">
+                <a href="/api/slack/connect" className="px-3 py-2 rounded-lg text-xs font-bold" style={{ border: "1px solid var(--border)", color: "var(--text-secondary)" }}>Reconnect</a>
+                <form action={disconnectSlack}>
+                  <button type="submit" className="px-3 py-2 rounded-lg text-xs font-bold" style={{ border: "1px solid var(--border)", color: "var(--danger)" }}>Disconnect</button>
+                </form>
+              </div>
+            ) : (
+              <a href="/api/slack/connect" className="btn-gradient px-4 py-2 rounded-lg text-sm font-bold shrink-0">Add to Slack</a>
+            ))}
+        </div>
         <form action={saveIntegrationSettings} className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
             <Field label="ClickUp API key" name="clickupApiKey" defaultValue={integration?.clickupApiKey ?? ""} placeholder="pk_..." />

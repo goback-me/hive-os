@@ -1,4 +1,5 @@
 import { prisma } from "./prisma";
+import { decryptToken } from "./crypto";
 import { terms } from "./client-terms";
 
 // Slack, via a bot token (chat.postMessage). Everything is queued in
@@ -6,8 +7,8 @@ import { terms } from "./client-terms";
 // straight after an event — so a Slack outage never breaks a sync or a status
 // change. Each post's dedupeKey makes it happen once.
 //
-// Env: SLACK_BOT_TOKEN (bot with chat:write, invited to each channel),
-//      SLACK_ADMIN_CHANNEL (the agency's portfolio digest channel).
+// Token: the one saved by "Add to Slack" (Settings → Integrations), else the
+// SLACK_BOT_TOKEN env. SLACK_ADMIN_CHANNEL = the agency's digest channel.
 
 export type SlackEvents = { sales: boolean; liveTransfers: boolean; weeklyUpdates: boolean; dailyDigest: boolean };
 export function parseSlackEvents(raw: unknown): SlackEvents {
@@ -16,20 +17,28 @@ export function parseSlackEvents(raw: unknown): SlackEvents {
   return { sales: on("sales"), liveTransfers: on("liveTransfers"), weeklyUpdates: on("weeklyUpdates"), dailyDigest: on("dailyDigest") };
 }
 
-export const slackConfigured = () => !!process.env.SLACK_BOT_TOKEN;
+async function slackToken() {
+  const s = await prisma.integrationSettings.findUnique({ where: { id: "singleton" }, select: { slackBotToken: true } });
+  return s?.slackBotToken ? decryptToken(s.slackBotToken) : process.env.SLACK_BOT_TOKEN || null;
+}
+export const slackConfigured = async () => !!(await slackToken());
+
+// "Add to Slack" OAuth (app/api/slack/*). Slack only accepts https redirect URLs.
+export const SLACK_OAUTH_STATE_COOKIE = "slack_oauth_state";
+export const slackRedirectUri = () => `${process.env.NEXTAUTH_URL || "http://localhost:3000"}/api/slack/callback`;
 const appUrl = () => process.env.NEXTAUTH_URL || "";
 
 // Queue one post (no-op if it was already queued under this key).
 export async function queueSlack(post: { clientId?: string | null; channel: string; kind: string; dedupeKey: string; text: string }) {
-  if (!slackConfigured() || !post.channel) return false;
+  if (!post.channel || !(await slackConfigured())) return false;
   const created = await prisma.slackPostLog.createMany({ data: [{ ...post, clientId: post.clientId ?? null }], skipDuplicates: true });
   return created.count > 0;
 }
 
-async function postMessage(channel: string, text: string) {
+async function postMessage(token: string, channel: string, text: string) {
   const res = await fetch("https://slack.com/api/chat.postMessage", {
     method: "POST",
-    headers: { Authorization: `Bearer ${process.env.SLACK_BOT_TOKEN}`, "Content-Type": "application/json; charset=utf-8" },
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json; charset=utf-8" },
     body: JSON.stringify({ channel, text, unfurl_links: false }),
   });
   const data = await res.json().catch(() => ({}));
@@ -39,13 +48,14 @@ async function postMessage(channel: string, text: string) {
 // Sends what's queued (oldest first); a failure is recorded on the row and
 // retried up to 5 times by later runs. Never throws.
 export async function deliverSlackPosts(limit = 50) {
-  if (!slackConfigured()) return { sent: 0, failed: 0 };
+  const token = await slackToken();
+  if (!token) return { sent: 0, failed: 0 };
   const due = await prisma.slackPostLog.findMany({ where: { status: { in: ["PENDING", "FAILED"] }, attempts: { lt: 5 } }, orderBy: { createdAt: "asc" }, take: limit });
   let sent = 0;
   let failed = 0;
   for (const p of due) {
     try {
-      await postMessage(p.channel, p.text);
+      await postMessage(token, p.channel, p.text);
       await prisma.slackPostLog.update({ where: { id: p.id }, data: { status: "SENT", sentAt: new Date(), attempts: { increment: 1 }, error: null } });
       sent++;
     } catch (e) {
@@ -104,7 +114,8 @@ export async function queueWeeklyUpdatePost(updateId: string) {
 export async function queueTestMessage(clientId: string) {
   const c = await prisma.client.findUnique({ where: { id: clientId }, select: { name: true, slackChannelId: true } });
   if (!c?.slackChannelId) throw new Error("Set a Slack channel ID first");
-  if (!slackConfigured()) throw new Error("SLACK_BOT_TOKEN isn't set on the server");
+  const token = await slackToken();
+  if (!token) throw new Error("Slack isn't connected — use Add to Slack in Settings → Integrations");
   // Sent straight away so the coach sees the result.
-  await postMessage(c.slackChannelId, `:wave: Hive HQ is connected to this channel for *${c.name}*.`);
+  await postMessage(token, c.slackChannelId, `:wave: Hive HQ is connected to this channel for *${c.name}*.`);
 }

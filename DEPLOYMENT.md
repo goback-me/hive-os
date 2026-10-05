@@ -76,7 +76,8 @@ comments). `deploy.sh` won't proceed while the placeholder password is there.
 | `CRON_SECRET` | Yes | `openssl rand -hex 32` — auth for the cron (see below) |
 | `ANTHROPIC_API_KEY` | Optional | console.anthropic.com → API Keys — classifies lead-note entries the regex rules miss |
 | `RESEND_API_KEY` / `EMAIL_FROM` | Optional | resend.com — emails the 7-day "leads waiting on your update" reminders; `EMAIL_FROM` must be on a domain verified in Resend. Unset = in-app only. SMTP isn't supported |
-| `SLACK_BOT_TOKEN` | Optional | api.slack.com → your app → OAuth (bot token, `chat:write`). Invite the bot to every client channel and the admin channel |
+| `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET` | Optional | api.slack.com → your app → Basic Information. Under OAuth & Permissions add bot scopes `chat:write` + `chat:write.public` and redirect URL `https://<your domain>/api/slack/callback`, then use **Add to Slack** in Settings → Integrations |
+| `SLACK_BOT_TOKEN` | Optional | Fallback when Slack isn't connected in Settings: a bot token with `chat:write`, invited to every client channel and the admin channel |
 | `SLACK_ADMIN_CHANNEL` | Optional | Channel ID for the daily 8am portfolio digest |
 
 **ClickUp** isn't an env var: an admin enters the API key + Team ID in the

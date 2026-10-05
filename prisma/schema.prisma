@@ -197,6 +197,9 @@ model IntegrationSettings {
   clickupTeamId  String?
   crmType        String? // "ghl" | "spreadsheet"
   crmApiKeyOrUrl String?
+  // Slack bot token from "Add to Slack" (app/api/slack/*), encrypted at rest.
+  slackBotToken  String?
+  slackTeamName  String?
   updatedAt      DateTime @updatedAt
 }
 
