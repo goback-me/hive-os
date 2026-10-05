@@ -17,7 +17,7 @@ import { runHealthChecks } from "@/lib/data-health";
 import { draftWeeklyUpdate } from "@/lib/weekly";
 import { kickSlack, parseSlackEvents, queueLeadEvent, queueSlack, queueTestMessage, queueWeeklyUpdatePost } from "@/lib/slack";
 import { NOT_HELD_REASONS, WEEKDAYS, callDateLabel, meetingTaskUpdate } from "@/lib/weekly-meetings";
-import { ensureTask, finishTask } from "@/lib/clickup";
+import { createClientFolder, ensureTask, finishTask } from "@/lib/clickup";
 import { sydneyLocalToDate } from "@/lib/sheet-parse";
 
 function slugify(name: string) {
@@ -408,6 +408,16 @@ export async function recheckClientHealth(clientId: string) {
 // Log a call / meeting / message with the client. The latest one is the
 // portfolio's "Last contact" and drives the "no call in 10+ days" action.
 // ── Weekly call (lib/weekly-meetings.ts) ─────────────────────────────────
+// Coach-only: the client email the "update your leads" emails go to (when
+// the client has no login of their own).
+export async function saveClientEmail(clientId: string, email: string) {
+  await requireCoach();
+  const e = email.trim().toLowerCase();
+  if (e && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) throw new Error("That email doesn't look right");
+  await prisma.client.update({ where: { id: clientId }, data: { email: e || null } });
+  revalidatePath(`/clients`);
+}
+
 // Coach-only: who runs this client's weekly call, and on which day.
 export async function saveWeeklyCall(clientId: string, agentId: string | null, day: string) {
   await requireCoach();
@@ -547,7 +557,23 @@ export async function getWeeklyDraft(clientId: string) {
 
 // ── Slack + ClickUp per client (coach only) ─────────────────────────────
 
-export async function saveClientIntegrations(clientId: string, input: { slackChannelId: string; slackEvents: Record<string, boolean>; clickupListId: string }) {
+// Coach-only: "Create ClickUp folder" — the client's folder (Account /
+// Client / Other lists) in the chosen space; HQ's tasks then go to Account.
+export async function createClientClickUpFolder(clientId: string, spaceId: string): Promise<{ ok: true; listId: string } | { error: string }> {
+  await requireCoach();
+  const client = await prisma.client.findUnique({ where: { id: clientId }, select: { name: true } });
+  if (!client) return { error: "Client not found" };
+  try {
+    const { lists } = await createClientFolder(spaceId, client.name);
+    await prisma.client.update({ where: { id: clientId }, data: { clickupListId: lists.Account } });
+    revalidatePath(`/clients`);
+    return { ok: true, listId: lists.Account };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "ClickUp request failed" };
+  }
+}
+
+export async function saveClientIntegrations(clientId: string, input: { slackChannelId: string; slackEvents: Record<string, boolean>; clickupListId: string; clickupAssigneeIds?: string[] }) {
   await requireCoach();
   await prisma.client.update({
     where: { id: clientId },
@@ -555,6 +581,7 @@ export async function saveClientIntegrations(clientId: string, input: { slackCha
       slackChannelId: input.slackChannelId.trim() || null,
       slackEvents: parseSlackEvents(input.slackEvents),
       clickupListId: input.clickupListId.trim() || null,
+      ...(input.clickupAssigneeIds ? { clickupAssigneeIds: input.clickupAssigneeIds.filter((id) => /^\d+$/.test(id)) } : {}),
     },
   });
   revalidatePath(`/clients`);
@@ -580,9 +607,8 @@ export async function createManualClickUpTask(clientId: string, input: { title: 
     kind: "manual",
     dedupeKey: `manual:${clientId}:${Date.now()}`,
     title,
-    description: `${input.description.trim()}
-
-_Created in Hive HQ by ${user.name}_`,
+    why: `Added by ${user.name} from the client's page in Hive HQ.`,
+    description: input.description.trim() || "(no details)",
     dueDate: m ? sydneyLocalToDate(Number(m[1]), Number(m[2]), Number(m[3]), 17) : null,
   });
   if (taskId) return { ok: true };
@@ -694,10 +720,30 @@ export async function createClient(_prev: CreateClientState, formData: FormData)
   const scope = String(formData.get("scope") || "").trim();
   const driveLink = String(formData.get("driveLink") || "").trim();
   const status = String(formData.get("status") || "ONBOARDING") as "ACTIVE" | "ONBOARDING" | "CHURNED";
+  // The automation setup, all optional — a blank one just stays off for
+  // this client until it's added on their page (see SetupChecklist).
+  const text = (k: string) => String(formData.get(k) || "").trim();
+  const clientType = (["TRADE", "SERVICE", "OTHER"].includes(text("clientType")) ? text("clientType") : "OTHER") as "TRADE" | "SERVICE" | "OTHER";
+  const day = text("startDate").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const startDate = day ? sydneyLocalToDate(Number(day[1]), Number(day[2]), Number(day[3])) : null;
+  const email = text("email").toLowerCase();
+  const slackChannelId = text("slackChannelId").toUpperCase();
+  const weeklyCallAgentId = text("weeklyCallAgentId") || null;
+  const weeklyCallDay = (WEEKDAYS.includes(text("weeklyCallDay") as Weekday) ? text("weeklyCallDay") : "FRIDAY") as Weekday;
+  const clickupMode = text("clickupMode");
+  const clickupAssigneeIds = formData.getAll("clickupAssigneeIds").map(String).filter((id) => /^\d+$/.test(id));
 
   if (!name) return { error: "Client name is required" };
   if (driveLink && !/^https:\/\/(?:drive|docs)\.google\.com\//.test(driveLink)) {
     return { error: "That doesn't look like a Google Drive/Docs/Sheets/Slides link — leave it blank to skip for now." };
+  }
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { error: "That client email doesn't look right — fix it or leave it blank." };
+  if (slackChannelId && !/^[CG][A-Z0-9]{6,}$/.test(slackChannelId)) {
+    return { error: "A Slack channel ID looks like C0123ABCD (channel name → About → bottom) — not the channel's name." };
+  }
+  if (weeklyCallAgentId) {
+    const agent = await prisma.user.findUnique({ where: { id: weeklyCallAgentId }, select: { role: true } });
+    if (!agent || agent.role === "CLIENT") return { error: "Pick a team member to run the weekly call" };
   }
 
   try {
@@ -723,9 +769,29 @@ export async function createClient(_prev: CreateClientState, formData: FormData)
         gameplanFigmaLink: driveLink || null,
         status,
         isActive: status !== "CHURNED",
+        clientType,
+        startDate,
+        email: email || null,
+        slackChannelId: slackChannelId || null,
+        weeklyCallAgentId,
+        weeklyCallDay,
+        clickupAssigneeIds,
+        clickupListId: clickupMode === "existing" ? text("clickupListId") || null : null,
       },
     });
     await getOrCreateClientReferralLink(client.id, client.name);
+
+    // Their own ClickUp lists (Account / Client / Other). A ClickUp problem
+    // never stops the client being created — the setup checklist shows it.
+    if (clickupMode === "create" && text("clickupTarget")) {
+      try {
+        const { lists } = await createClientFolder(text("clickupTarget"), client.name);
+        await prisma.client.update({ where: { id: client.id }, data: { clickupListId: lists.Account } });
+      } catch (e) {
+        console.error(`ClickUp lists for new client ${client.name} failed:`, e);
+      }
+    }
+    await runHealthChecks(client.id).catch(() => {});
 
     revalidatePath("/clients");
     revalidatePath("/settings");

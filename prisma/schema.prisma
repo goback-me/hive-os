@@ -972,6 +972,9 @@ model Client {
   metaAdAccountId  String? // "act_XXXXXXXXX" — not secret, safe to store plain
   metaAccessToken  String? // encrypted at rest (see lib/crypto.ts)
   clickupListId    String? // ClickUp list for this client's tasks (lib/clickup.ts)
+  // ClickUp user ids HQ's automated tasks for this client are assigned to
+  // (a weekly-call task goes to the call agent instead, when they're mapped).
+  clickupAssigneeIds String[] @default([])
   // Slack channel for this client's posts (lib/slack.ts), and which posts are
   // on: {sales, liveTransfers, weeklyUpdates, dailyDigest} — missing = on.
   slackChannelId   String?

@@ -4,6 +4,7 @@ import { signActionToken, verifyActionToken, ACTION_TOKEN_DAYS } from "./action-
 import { canAccessClient } from "./access";
 import { meetingKey, meetingSchedule, meetingTaskUpdate, meetingsToCreate, previousCallDate } from "./weekly-meetings";
 import { sydneyDay, sydneyHour } from "./sheet-parse";
+import { taskText } from "./clickup";
 
 const DAY = 86_400_000;
 const secret = "test-secret";
@@ -64,5 +65,17 @@ assert.match(held.description, /Summary:\nWent well/);
 assert.match(held.description, /Next steps:\nSend quote/);
 assert.match(held.description, /Client mood: Good/);
 assert.equal(meetingTaskUpdate({ status: "PENDING" }), null);
+
+// ── Every ClickUp task says which client and why ──
+const tt = taskText({ name: "Jake Of All Tradez", slug: "jake" }, { kind: "chase_client", title: "Chase client — 7 leads waiting", why: "Leads need an update.", description: "• Greg" }, "https://hq.example");
+assert.equal(tt.title, "[Jake Of All Tradez] Chase client — 7 leads waiting");
+assert.deepEqual(tt.description.split("\n").slice(0, 3), [
+  "**Client:** Jake Of All Tradez",
+  "**Why this task:** Leads need an update.",
+  "**Open in Hive HQ:** https://hq.example/clients/jake",
+]);
+assert.match(tt.description, /Created automatically by Hive HQ/);
+assert.equal(taskText({ name: "Jake Of All Tradez", slug: "jake" }, { kind: "manual", title: "[Jake Of All Tradez] Call back", why: "x", description: "" }, "").title, "[Jake Of All Tradez] Call back"); // no double prefix
+assert.match(taskText({ name: "J", slug: "j" }, { kind: "manual", title: "t", why: "x", description: "" }, "").description, /Created in Hive HQ\./);
 
 console.log("weekly-meetings: all checks passed");

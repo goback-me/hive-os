@@ -57,7 +57,7 @@ export default function UsersPanel({
         <h3 className="font-heading font-bold text-lg" style={{ color: "var(--text-primary)" }}>
           Users & logins
         </h3>
-        <AddClientModal action={onCreateClient} />
+        <AddClientModal action={onCreateClient} team={users.filter((u) => u.role !== "CLIENT").map((u) => ({ id: u.id, name: u.name }))} />
       </div>
       <p className="text-sm mb-4" style={{ color: "var(--text-secondary)" }}>
         Admins and managers see every client; only admins manage the Google connection and other admins. Client logins only ever see their own data. Need a new client first? Use "Add Client" above.

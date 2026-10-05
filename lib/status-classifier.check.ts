@@ -102,6 +102,8 @@ assert.equal(awaitingClientUpdate({ stage: "HANDOVER_LIVE", hive: live, prospect
 // Only HANDOVER_STAGES make the client owe an update.
 assert.equal(awaitingClientUpdate({ stage: "NURTURE", hive: classifyHive("Not ready yet"), prospect: blank, prospectPending: false }), false);
 assert.equal(awaitingClientUpdate({ stage: "HANDOVER_ATTEMPTED", hive: classifyHive("Live attempted"), prospect: blank, prospectPending: false }), true);
+// Not ready yet → never waiting on the client, even with "pending update" in Prospect Status.
+assert.equal(awaitingClientUpdate({ stage: "NURTURE", hive: classifyHive("Not ready yet"), prospect: blank, prospectPending: true }), false);
 // Any prospect stage ends it — cancelled / no-show included.
 assert.equal(awaitingClientUpdate({ stage: "CONSULT_CANCELLED", hive: live, prospect: { stage: "CONSULT_CANCELLED" }, prospectPending: false }), false);
 assert.equal(awaitingClientUpdate({ stage: "CONTACTED", hive: classifyHive("Lead contacted"), prospect: blank, prospectPending: false }), false);

@@ -85,15 +85,16 @@ export async function queueLeadEvent(leadId: string, event: "sale" | "live_trans
   if (!lead) return;
   const c = await clientChannel(lead.clientId, event === "sale" ? "sales" : "liveTransfers");
   if (!c) return;
-  const who = lead.name || "A lead";
-  const campaign = lead.campaign?.trim() ? ` · ${lead.campaign.trim()}` : "";
+  // Plain sentences — these go to the client's own channel.
+  const who = lead.name?.trim() || "A new lead";
   let text: string;
   if (event === "sale") {
     if (lead.value == null) return; // a sale is posted once it has its value
     const days = Math.max(0, Math.round((Date.now() - lead.createdAt.getTime()) / 86_400_000));
-    text = `:tada: *New ${terms(c.clientType).sale.toLowerCase()}* — ${who}${campaign} · *$${Number(lead.value).toLocaleString("en-US")}* · ${days} day${days === 1 ? "" : "s"} from lead to won`;
+    const after = days === 0 ? "the same day they enquired" : `${days} day${days === 1 ? "" : "s"} after they first enquired`;
+    text = `:tada: *New ${terms(c.clientType).sale.toLowerCase()} for ${c.name}!* ${who} — *$${Number(lead.value).toLocaleString("en-US")}*, ${after}.`;
   } else {
-    text = `:telephone_receiver: *New live transfer* — ${who}${campaign}`;
+    text = `:telephone_receiver: *New live transfer for ${c.name}.* ${who} was just put through to you on the phone.`;
   }
   await queueSlack({ clientId: lead.clientId, channel: c.slackChannelId!, kind: event, dedupeKey: `${event}:${leadId}`, text });
 }
@@ -105,7 +106,13 @@ export async function queueWeeklyUpdatePost(updateId: string) {
   if (!c) return;
   const week = u.weekOf.toLocaleDateString("en-AU", { timeZone: "Australia/Sydney", day: "numeric", month: "short" });
   const section = (label: string, body: string) => (body.trim() ? `*${label}*\n${body.trim()}` : null);
-  const text = [`:memo: *Weekly update — week of ${week}* (${u.createdBy})`, section("Wins", u.wins), section("Issues", u.issues), section("Next steps", u.nextSteps), `<${appUrl()}/clients/${c.slug}?tab=dashboard|Open in Hive HQ>`]
+  const text = [
+    `:memo: *Here's this week's update for ${c.name}* (week of ${week}, from ${u.createdBy})`,
+    section("What went well", u.wins),
+    section("What's getting in the way", u.issues),
+    section("What happens next", u.nextSteps),
+    `<${appUrl()}/clients/${c.slug}?tab=dashboard|See it in Hive HQ>`,
+  ]
     .filter(Boolean)
     .join("\n\n");
   await queueSlack({ clientId: u.clientId, channel: c.slackChannelId!, kind: "weekly_update", dedupeKey: `weekly_update:${u.id}`, text });

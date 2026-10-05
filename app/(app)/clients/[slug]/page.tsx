@@ -25,11 +25,16 @@ import {
   saveClientIntegrations,
   sendSlackTest,
   createManualClickUpTask,
+  createClientClickUpFolder,
   saveCycleOverrides,
   recalculateClientCycle,
   saveNoteAliases,
   saveWeeklyCall,
+  saveClientEmail,
 } from "@/lib/actions";
+import SetupChecklist, { type SetupItem } from "@/components/SetupChecklist";
+import { slackConfigured } from "@/lib/slack";
+import { emailConfigured } from "@/lib/email";
 import WeeklyCallCard from "@/components/WeeklyCallCard";
 import { MOOD_LABELS } from "@/lib/weekly-meetings";
 import NoteAliasesCard from "@/components/NoteAliasesCard";
@@ -276,10 +281,11 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
           {isCoach && (
             <IntegrationsCard
               clientId={client.id}
-              initial={{ slackChannelId: client.slackChannelId ?? "", slackEvents: parseSlackEvents(client.slackEvents), clickupListId: client.clickupListId ?? "" }}
+              initial={{ slackChannelId: client.slackChannelId ?? "", slackEvents: parseSlackEvents(client.slackEvents), clickupListId: client.clickupListId ?? "", clickupAssigneeIds: client.clickupAssigneeIds }}
               onSave={saveClientIntegrations}
               onTest={sendSlackTest}
               onCreateTask={createManualClickUpTask}
+              onCreateFolder={createClientClickUpFolder}
             />
           )}
 
@@ -337,6 +343,30 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
       </div>
     </div>
   );
+
+  // Every onboarding step ticked (and there are steps).
+  const doneSteps = new Set(onboardingProgress.filter((p) => p.completedAt).map((p) => p.templateId));
+  const onboardingDone = onboardingTemplates.length > 0 && onboardingTemplates.every((t) => doneSteps.has(t.id));
+
+  // Coaches: what this client's automations still need (SetupChecklist).
+  const setup: SetupItem[] = [];
+  if (isCoach) {
+    const [clientLogins, settings, slackOn] = await Promise.all([
+      prisma.user.count({ where: { clientId: client.id, role: "CLIENT" } }),
+      prisma.integrationSettings.findUnique({ where: { id: "singleton" }, select: { clickupApiKey: true } }),
+      slackConfigured(),
+    ]);
+    setup.push(
+      { key: "sheet", label: "Leads Google Sheet", ok: !!clientSheet, paused: "lead syncing, reports, reminders and the update panel", fix: "Connect it on the Leads page", href: `/leads?client=${client.slug}` },
+      { key: "start", label: "Start date", ok: !!client.startDate, paused: "accurate reports (everything ever recorded is counted)", fix: "Set it in Client Details" },
+      { key: "email", label: "Client email", ok: !!client.email || clientLogins > 0, paused: "“leads waiting on your update” emails", fix: "Add it here:" },
+      { key: "emailService", label: "Email sending (Resend)", ok: emailConfigured(), paused: "every email, for all clients", fix: "Add RESEND_API_KEY, EMAIL_FROM and ACTION_TOKEN_SECRET to the server's .env" },
+      { key: "slack", label: "Slack channel", ok: !!client.slackChannelId && slackOn, paused: "sale, live transfer, weekly update and digest posts", fix: slackOn ? "Add the channel ID in Integrations" : "Connect Slack in Settings → Integrations", href: slackOn ? undefined : "/settings" },
+      { key: "clickup", label: "ClickUp list", ok: !!client.clickupListId && !!settings?.clickupApiKey, paused: "automatic ClickUp tasks", fix: settings?.clickupApiKey ? "Pick or create their list in Integrations" : "Add the ClickUp key in Settings → Integrations", href: settings?.clickupApiKey ? undefined : "/settings" },
+      { key: "assignees", label: "ClickUp assignees", ok: !client.clickupListId || client.clickupAssigneeIds.length > 0, paused: "nobody is assigned the tasks", fix: "Pick them under “Assign HQ's tasks to” in Integrations" },
+      { key: "call", label: "Weekly call agent", ok: !!client.weeklyCallAgentId, paused: "weekly call logging, its emails and tasks", fix: "Pick who runs it on the Weekly call card" }
+    );
+  }
 
   const onboardingContent = (
     <OnboardingChecklist
@@ -426,9 +456,29 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
           <div className="flex items-center gap-3">
             <h1 className="page-title font-heading" style={{ color: "var(--text-primary)" }}>{client.name}</h1>
           </div>
-          <p className="text-sm mt-1" style={{ color: "var(--text-secondary)" }}>Since {client.joinedAt.toLocaleDateString("en-US", { month: "short", year: "numeric" })}</p>
+          <div className="flex items-center gap-3 mt-1 flex-wrap">
+            <p className="text-sm" style={{ color: "var(--text-secondary)" }}>Since {client.joinedAt.toLocaleDateString("en-US", { month: "short", year: "numeric" })}</p>
+            {onboardingDone && (
+              <span className="px-2.5 py-1 rounded-full text-xs font-bold flex items-center gap-1" style={{ background: "var(--tag-green-bg)", color: "var(--tag-green-fg)" }}>
+                <span className="material-symbols-outlined text-[14px]">check_circle</span> Onboarding completed
+              </span>
+            )}
+            {client.gameplanFigmaLink && (
+              <a
+                href={client.gameplanFigmaLink}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-2.5 py-1 rounded-full text-xs font-bold flex items-center gap-1"
+                style={{ border: "1px solid var(--border)", color: "var(--text-primary)" }}
+              >
+                <span className="material-symbols-outlined text-[14px]">folder_open</span> Google Drive
+              </a>
+            )}
+          </div>
         </div>
       </div>
+
+      {isCoach && <SetupChecklist clientId={client.id} items={setup} onSaveEmail={saveClientEmail} />}
 
       {isCoach && (
         <ClientAlertsBanner
@@ -450,7 +500,8 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
 
       <ClientTabsShell
         tabs={[
-          { key: "onboarding", label: "Onboarding", content: onboardingContent },
+          // Once every step is ticked the header says "Onboarding completed" — the tab goes.
+          ...(onboardingDone ? [] : [{ key: "onboarding", label: "Onboarding", content: onboardingContent }]),
           {
             key: "dashboard",
             label: "Dashboard",

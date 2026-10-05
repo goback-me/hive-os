@@ -25,6 +25,30 @@ if grep -q "REPLACE_WITH_YOUR_DOMAIN" docker-compose.yml; then
   exit 1
 fi
 
+# Required settings — the app can't run without these.
+missing=""
+for v in DATABASE_URL NEXTAUTH_URL NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY CLERK_SECRET_KEY GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_REDIRECT_URI TOKEN_ENCRYPTION_KEY CRON_SECRET APP_DOMAIN; do
+  grep -qE "^$v=.+" .env || missing="$missing $v"
+done
+if [ -n "$missing" ]; then
+  echo "STOP: .env is missing required settings:$missing"
+  echo "See HANDOVER.md → step 4 for what each one is."
+  exit 1
+fi
+if grep -qE "^NEXTAUTH_URL=http://" .env; then
+  echo "STOP: NEXTAUTH_URL starts with http:// — use the live https:// address."
+  exit 1
+fi
+if grep -qE "^RESEND_API_KEY=.+" .env && ! grep -qE "^ACTION_TOKEN_SECRET=.+" .env; then
+  echo "STOP: RESEND_API_KEY is set but ACTION_TOKEN_SECRET isn't — emails can't be sent."
+  echo "Add one: ACTION_TOKEN_SECRET=\$(openssl rand -hex 32)"
+  exit 1
+fi
+# Optional — each feature just stays off without its setting.
+for v in RESEND_API_KEY EMAIL_FROM ANTHROPIC_API_KEY SLACK_BOT_TOKEN SLACK_ADMIN_CHANNEL CLERK_WEBHOOK_SECRET; do
+  grep -qE "^$v=.+" .env || echo "  note: $v isn't set — that feature stays off"
+done
+
 echo "→ Pulling latest code..."
 git checkout -- deploy.sh 2>/dev/null || true
 git pull

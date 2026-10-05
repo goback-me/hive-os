@@ -109,7 +109,8 @@ export async function runMeetingJobs(now = new Date()) {
       const taskId = await ensureTask(m.clientId, {
         kind: "weekly_call",
         dedupeKey: `meeting:${m.id}`,
-        title: `Weekly call: ${m.client.name} – ${day}`,
+        title: `Log the weekly call — ${day}`,
+        why: `${m.agent?.name ?? "The agent"} ran (or should have run) this client's weekly call on ${day} — log how it went in Hive HQ. This task closes itself once it's logged.`,
         description: `Log the call in Hive HQ:\n${link}`,
         assignees: m.agent?.clickupUserId ? [m.agent.clickupUserId] : [],
       }).catch(() => null);
@@ -122,7 +123,8 @@ export async function runMeetingJobs(now = new Date()) {
 
     if (!m.agent?.email) continue;
     const sentTypes = new Set((await prisma.emailLog.findMany({ where: { refIds: { has: m.id } }, select: { type: true } })).map((e) => e.type));
-    const email = (type: string, subject: string, intro: string) =>
+    // Subject says which client and what for; the heading is the plain ask.
+    const email = (type: string, subject: string, heading: string, intro: string) =>
       sendActionEmail({
         to: [m.agent!.email],
         type,
@@ -130,15 +132,16 @@ export async function runMeetingJobs(now = new Date()) {
         refIds: [m.id],
         path: meetingPath(m.client.slug, m.id),
         subject,
-        heading: subject,
+        heading,
         intro,
         button: "Log the call",
+        footnote: `You're getting this because you run the weekly call with ${m.client.name} in Hive HQ.`,
       }).catch((e) => (console.error(`Meeting email (${type}) for ${m.id} failed:`, e), false));
 
     if (!sentTypes.has("meeting_log")) {
-      if (await email("meeting_log", `Log ${day}'s call with ${m.client.name}`, `How did ${day}'s call with ${m.client.name} go? It takes a minute — and if it didn't happen, say why.`)) out.emails++;
+      if (await email("meeting_log", `[${m.client.name}] Log your weekly call — ${day}`, `How did ${day}'s call with ${m.client.name} go?`, `Log the summary, issues, next steps and the client's mood — it takes a minute. If the call didn't happen, just say why.`)) out.emails++;
     } else if (now >= when.remindAt && !sentTypes.has("meeting_reminder")) {
-      if (await email("meeting_reminder", `Reminder: log ${day}'s call with ${m.client.name}`, `${day}'s call with ${m.client.name} still isn't logged. It's flagged to the admins on Friday if it's still open.`)) {
+      if (await email("meeting_reminder", `[${m.client.name}] Reminder: weekly call not logged yet — ${day}`, `${day}'s call with ${m.client.name} still isn't logged`, `Please log it today — if it's still open on Friday it's flagged to the admins.`)) {
         out.reminders++;
         if (m.clickupTaskId) await commentOnTask(m.clickupTaskId, `Reminder: this call still isn't logged in Hive HQ — ${link}`);
       }

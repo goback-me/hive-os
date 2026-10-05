@@ -28,6 +28,7 @@ export async function GET(req: NextRequest) {
       value: true,
       awaitingClientUpdate: true,
       staleInStage: true,
+      hiveStatusRaw: true,
       handoverAt: true,
       createdAt: true,
       stageEvents: { where: { source: { not: "INFERRED" } }, orderBy: { at: "asc" }, select: { stage: true, at: true } },
@@ -36,7 +37,7 @@ export async function GET(req: NextRequest) {
   });
 
   const rows = leads
-    .map(({ stageEvents, reminders, handoverAt, createdAt, awaitingClientUpdate, ...l }) => {
+    .map(({ stageEvents, reminders, handoverAt, createdAt, awaitingClientUpdate, hiveStatusRaw, ...l }) => {
       const first = (s: LeadStageValue) => stageEvents.find((e) => e.stage === s)?.at ?? null;
       const since = stageEvents.filter((e) => e.stage === l.stage).at(-1)?.at ?? null;
       const handover = [...stageEvents].reverse().find((e) => HANDOVER_STAGES.includes(e.stage))?.stage ?? null;
@@ -50,6 +51,8 @@ export async function GET(req: NextRequest) {
         // Which handover (live / attempted / text): the current stage, else the latest it had.
         handoverType: HANDOVER_STAGES.includes(l.stage) ? l.stage : handover,
         handoverAt: handoverAt?.toISOString() ?? null,
+        // What HIVE STATUS says — the label when no handover is on record.
+        sheetStatus: hiveStatusRaw?.trim() && !/^n\/?a$/i.test(hiveStatusRaw.trim()) ? hiveStatusRaw.trim() : null,
         waitingSince: waitingSince.toISOString(),
         remindedAt: reminders[0]?.createdAt.toISOString() ?? null,
       };

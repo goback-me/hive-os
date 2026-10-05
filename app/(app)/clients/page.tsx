@@ -40,6 +40,9 @@ export default async function ClientsPage({
     orderBy: { name: "asc" },
   });
 
+  // Who can run a new client's weekly call (Add Client).
+  const team = await prisma.user.findMany({ where: { role: { in: ["ADMIN", "COACH", "AGENT"] } }, select: { id: true, name: true }, orderBy: { name: "asc" } });
+
   const [revenue, openAlerts] = await Promise.all([
     getRevenueByMonth(clients.map((c) => c.id)),
     prisma.dataAlert.findMany({ where: { clientId: { in: clients.map((c) => c.id) }, status: "OPEN" }, select: { clientId: true, type: true } }),
@@ -63,7 +66,7 @@ export default async function ClientsPage({
               : "Archived clients — unarchive or delete permanently."}
           </p>
         </div>
-        {view === "active" && <AddClientModal action={createClient} />}
+        {view === "active" && !me.isAgent && <AddClientModal action={createClient} team={team} />}
       </div>
 
       <div className="flex gap-2 mb-6">

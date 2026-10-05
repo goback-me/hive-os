@@ -20,29 +20,55 @@ export default function IntegrationsCard({
   onSave,
   onTest,
   onCreateTask,
+  onCreateFolder,
 }: {
   clientId: string;
-  initial: { slackChannelId: string; slackEvents: Events; clickupListId: string };
-  onSave: (clientId: string, input: { slackChannelId: string; slackEvents: Events; clickupListId: string }) => Promise<void>;
+  initial: { slackChannelId: string; slackEvents: Events; clickupListId: string; clickupAssigneeIds: string[] };
+  onSave: (clientId: string, input: { slackChannelId: string; slackEvents: Events; clickupListId: string; clickupAssigneeIds: string[] }) => Promise<void>;
   onTest: (clientId: string) => Promise<Result>;
   onCreateTask: (clientId: string, input: { title: string; description: string; due: string }) => Promise<Result>;
+  onCreateFolder: (clientId: string, spaceId: string) => Promise<{ ok: true; listId: string } | { error: string }>;
 }) {
   const router = useRouter();
   const [form, setForm] = useState(initial);
   const [lists, setLists] = useState<{ id: string; name: string }[] | null>(null);
   const [listsError, setListsError] = useState<string | null>(null);
+  const [spaces, setSpaces] = useState<{ id: string; name: string }[]>([]);
+  const [members, setMembers] = useState<{ id: string; name: string }[]>([]);
+  const [spaceId, setSpaceId] = useState("");
   const [message, setMessage] = useState<{ text: string; ok: boolean } | null>(null);
   const [task, setTask] = useState<{ title: string; description: string; due: string } | null>(null);
   const [pending, startTransition] = useTransition();
   const input = { background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" };
   const dirty = JSON.stringify(form) !== JSON.stringify(initial);
 
-  useEffect(() => {
+  const loadLists = () =>
     fetch("/api/clickup/lists")
       .then((r) => r.json())
-      .then((d) => (d.error ? setListsError(d.error) : setLists(d.lists)))
+      .then((d) => {
+        if (d.error) return setListsError(d.error);
+        setListsError(null);
+        setLists(d.lists);
+        setSpaces(d.spaces ?? []);
+        setMembers(d.members ?? []);
+        setSpaceId((cur) => cur || d.spaces?.[0]?.id || "");
+      })
       .catch(() => setListsError("Couldn't load ClickUp lists"));
+  useEffect(() => {
+    loadLists();
   }, []);
+
+  // The client's own ClickUp folder (Account / Client / Other lists); HQ's
+  // tasks go to Account, so that becomes the client's list.
+  const createFolder = () =>
+    run(async () => {
+      const r = await onCreateFolder(clientId, spaceId);
+      if ("error" in r) return setMessage({ text: `ClickUp: ${r.error}`, ok: false });
+      await loadLists();
+      setForm((f) => ({ ...f, clickupListId: r.listId }));
+      setMessage({ text: "Created the client's Account, Client and Other lists in ClickUp — HQ's tasks go to Account.", ok: true });
+      router.refresh();
+    });
 
   const run = (fn: () => Promise<void>) => startTransition(fn);
   const save = () =>
@@ -103,6 +129,39 @@ export default function IntegrationsCard({
           <p className="text-[11px] mt-0.5" style={{ color: listsError ? "var(--danger)" : "var(--text-muted)" }}>{listsError ?? "Loading lists…"}</p>
         )}
       </label>
+      {/* Who HQ's automated tasks for this client are assigned to. */}
+      {form.clickupListId && members.length > 0 && (
+        <div>
+          <span className="text-xs" style={{ color: "var(--text-muted)" }}>Assign HQ&apos;s tasks to</span>
+          <div className="flex flex-wrap gap-1.5 mt-1">
+            {members.map((m) => {
+              const on = form.clickupAssigneeIds.includes(m.id);
+              return (
+                <button
+                  key={m.id}
+                  onClick={() => setForm({ ...form, clickupAssigneeIds: on ? form.clickupAssigneeIds.filter((x) => x !== m.id) : [...form.clickupAssigneeIds, m.id] })}
+                  className="px-2 py-1 rounded-full text-[11px] font-semibold"
+                  style={on ? { background: "var(--primary)", color: "#fff" } : { border: "1px solid var(--border)", color: "var(--text-secondary)" }}
+                >
+                  {m.name}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+      {spaces.length > 0 && (
+        <div className="flex items-center gap-2">
+          {spaces.length > 1 && (
+            <select value={spaceId} onChange={(e) => setSpaceId(e.target.value)} className="px-2 py-1.5 rounded-lg text-xs outline-none" style={input} aria-label="ClickUp space">
+              {spaces.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          )}
+          <button onClick={createFolder} disabled={pending || !spaceId} className="text-xs font-bold disabled:opacity-40" style={{ color: "var(--primary)" }} title="Account / Client / Other lists for this client — HQ's tasks go to Account">
+            + Create client lists in ClickUp{spaces.length === 1 ? ` (${spaces[0].name})` : ""}
+          </button>
+        </div>
+      )}
 
       {dirty && (
         <button onClick={save} disabled={pending} className="btn-gradient px-4 py-2 rounded-lg text-xs font-bold disabled:opacity-50">

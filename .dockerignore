@@ -1,9 +1,15 @@
+# Never copied into the image: secrets (the app reads .env at runtime via
+# docker-compose's env_file), database backups, local builds and modules
+# (the image installs its own Linux ones).
+.env
+.env.*
+!.env.example
+backups
 node_modules
 .next
 .git
-.env
-.env.*
-!.env.*.example
+*.zip
+*.tsbuildinfo
+.vscode
+.idea
 npm-debug.log*
-
-backups

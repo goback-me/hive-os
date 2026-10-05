@@ -58,14 +58,24 @@ export async function runDailyJobs(now = new Date()) {
         prisma.dataAlert.findMany({ where: { clientId: c.id, status: "OPEN", severity: "DANGER" }, select: { title: true, fixHint: true } }),
         prisma.contactLog.findFirst({ where: { clientId: c.id, nextStep: { not: null } }, orderBy: { contactedAt: "desc" }, select: { nextStep: true, nextStepDue: true } }),
       ]);
+      // Plain sentences — this goes to the client's own channel.
       const t = terms(c.clientType);
+      const n = (v: number, one: string, many: string) => `${v} ${v === 1 ? one : many}`;
+      const quiet = !k.leads && !k.liveTransfers && !k.quotes && !k.sales;
       const lines = [
-        `:sunrise: *${c.name} — yesterday*`,
-        `Leads *${k.leads}* · Live transfers *${k.liveTransfers}* · ${t.quotes} *${k.quotes}* · ${t.sales} *${k.sales}*${k.revenue ? ` ($${Math.round(k.revenue).toLocaleString("en-US")})` : ""}`,
-        awaiting ? `:hourglass_flowing_sand: ${awaiting} lead${awaiting === 1 ? "" : "s"} awaiting the client's update` : null,
-        ...danger.map((a) => `:red_circle: ${a.title} — ${a.fixHint}`),
-        step?.nextStep ? `:arrow_right: Next step: ${step.nextStep}${step.nextStepDue ? ` (by ${step.nextStepDue.toLocaleDateString("en-AU", { timeZone: "Australia/Sydney", day: "numeric", month: "short" })})` : ""}` : null,
-        `<${appUrl()}/clients/${c.slug}|Open in Hive HQ>`,
+        `:sunrise: *Good morning! Here's how yesterday went for ${c.name}:*`,
+        ...(quiet
+          ? ["• A quiet day — no new leads, transfers, quotes or wins."]
+          : [
+              `• ${n(k.leads, "new lead", "new leads")}`,
+              `• ${n(k.liveTransfers, "live transfer", "live transfers")}`,
+              `• ${n(k.quotes, t.quote.toLowerCase(), t.quotes.toLowerCase())} sent`,
+              `• ${n(k.sales, t.sale.toLowerCase(), t.sales.toLowerCase())}${k.revenue ? ` worth $${Math.round(k.revenue).toLocaleString("en-US")}` : ""}`,
+            ]),
+        awaiting ? `:hourglass_flowing_sand: ${n(awaiting, "lead is", "leads are")} waiting for your update — let us know what happened with ${awaiting === 1 ? "it" : "them"}.` : null,
+        ...danger.map((a) => `:warning: ${a.title}. ${a.fixHint}`),
+        step?.nextStep ? `:point_right: Next step: ${step.nextStep}${step.nextStepDue ? ` (by ${step.nextStepDue.toLocaleDateString("en-AU", { timeZone: "Australia/Sydney", day: "numeric", month: "short" })})` : ""}` : null,
+        `<${appUrl()}/clients/${c.slug}|Open Hive HQ>`,
       ].filter(Boolean);
       if (await queueSlack({ clientId: c.id, channel: c.slackChannelId, kind: "client_digest", dedupeKey: key, text: lines.join("\n") })) out.clientDigests++;
     }
@@ -100,10 +110,10 @@ export async function runDailyJobs(now = new Date()) {
   const needs = await getNeedsAction();
   const red = new Set((await getPortfolio({ preset: "this_month" }, now)).rows.filter((r) => r.health === "red").map((r) => r.clientId));
   for (const c of clients.filter((x) => x.clickupListId)) {
-    if (await ensureTask(c.id, { kind: "weekly_update", dedupeKey: `weekly:${c.id}:${weekKey}`, title: `Weekly update: ${c.name}`, description: `Write and publish this week's update in Hive HQ.\n\n${appUrl()}/clients/${c.slug}?tab=dashboard`, dueDate: fridayFive })) out.tasks++;
+    if (await ensureTask(c.id, { kind: "weekly_update", dedupeKey: `weekly:${c.id}:${weekKey}`, title: "Write and publish this week's update (due Friday 5pm)", why: "Every client gets a weekly update from us — this is this week's. Publishing it also posts it to their Slack channel.", description: `Write and publish this week's update in Hive HQ.\n\n${appUrl()}/clients/${c.slug}?tab=dashboard`, dueDate: fridayFive })) out.tasks++;
     if (red.has(c.id)) {
       const step = await nextStepFor(c.id, needs, now);
-      if (await ensureTask(c.id, { kind: "account_review", dedupeKey: `review:${c.id}:${weekKey}`, title: `Account review: ${c.name}`, description: `${c.name} is at risk on the portfolio.\n\n**Suggested next step:** ${step || "Review the client page."}\n\n${appUrl()}/clients/${c.slug}` })) out.tasks++;
+      if (await ensureTask(c.id, { kind: "account_review", dedupeKey: `review:${c.id}:${weekKey}`, title: "Account review — client at risk", why: "The client is red on the portfolio (serious data problems or overdue actions). Review the account this week.", description: `${c.name} is at risk on the portfolio.\n\n**Suggested next step:** ${step || "Review the client page."}\n\n${appUrl()}/clients/${c.slug}` })) out.tasks++;
     }
   }
   return out;

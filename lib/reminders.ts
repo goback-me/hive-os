@@ -6,7 +6,7 @@ import { sydneyDay, sydneyHour, weekStart } from "./sheet-parse";
 import { queueSlack } from "./slack";
 import { ensureTask } from "./clickup";
 import { getClientCycle, type CycleStep } from "./buying-cycle";
-import { appUrl, emailConfigured, sendActionEmail } from "./email";
+import { appUrl, emailConfigured, sendActionEmail, type EmailRow } from "./email";
 
 // "This lead needs your update". The daily cron (from 9am Sydney) reminds
 // the client about leads waiting on them, on a schedule per step — using
@@ -152,6 +152,18 @@ function line(c: Candidate, anchor: Date, stale: boolean, now: Date) {
   return `• ${c.name || "Unnamed lead"} — ${text}${stale ? " Likely lost? Close it out." : ""}`;
 }
 
+// The same lead as a row in the email's list.
+function emailRow(c: Candidate, anchor: Date, stale: boolean, now: Date): EmailRow {
+  const days = Math.max(0, Math.floor((now.getTime() - anchor.getTime()) / DAY));
+  const detail = {
+    awaiting: `${handoverLabel(c.stage)} — what happened next?`,
+    CONSULT_BOOKED: "Consult booked — did it go ahead?",
+    CONSULT_ATTENDED: "Consult done — has a quote gone out?",
+    QUOTE_SENT: "Quote sent — won or lost?",
+  }[stepOf(c)];
+  return { title: c.name || "Unnamed lead", detail, days, flag: stale ? "likely lost?" : undefined };
+}
+
 export async function raiseReminders(now = new Date()) {
   if (sydneyHour(now) < REMINDER_HOUR) return { skipped: "before 9am Sydney" };
 
@@ -221,10 +233,11 @@ export async function raiseReminders(now = new Date()) {
           clientId,
           refIds: mine.map((p) => p.c.id),
           path,
-          subject: `${n} waiting on your update`,
-          heading: `Hi ${client.name}, ${n} ${mine.length === 1 ? "needs" : "need"} your update`,
-          intro: "Tell us what happened with each — it takes a few seconds per lead and updates your sheet too.",
-          lines,
+          subject: `${client.name}: ${n} waiting on your update`,
+          heading: `${n} ${mine.length === 1 ? "is" : "are"} waiting on your update`,
+          intro: `Hi ${client.name} — we handed these leads over to you. Let us know what happened with each one so we can keep your results accurate. It takes a few seconds per lead.`,
+          rows: mine.map((p) => emailRow(p.c, p.anchor, p.stale, now)),
+          footnote: "You're getting this because Hive Social passes leads to you and tracks how they turn out in Hive HQ.",
           button: "Update your leads",
         });
         if (sent) {
@@ -238,7 +251,7 @@ export async function raiseReminders(now = new Date()) {
     if (client.slackChannelId) {
       await queueSlack({ clientId, channel: client.slackChannelId, kind: "client_update_reminder", dedupeKey: `client_update_reminder:${clientId}:${today}`, text: [`:hourglass_flowing_sand: *${n} waiting on an update*`, ...lines, `<${link}|Update them in Hive HQ>`].join("\n") }).catch((e) => console.error("Slack queue failed:", e));
     }
-    await ensureTask(clientId, { kind: "chase_client", dedupeKey: `chase:${clientId}:${weekKey}`, title: `Chase client to update ${n}`, description: `${lines.join("\n")}\n\n${link}` });
+    await ensureTask(clientId, { kind: "chase_client", dedupeKey: `chase:${clientId}:${weekKey}`, title: `Chase client — ${n} waiting on their update`, why: "We handed these leads over and the client hasn't told us what happened. Ask them to update each lead (link below) — their reminder email has the same link.", description: `${lines.join("\n")}\n\n${link}` });
   }
   return { raised: due.length, emailed, clients: dueClients.size, stale: staleIds.length };
 }

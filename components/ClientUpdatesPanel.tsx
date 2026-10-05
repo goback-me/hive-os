@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { DQ_REASONS, DQ_REASON_LABELS, LOST_REASONS, LOST_REASON_LABELS, STAGE_LABELS, type LeadStageValue } from "@/lib/lead-status";
+import { DQ_REASONS, DQ_REASON_LABELS, LOST_REASONS, LOST_REASON_LABELS, STAGE_LABELS, STAGE_STYLE, type LeadStageValue } from "@/lib/lead-status";
 
 type Row = {
   id: string;
@@ -11,6 +11,7 @@ type Row = {
   stage: LeadStageValue;
   handoverType: LeadStageValue | null; // which handover (live / attempted / text)
   handoverAt: string | null;
+  sheetStatus: string | null; // HIVE STATUS text — the label when no handover is on record
   awaiting: boolean; // handed over, no update yet (else booked / attended / quoted and reminded)
   staleInStage: boolean; // 2× the client's usual time in this stage
   waitingSince: string; // the reminders' clock for the lead's current step
@@ -32,6 +33,17 @@ const ACTIONS: { key: string; label: string; stage: LeadStageValue; needs?: "val
 
 const sydDate = (iso: string) => new Date(iso).toLocaleDateString("en-AU", { timeZone: "Australia/Sydney", day: "numeric", month: "short" });
 const daysAgo = (iso: string) => Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000));
+// One column template for the header and every row, so they line up:
+// lead · status · waiting · what happened.
+const GRID = "grid-cols-[minmax(150px,1.1fr)_minmax(130px,170px)_110px_minmax(220px,1.4fr)]";
+
+// Short pill labels (the full ones are long, e.g. "Live attempted (details sent)").
+const SHORT_LABELS: Partial<Record<LeadStageValue, string>> = {
+  HANDOVER_LIVE: "Live transfer",
+  HANDOVER_ATTEMPTED: "Live attempted",
+  HANDOVER_TEXT: "Text handover",
+};
+
 // Days waiting: 0–6 grey, 7–13 amber (reminded), 14+ red.
 const waitStyle = (d: number) =>
   d >= 14 ? { background: "var(--danger-tint)", color: "var(--danger)" } : d >= 7 ? { background: "var(--tag-amber-bg)", color: "var(--tag-amber-fg)" } : { background: "var(--surface-hover)", color: "var(--text-secondary)" };
@@ -106,7 +118,13 @@ export default function ClientUpdatesPanel({
         </p>
       )}
       {error && <p className="text-xs mb-2" style={{ color: "var(--danger)" }}>{error}</p>}
-      <div className="space-y-2">
+      <div className={`grid ${GRID} gap-4 pb-1.5 text-[10px] font-bold tracking-wide`} style={{ color: "var(--text-muted)", borderBottom: "1px solid var(--border)" }}>
+        <span>LEAD</span>
+        <span>STATUS</span>
+        <span>WAITING</span>
+        <span className="text-right">WHAT HAPPENED?</span>
+      </div>
+      <div>
         {ordered.map((r) => (
           <UpdateRow
             key={r.id}
@@ -143,8 +161,12 @@ function UpdateRow({ row, onSave, pinned = false, saved = false }: { row: Row; o
   const amount = Number(value);
   const valid = !!a && (a.needs === "value" ? value.trim() !== "" && Number.isFinite(amount) && amount > 0 : a.needs ? !!reason : true);
   const days = daysAgo(row.waitingSince);
-  const typeLabel = row.awaiting ? (row.handoverType ? STAGE_LABELS[row.handoverType] : "Handed over") : STAGE_LABELS[row.stage];
-  const typeDate = row.awaiting ? row.handoverAt : row.waitingSince;
+  // The status pill: which handover (or the stage it's sat at); with no
+  // handover on record, what the sheet says.
+  const statusStage = row.awaiting ? row.handoverType : row.stage;
+  const statusLabel = statusStage ? SHORT_LABELS[statusStage] ?? STAGE_LABELS[statusStage] : row.sheetStatus ?? "Awaiting update";
+  const statusStyle = statusStage ? STAGE_STYLE[statusStage] : { color: "var(--text-secondary)", bg: "var(--surface-hover)" };
+  const statusDate = row.awaiting ? row.handoverAt : row.waitingSince;
   const inputStyle = { background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" };
 
   function save() {
@@ -156,41 +178,48 @@ function UpdateRow({ row, onSave, pinned = false, saved = false }: { row: Row; o
 
   return (
     <div
-      className={`flex items-center gap-3 flex-wrap py-2 ${pinned || saved ? "px-3 rounded-lg" : ""}`}
+      className={`grid ${GRID} items-center gap-4 py-2.5 ${pinned || saved ? "px-3 rounded-lg" : ""}`}
       style={{
         borderBottom: "1px solid var(--border)",
         ...(saved ? { background: "var(--tag-green-bg)" } : pinned ? { background: "var(--primary-tint)", borderLeft: "3px solid var(--primary)" } : {}),
       }}
     >
-      <div className="min-w-[180px] flex-1">
-        <p className="text-sm font-medium flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
+      <div className="min-w-0">
+        <p className="text-sm font-medium flex items-center gap-2 truncate" style={{ color: "var(--text-primary)" }}>
           {row.name || "Unnamed lead"}
-          {pinned && !saved && <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold" style={{ background: "var(--primary)", color: "#fff" }}>From this email</span>}
+          {pinned && !saved && <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold shrink-0" style={{ background: "var(--primary)", color: "#fff" }}>From this email</span>}
         </p>
-        <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>{[row.phone, row.email].filter(Boolean).join(" · ") || "No contact details"}</p>
+        <p className="text-[11px] truncate" style={{ color: "var(--text-muted)" }}>{[row.phone, row.email].filter(Boolean).join(" · ") || "No contact details"}</p>
       </div>
-      {saved && (
-        <span className="px-2 py-1 rounded-full text-[11px] font-bold flex items-center gap-1" style={{ color: "var(--tag-green-fg)" }}>
+
+      <div className="min-w-0">
+        <span className="inline-block max-w-full truncate px-2.5 py-1 rounded-full text-[11px] font-bold" style={{ background: statusStyle.bg, color: statusStyle.color }} title={statusLabel}>
+          {statusLabel}
+        </span>
+        {statusDate && <p className="text-[11px] mt-0.5 pl-1" style={{ color: "var(--text-muted)" }}>since {sydDate(statusDate)}</p>}
+      </div>
+
+      {saved ? (
+        <span className="col-span-2 justify-self-end px-2 py-1 rounded-full text-[11px] font-bold flex items-center gap-1" style={{ color: "var(--tag-green-fg)" }}>
           <span className="material-symbols-outlined text-[14px]">check_circle</span> Saved
         </span>
-      )}
-      {!saved && (<>
-      <div className="w-[150px]">
-        <p className="text-xs font-semibold" style={{ color: "var(--text-secondary)" }}>{typeLabel}</p>
-        <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>{typeDate ? sydDate(typeDate) : "Date unknown"}</p>
+      ) : (<>
+      <div className="flex items-center gap-1.5">
+        <span className="px-2 py-1 rounded-full text-[11px] font-bold whitespace-nowrap" style={waitStyle(row.staleInStage ? Math.max(days, 14) : days)}>
+          {days}d waiting
+        </span>
+        {row.remindedAt && (
+          <span className="material-symbols-outlined text-[16px]" style={{ color: "var(--tag-amber-fg)" }} title={`Reminder sent ${sydDate(row.remindedAt)}`}>
+            notifications_active
+          </span>
+        )}
       </div>
-      <span className="px-2 py-1 rounded-full text-[10px] font-bold whitespace-nowrap" style={waitStyle(row.staleInStage ? Math.max(days, 14) : days)}>
-        {days} day{days === 1 ? "" : "s"} waiting
-      </span>
+
+      <div className="flex items-center gap-2 flex-wrap justify-end">
       {row.staleInStage && action !== "lost" && (
         <button onClick={() => { setAction("lost"); setReason(""); }} className="text-[11px] font-bold underline" style={{ color: "var(--danger)" }}>
           Likely lost? Close it out
         </button>
-      )}
-      {row.remindedAt && (
-        <span className="px-2 py-1 rounded-full text-[10px] font-bold whitespace-nowrap" style={{ background: "var(--tag-amber-bg)", color: "var(--tag-amber-fg)" }}>
-          Reminder sent
-        </span>
       )}
       <select value={action} onChange={(e) => { setAction(e.target.value); setReason(""); }} className="px-2 py-1.5 rounded-lg text-xs font-bold outline-none" style={inputStyle} aria-label="What happened">
         <option value="">What happened?</option>
@@ -225,6 +254,7 @@ function UpdateRow({ row, onSave, pinned = false, saved = false }: { row: Row; o
           {saving ? "Saving…" : "Save"}
         </button>
       )}
+      </div>
       </>)}
     </div>
   );

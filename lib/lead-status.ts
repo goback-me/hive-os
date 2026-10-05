@@ -208,6 +208,10 @@ export function awaitingClientUpdate(opts: {
   prospectPending: boolean;
 }): boolean {
   if (isTerminal(opts.stage)) return false;
+  // "Not ready yet" (Nurture) is still ours — the client has nothing to
+  // report, even if Prospect Status says "pending update" (an old automation
+  // wrote that for these leads).
+  if (opts.hive?.stage === "NURTURE") return false;
   if (opts.prospectPending) return true;
   return !!opts.hive?.stage && HANDOVER_STAGES.includes(opts.hive.stage) && opts.prospect?.stage === null;
 }
