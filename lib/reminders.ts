@@ -5,23 +5,64 @@ import { milestoneSql } from "./milestones";
 import { sydneyDay, sydneyHour, weekStart } from "./sheet-parse";
 import { queueSlack } from "./slack";
 import { ensureTask } from "./clickup";
+import { getClientCycle, type CycleStep } from "./buying-cycle";
 
-// "This lead needs your update": a handed-over lead the client hasn't
-// reported back on (awaitingClientUpdate). Day 7 after the handover, then
-// every 7 days while it's still waiting, the daily cron (from 9am Sydney)
-// sends ONE combined reminder per client: the in-app task (LeadReminder rows,
-// shown on the "Update your leads" panel), an email (Resend, when
-// RESEND_API_KEY + EMAIL_FROM are set), a post to the client's Slack channel,
-// and a "Chase client" ClickUp task for our team — Slack + ClickUp at most
-// once per client per week. LeadReminder = at most one per lead per 7 days.
+// "This lead needs your update". The daily cron (from 9am Sydney) reminds
+// the client about leads waiting on them, on a schedule per step — using
+// their own buying cycle (lib/buying-cycle.ts):
+//   awaiting (PENDING UPDATE)  7 days after handoverAt, then every 7 days
+//   CONSULT_BOOKED             1 day after the consult if we know its date,
+//                              else handover + handover→attended median;
+//                              then every 7 days
+//   CONSULT_ATTENDED           attended + attended→quote median, then every
+//                              half that median
+//   QUOTE_SENT                 quote + quote→close median, then every
+//                              max(7, median / 2) days
+// At 2× the step's median (14 days for awaiting) the lead is staleInStage:
+// "Likely lost? Close it out" on the Update panel + CLIENT_UPDATE_OVERDUE.
+// Each run sends ONE combined message per client — the in-app task
+// (LeadReminder rows, shown on the "Update your leads" panel), an email
+// (Resend, when RESEND_API_KEY + EMAIL_FROM are set) and a post to the
+// client's Slack channel — plus a "Chase client" ClickUp task for our team,
+// at most once per client per week. LeadReminder (one row per lead per step
+// sent) is what stops a reminder going out twice.
 
 export const REMINDER_DAYS = 7;
 export const REMINDER_HOUR = 9;
 const DAY = 86_400_000;
 
-// The waiting clock: from the handover. A lead marked "pending update" in
-// the sheet without any handover on record falls back to its opt-in date.
-const waitingSince = Prisma.sql`COALESCE(l."handoverAt", l."createdAt")`;
+export type ReminderStep = "awaiting" | "CONSULT_BOOKED" | "CONSULT_ATTENDED" | "QUOTE_SENT";
+export const STAGE_STEPS: ReminderStep[] = ["CONSULT_BOOKED", "CONSULT_ATTENDED", "QUOTE_SENT"];
+export type ReminderPlan = { first: Date; everyDays: number; staleAt: Date };
+
+const plus = (d: Date, days: number) => new Date(d.getTime() + days * DAY);
+
+// When a step's reminders start, how often they repeat, and when the lead is
+// stale. `anchor` = when the step started (handover / attended / quoted);
+// `consultAt` = the consult's own date — not in the sheet yet, so null.
+export function reminderPlan(step: ReminderStep, anchor: Date, cycle: Record<CycleStep, number>, consultAt: Date | null = null): ReminderPlan {
+  switch (step) {
+    case "awaiting":
+      return { first: plus(anchor, REMINDER_DAYS), everyDays: REMINDER_DAYS, staleAt: plus(anchor, 2 * REMINDER_DAYS) };
+    case "CONSULT_BOOKED": {
+      const m = cycle.handoverToAttended;
+      return { first: consultAt ? plus(consultAt, 1) : plus(anchor, m), everyDays: REMINDER_DAYS, staleAt: plus(anchor, 2 * m) };
+    }
+    case "CONSULT_ATTENDED": {
+      const m = cycle.attendedToQuote;
+      return { first: plus(anchor, m), everyDays: m / 2, staleAt: plus(anchor, 2 * m) };
+    }
+    case "QUOTE_SENT": {
+      const m = cycle.quoteToClose;
+      return { first: plus(anchor, m), everyDays: Math.max(REMINDER_DAYS, m / 2), staleAt: plus(anchor, 2 * m) };
+    }
+  }
+}
+
+export const nextReminderAt = (plan: ReminderPlan, lastSent: Date | null) =>
+  lastSent ? new Date(Math.max(plan.first.getTime(), lastSent.getTime() + plan.everyDays * DAY)) : plan.first;
+// By Sydney day, so everything due today goes out together in the 9am run.
+export const isDueOn = (at: Date, now: Date) => sydneyDay(at) <= sydneyDay(now);
 
 // handoverAt for one lead or a whole client: the first handover's milestone
 // (lib/milestones.ts), else the first time a sync saw it at a handover.
@@ -41,70 +82,151 @@ export async function refreshHandoverAt(where: { clientId: string } | { leadId: 
   `;
 }
 
-type Waiting = { id: string; clientId: string; name: string | null; stage: LeadStageValue; since: Date };
-
-// Leads a client has owed an update on for 7+ days since the handover, right
-// now — the data-health CLIENT_UPDATE_OVERDUE check and the reminder list.
-export async function overdueLeads(clientId: string | null, now = new Date()) {
+// Leads the client is overdue on right now: handed over 7+ days ago with no
+// update, or stale in their stage — the data-health CLIENT_UPDATE_OVERDUE
+// check and the weekly draft.
+export async function overdueLeads(clientId: string, now = new Date()) {
   const cutoff = new Date(now.getTime() - REMINDER_DAYS * DAY);
-  return prisma.$queryRaw<Waiting[]>`
-    SELECT * FROM (
-      SELECT l.id, l."clientId", l.name, l.stage, ${waitingSince} AS since
-      FROM "Lead" l JOIN "Client" c ON c.id = l."clientId"
-      WHERE l."deletedAt" IS NULL AND c."archivedAt" IS NULL AND l."awaitingClientUpdate"
-        AND (c."startDate" IS NULL OR l."createdAt" >= c."startDate")
-        ${clientId ? Prisma.sql`AND l."clientId" = ${clientId}` : Prisma.empty}
-    ) d WHERE d.since <= ${cutoff}
-    ORDER BY d.since ASC
+  return prisma.$queryRaw<{ id: string }[]>`
+    SELECT l.id FROM "Lead" l JOIN "Client" c ON c.id = l."clientId"
+    WHERE l."clientId" = ${clientId} AND l."deletedAt" IS NULL
+      AND (c."startDate" IS NULL OR l."createdAt" >= c."startDate")
+      AND ((l."awaitingClientUpdate" AND COALESCE(l."handoverAt", l."createdAt") <= ${cutoff}) OR l."staleInStage")
   `;
 }
 
-export const handoverLabel = (stage: LeadStageValue) => (HANDOVER_STAGES.includes(stage) ? STAGE_LABELS[stage] : "Handed over");
+// The "Update your leads" panel's leads (and the Dashboard tab's count):
+// awaiting from day 1, plus booked / attended / quoted once reminded or stale.
+export const updatePanelWhere = (clientId: string): Prisma.LeadWhereInput => ({
+  clientId,
+  deletedAt: null,
+  OR: [{ awaitingClientUpdate: true }, { staleInStage: true }, ...STAGE_STEPS.map((s) => ({ stage: s as LeadStageValue, reminders: { some: { reason: s } } }))],
+});
+
+export const handoverLabel = (stage: LeadStageValue | null) => (stage && HANDOVER_STAGES.includes(stage) ? STAGE_LABELS[stage] : "Handed over");
+
+type Candidate = {
+  id: string;
+  clientId: string;
+  name: string | null;
+  stage: LeadStageValue;
+  awaiting: boolean;
+  staleInStage: boolean;
+  handoverAt: Date | null;
+  createdAt: Date;
+  bookedAt: Date | null;
+  attendedAt: Date | null;
+  quoteAt: Date | null;
+  stageSince: Date | null;
+  lastSent: Date | null;
+};
+
+const stepOf = (c: Pick<Candidate, "awaiting" | "stage">): ReminderStep => (c.awaiting ? "awaiting" : (c.stage as ReminderStep));
+
+// When the lead's current step started: its milestone, else when it reached
+// the stage, else the opt-in date.
+export function stepAnchor(c: Omit<Candidate, "id" | "clientId" | "name" | "staleInStage" | "lastSent">): Date {
+  const since = c.stageSince ?? c.createdAt;
+  switch (stepOf(c)) {
+    case "awaiting":
+      return c.handoverAt ?? c.createdAt;
+    case "CONSULT_BOOKED":
+      return c.handoverAt ?? c.bookedAt ?? since;
+    case "CONSULT_ATTENDED":
+      return c.attendedAt ?? since;
+    case "QUOTE_SENT":
+      return c.quoteAt ?? since;
+  }
+}
+
+function line(c: Candidate, anchor: Date, stale: boolean, now: Date) {
+  const n = Math.max(0, Math.floor((now.getTime() - anchor.getTime()) / DAY));
+  const d = `${n} day${n === 1 ? "" : "s"}`;
+  const text = {
+    awaiting: `${handoverLabel(c.stage)}, waiting ${d}`,
+    CONSULT_BOOKED: `consult booked, ${d} since handover — did it go ahead?`,
+    CONSULT_ATTENDED: `consult attended ${d} ago — has a quote gone out?`,
+    QUOTE_SENT: `quoted ${d} ago — won or lost?`,
+  }[stepOf(c)];
+  return `• ${c.name || "Unnamed lead"} — ${text}${stale ? " Likely lost? Close it out." : ""}`;
+}
 
 export async function raiseReminders(now = new Date()) {
   if (sydneyHour(now) < REMINDER_HOUR) return { skipped: "before 9am Sydney" };
-  const cutoff = new Date(now.getTime() - REMINDER_DAYS * DAY);
-  const overdue = await overdueLeads(null, now);
-  const reminded = new Set(
-    (await prisma.leadReminder.findMany({ where: { leadId: { in: overdue.map((l) => l.id) }, createdAt: { gt: cutoff } }, select: { leadId: true } })).map((r) => r.leadId)
-  );
-  const due = overdue.filter((l) => !reminded.has(l.id));
-  if (!due.length) return { raised: 0, emailed: 0, clients: 0 };
 
-  await prisma.leadReminder.createMany({ data: due.map((d) => ({ clientId: d.clientId, leadId: d.id, reason: "awaiting" })) });
+  // ponytail: lastSent is the latest reminder for this step ever — a lead
+  // that leaves a step and comes back months later resumes its old cadence.
+  const candidates = await prisma.$queryRaw<Candidate[]>`
+    SELECT l.id, l."clientId", l.name, l.stage, l."awaitingClientUpdate" AS awaiting, l."staleInStage", l."handoverAt", l."createdAt",
+      ${milestoneSql("CONSULT_BOOKED")} AS "bookedAt",
+      ${milestoneSql("CONSULT_ATTENDED")} AS "attendedAt",
+      ${milestoneSql("QUOTE_SENT")} AS "quoteAt",
+      (SELECT MAX(e.at) FROM "LeadStageEvent" e WHERE e."leadId" = l.id AND e.stage = l.stage AND e.source::text <> 'INFERRED') AS "stageSince",
+      (SELECT MAX(r."createdAt") FROM "LeadReminder" r WHERE r."leadId" = l.id
+        AND r.reason = CASE WHEN l."awaitingClientUpdate" THEN 'awaiting' ELSE l.stage::text END) AS "lastSent"
+    FROM "Lead" l JOIN "Client" c ON c.id = l."clientId"
+    WHERE l."deletedAt" IS NULL AND c."archivedAt" IS NULL
+      AND (l."awaitingClientUpdate" OR l.stage::text IN (${Prisma.join(STAGE_STEPS)}))
+      AND (c."startDate" IS NULL OR l."createdAt" >= c."startDate")
+  `;
 
-  // One message per client, listing every overdue lead (not just the ones
-  // whose reminder fell due today).
-  const dueClients = new Set(due.map((d) => d.clientId));
+  const cycles = new Map<string, Record<CycleStep, number>>();
+  for (const clientId of new Set(candidates.map((c) => c.clientId))) {
+    const cy = await getClientCycle(clientId);
+    cycles.set(clientId, { handoverToAttended: cy.handoverToAttended.medianDays, attendedToQuote: cy.attendedToQuote.medianDays, quoteToClose: cy.quoteToClose.medianDays });
+  }
+
+  const planned = candidates.map((c) => {
+    const anchor = stepAnchor(c);
+    const plan = reminderPlan(stepOf(c), anchor, cycles.get(c.clientId)!);
+    return { c, anchor, plan, outstanding: now >= plan.first, due: isDueOn(nextReminderAt(plan, c.lastSent), now), stale: now >= plan.staleAt };
+  });
+
+  // staleInStage follows the schedule; a lead that left its step drops it.
+  const staleIds = planned.filter((p) => p.stale).map((p) => p.c.id);
+  await prisma.$transaction([
+    prisma.lead.updateMany({ where: { staleInStage: true, id: { notIn: staleIds } }, data: { staleInStage: false } }),
+    prisma.lead.updateMany({ where: { staleInStage: false, id: { in: staleIds } }, data: { staleInStage: true } }),
+  ]);
+
+  const due = planned.filter((p) => p.due);
+  if (!due.length) return { raised: 0, emailed: 0, clients: 0, stale: staleIds.length };
+  await prisma.leadReminder.createMany({ data: due.map((p) => ({ clientId: p.c.clientId, leadId: p.c.id, reason: stepOf(p.c) })) });
+
+  // One message per client, listing every lead past its first reminder (not
+  // just the ones that fell due today), longest-waiting first.
+  const dueClients = new Set(due.map((p) => p.c.clientId));
+  const today = sydneyDay(now);
   const weekKey = sydneyDay(weekStart(now));
   let emailed = 0;
   for (const clientId of dueClients) {
-    const leads = overdue.filter((l) => l.clientId === clientId);
     const client = await prisma.client.findUnique({
       where: { id: clientId },
       select: { name: true, slug: true, email: true, slackChannelId: true, users: { where: { role: "CLIENT" }, select: { email: true } } },
     });
     if (!client) continue;
+    const mine = planned.filter((p) => p.c.clientId === clientId && p.outstanding).sort((a, b) => a.anchor.getTime() - b.anchor.getTime());
+    const lines = mine.map((p) => line(p.c, p.anchor, p.stale, now));
     const link = `${process.env.NEXTAUTH_URL || ""}/clients/${client.slug}?tab=dashboard`;
-    const lines = leads.map((l) => `• ${l.name || "Unnamed lead"} — ${handoverLabel(l.stage)}, waiting ${Math.floor((now.getTime() - new Date(l.since).getTime()) / DAY)} days`);
-    const n = `${leads.length} lead${leads.length === 1 ? "" : "s"}`;
+    const n = `${mine.length} lead${mine.length === 1 ? "" : "s"}`;
 
     if (process.env.RESEND_API_KEY && process.env.EMAIL_FROM) {
       try {
-        if (await email(client, `${n} waiting on your update`, [`Hi ${client.name},`, "", `${n} ${leads.length === 1 ? "needs" : "need"} an update from you — tell us what happened with each (booked, quoted, won or lost):`, "", ...lines, "", `Update them here: ${link}`, "", "— Hive Social"].join("\n"))) {
+        const body = [`Hi ${client.name},`, "", `${n} ${mine.length === 1 ? "needs" : "need"} an update from you — tell us what happened with each:`, "", ...lines, "", `Update them here: ${link}`, "", "— Hive Social"].join("\n");
+        if (await email(client, `${n} waiting on your update`, body)) {
           emailed++;
-          await prisma.leadReminder.updateMany({ where: { clientId, leadId: { in: due.map((d) => d.id) }, emailedAt: null }, data: { emailedAt: now } });
+          await prisma.leadReminder.updateMany({ where: { clientId, leadId: { in: due.map((p) => p.c.id) }, emailedAt: null }, data: { emailedAt: now } });
         }
       } catch (err) {
         console.error(`Reminder email for ${clientId} failed:`, err); // the in-app task still shows
       }
     }
     if (client.slackChannelId) {
-      await queueSlack({ clientId, channel: client.slackChannelId, kind: "client_update_reminder", dedupeKey: `client_update_reminder:${clientId}:${weekKey}`, text: [`:hourglass_flowing_sand: *${n} waiting on an update*`, ...lines, `<${link}|Update them in Hive HQ>`].join("\n") }).catch((e) => console.error("Slack queue failed:", e));
+      await queueSlack({ clientId, channel: client.slackChannelId, kind: "client_update_reminder", dedupeKey: `client_update_reminder:${clientId}:${today}`, text: [`:hourglass_flowing_sand: *${n} waiting on an update*`, ...lines, `<${link}|Update them in Hive HQ>`].join("\n") }).catch((e) => console.error("Slack queue failed:", e));
     }
     await ensureTask(clientId, { kind: "chase_client", dedupeKey: `chase:${clientId}:${weekKey}`, title: `Chase client to update ${n}`, description: `${lines.join("\n")}\n\n${link}` });
   }
-  return { raised: due.length, emailed, clients: dueClients.size };
+  return { raised: due.length, emailed, clients: dueClients.size, stale: staleIds.length };
 }
 
 async function email(client: { email: string | null; users: { email: string }[] }, subject: string, text: string) {

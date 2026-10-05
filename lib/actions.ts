@@ -1,5 +1,6 @@
 "use server";
 
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
@@ -8,6 +9,7 @@ import { getClerkAdminClient } from "@/lib/clerk-admin";
 import { syncLeadsFromSheet, type SyncSummary } from "@/lib/lead-sync";
 import { HANDOVER_STAGES, parseTarget, planStageEvents } from "@/lib/lead-status";
 import { refreshHandoverAt } from "@/lib/reminders";
+import { parseCycleOverrides, recalculateCycle, type CycleStep } from "@/lib/buying-cycle";
 import { parseVisibility, type ReportVisibility } from "@/lib/report-visibility";
 import { kickWriteBacks, queueLeadChange } from "@/lib/sheet-writeback";
 import { rebuildHistory } from "@/lib/kpi";
@@ -248,6 +250,7 @@ export async function updateLeadStage(leadId: string, target: string, value?: nu
         // A handover → the client owes us an update (PENDING UPDATE goes to
         // the sheet via queueLeadChange); any other stage is their answer.
         awaitingClientUpdate: HANDOVER_STAGES.includes(stage),
+        staleInStage: false, // a new stage starts its own clock (lib/reminders.ts)
         ...(value !== undefined ? { value } : {}),
       },
     }),
@@ -353,6 +356,21 @@ export async function saveClientType(clientId: string, clientType: string) {
   await requireCoach();
   if (!["TRADE", "SERVICE", "OTHER"].includes(clientType)) throw new Error("Invalid client type");
   await prisma.client.update({ where: { id: clientId }, data: { clientType: clientType as "TRADE" | "SERVICE" | "OTHER" } });
+  revalidatePath(`/clients`);
+}
+
+// Coach-only: the buying-cycle overrides (days per step; blank = learned /
+// default) and an on-demand relearn (lib/buying-cycle.ts).
+export async function saveCycleOverrides(clientId: string, overrides: Partial<Record<CycleStep, number | null>>) {
+  await requireCoach();
+  const clean = parseCycleOverrides(overrides);
+  await prisma.client.update({ where: { id: clientId }, data: { cycleOverrides: Object.keys(clean).length ? clean : Prisma.DbNull } });
+  revalidatePath(`/clients`);
+}
+
+export async function recalculateClientCycle(clientId: string) {
+  await requireCoach();
+  await recalculateCycle(clientId);
   revalidatePath(`/clients`);
 }
 
@@ -678,6 +696,7 @@ export async function deleteClientPermanently(clientId: string) {
     prisma.clickUpTaskLog.deleteMany({ where: { clientId } }),
     prisma.syncReconciliation.deleteMany({ where: { clientId } }),
     prisma.leadReminder.deleteMany({ where: { clientId } }),
+    prisma.clientCycle.deleteMany({ where: { clientId } }),
     prisma.contract.deleteMany({ where: { clientId } }),
     prisma.contactLog.deleteMany({ where: { clientId } }),
     prisma.adSpendDaily.deleteMany({ where: { clientId } }),

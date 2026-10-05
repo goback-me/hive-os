@@ -370,6 +370,9 @@ model Lead {
   // it at a handover. The "Update your leads" clock and reminders run from
   // this. Kept by refreshHandoverAt (lib/reminders.ts).
   handoverAt           DateTime?
+  // Sat in its stage 2× the client's usual time (lib/reminders.ts) — "Likely
+  // lost? Close it out" on the Update panel + CLIENT_UPDATE_OVERDUE.
+  staleInStage         Boolean   @default(false)
 
   // Stable identity across repeated syncs (normalized email/phone/name) —
   // no DB-level unique constraint; matched via findFirst in lib/lead-sync.ts.
@@ -454,12 +457,26 @@ model LeadReminder {
   client    Client    @relation(fields: [clientId], references: [id])
   leadId    String
   lead      Lead      @relation(fields: [leadId], references: [id])
-  reason    String // "awaiting" | "CONSULT_BOOKED" | "QUOTE_SENT"
+  reason    String // the reminder step: "awaiting" | "CONSULT_BOOKED" | "CONSULT_ATTENDED" | "QUOTE_SENT"
   createdAt DateTime  @default(now())
   emailedAt DateTime?
 
   @@index([leadId, createdAt])
   @@index([clientId, createdAt])
+}
+
+// Learned buying cycle per client (lib/buying-cycle.ts): the median days for
+// each step from this client's own leads, cached — recomputed on the 1st of
+// each month by the cron, or a coach's "Recalculate".
+model ClientCycle {
+  clientId   String
+  client     Client   @relation(fields: [clientId], references: [id])
+  step       String // handoverToAttended | attendedToQuote | quoteToClose
+  medianDays Float?
+  n          Int
+  computedAt DateTime @default(now())
+
+  @@id([clientId, step])
 }
 
 // ── Data health (lib/data-health.ts) ─────────────────────────────────────
@@ -875,6 +892,9 @@ model Client {
   // TRADE clients' reports say "Onsite quote" / "Job won" instead of
   // "Quote" / "Sale" (lib/client-terms.ts).
   clientType       ClientType @default(OTHER)
+  // Coach overrides of the buying cycle, in days, e.g. { "quoteToClose": 45 }
+  // (lib/buying-cycle.ts). Missing keys = learned, else the default.
+  cycleOverrides   Json?
 
   contracts      Contract[]
   monthlyKpis    MonthlyKpi[]
@@ -883,6 +903,7 @@ model Client {
   revenueMonthly RevenueMonthly[]
   leads          Lead[]
   leadReminders  LeadReminder[]
+  cycles         ClientCycle[]
   dataAlerts     DataAlert[]
   weeklyUpdates  WeeklyUpdate[]
   slackPosts     SlackPostLog[]

@@ -8,6 +8,7 @@ import { raiseReminders } from "@/lib/reminders";
 import { runHealthChecks } from "@/lib/data-health";
 import { runDailyJobs } from "@/lib/daily-jobs";
 import { deliverSlackPosts } from "@/lib/slack";
+import { recalcDueCycles } from "@/lib/buying-cycle";
 
 // Called by the VPS crontab every 5 min (see DEPLOYMENT.md). Public in middleware.ts —
 // the x-cron-secret header is the only auth. Clients sync one at a time
@@ -67,7 +68,12 @@ export async function GET(req: NextRequest) {
   const sheetless = await prisma.client.findMany({ where: { archivedAt: null, clientSheet: null }, select: { id: true } });
   for (const c of sheetless) await runHealthChecks(c.id).catch((err) => console.error("Health checks failed:", err));
 
-  // 7-day "needs your update" reminders (deduped per lead, so every run is fine).
+  // Each client's buying cycle, relearned on the 1st of the month — before
+  // the reminders, which are scheduled from it.
+  const cycles = await recalcDueCycles().catch((err) => ({ error: err instanceof Error ? err.message : String(err) }));
+
+  // From 9am Sydney: "needs your update" reminders (deduped per lead and step
+  // by LeadReminder, so every run is fine).
   const reminders = await raiseReminders().catch((err) => ({ error: err instanceof Error ? err.message : String(err) }));
 
   // From 8am Sydney, once a day: Slack digests + weekly ClickUp tasks. Then
@@ -75,5 +81,5 @@ export async function GET(req: NextRequest) {
   const daily = await runDailyJobs().catch((err) => ({ error: err instanceof Error ? err.message : String(err) }));
   const slack = await deliverSlackPosts().catch((err) => ({ error: err instanceof Error ? err.message : String(err) }));
 
-  return NextResponse.json({ synced: results.filter((r) => r.ok).length, failed: results.filter((r) => !r.ok).length, results, frozen, writeBack, reminders, daily, slack });
+  return NextResponse.json({ synced: results.filter((r) => r.ok).length, failed: results.filter((r) => !r.ok).length, results, frozen, writeBack, cycles, reminders, daily, slack });
 }

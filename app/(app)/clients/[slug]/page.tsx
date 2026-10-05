@@ -25,7 +25,11 @@ import {
   saveClientIntegrations,
   sendSlackTest,
   createManualClickUpTask,
+  saveCycleOverrides,
+  recalculateClientCycle,
 } from "@/lib/actions";
+import { CYCLE_SAMPLE_NOUN, CYCLE_STEPS, CYCLE_STEP_LABELS, getClientCycle, parseCycleOverrides } from "@/lib/buying-cycle";
+import BuyingCycleCard from "@/components/BuyingCycleCard";
 import { requireClientAccess } from "@/lib/auth";
 import { checkAndGrantAwards } from "@/lib/awards";
 import { STAGE_LABELS, STAGE_STYLE } from "@/lib/lead-status";
@@ -56,6 +60,7 @@ import HoldNote from "@/components/HoldNote";
 import ClientAlertsBanner from "@/components/ClientAlertsBanner";
 import ContactLogPanel from "@/components/ContactLogPanel";
 import WeeklyUpdatesPanel from "@/components/WeeklyUpdatesPanel";
+import { updatePanelWhere } from "@/lib/reminders";
 import IntegrationsCard from "@/components/IntegrationsCard";
 import { parseSlackEvents } from "@/lib/slack";
 import { weekStart } from "@/lib/weekly";
@@ -99,6 +104,7 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
     progressNotes,
     clientSheet,
     awaitingUpdates,
+    cycle,
   ] = await Promise.all([
     // Re-checks revenue/module thresholds against award tiers on every visit —
     // not just when a lesson gets toggled — so editing a tier's threshold or a
@@ -126,8 +132,11 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
     prisma.progressNote.findMany({ where: { clientId: client.id }, orderBy: { createdAt: "desc" }, take: 5 }),
     prisma.clientSheet.findUnique({ where: { clientId: client.id } }),
     // The Dashboard tab's "N leads need an update" badge.
-    prisma.lead.count({ where: { clientId: client.id, deletedAt: null, awaitingClientUpdate: true } }),
+    prisma.lead.count({ where: updatePanelWhere(client.id) }),
+    // Coaches: the buying cycle card (lib/buying-cycle.ts).
+    isCoach ? getClientCycle(client.id) : null,
   ]);
+  const cycleOverrides = parseCycleOverrides(client.cycleOverrides);
 
   // Coaches: this client's open data alerts (lib/data-health.ts).
   const openAlerts = isCoach
@@ -257,6 +266,16 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
               onSave={saveClientIntegrations}
               onTest={sendSlackTest}
               onCreateTask={createManualClickUpTask}
+            />
+          )}
+
+          {cycle && (
+            <BuyingCycleCard
+              clientId={client.id}
+              rows={CYCLE_STEPS.map((step) => ({ ...cycle[step], step, label: CYCLE_STEP_LABELS[step], noun: CYCLE_SAMPLE_NOUN[step], override: cycleOverrides[step] ?? null }))}
+              computedAt={cycle.computedAt?.toISOString() ?? null}
+              onSave={saveCycleOverrides}
+              onRecalculate={recalculateClientCycle}
             />
           )}
 

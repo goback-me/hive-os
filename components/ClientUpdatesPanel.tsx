@@ -11,7 +11,9 @@ type Row = {
   stage: LeadStageValue;
   handoverType: LeadStageValue | null; // which handover (live / attempted / text)
   handoverAt: string | null;
-  waitingSince: string; // the reminders' clock: handoverAt, else opt-in
+  awaiting: boolean; // handed over, no update yet (else booked / attended / quoted and reminded)
+  staleInStage: boolean; // 2× the client's usual time in this stage
+  waitingSince: string; // the reminders' clock for the lead's current step
   value: number | null;
   remindedAt: string | null; // a 7-day reminder is out — this is a task
 };
@@ -122,6 +124,8 @@ function UpdateRow({ row, onSave }: { row: Row; onSave: (target: string, value?:
   const amount = Number(value);
   const valid = !!a && (a.needs === "value" ? value.trim() !== "" && Number.isFinite(amount) && amount > 0 : a.needs ? !!reason : true);
   const days = daysAgo(row.waitingSince);
+  const typeLabel = row.awaiting ? (row.handoverType ? STAGE_LABELS[row.handoverType] : "Handed over") : STAGE_LABELS[row.stage];
+  const typeDate = row.awaiting ? row.handoverAt : row.waitingSince;
   const inputStyle = { background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" };
 
   function save() {
@@ -138,12 +142,17 @@ function UpdateRow({ row, onSave }: { row: Row; onSave: (target: string, value?:
         <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>{[row.phone, row.email].filter(Boolean).join(" · ") || "No contact details"}</p>
       </div>
       <div className="w-[150px]">
-        <p className="text-xs font-semibold" style={{ color: "var(--text-secondary)" }}>{row.handoverType ? STAGE_LABELS[row.handoverType] : "Handed over"}</p>
-        <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>{row.handoverAt ? sydDate(row.handoverAt) : "Date unknown"}</p>
+        <p className="text-xs font-semibold" style={{ color: "var(--text-secondary)" }}>{typeLabel}</p>
+        <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>{typeDate ? sydDate(typeDate) : "Date unknown"}</p>
       </div>
-      <span className="px-2 py-1 rounded-full text-[10px] font-bold whitespace-nowrap" style={waitStyle(days)}>
+      <span className="px-2 py-1 rounded-full text-[10px] font-bold whitespace-nowrap" style={waitStyle(row.staleInStage ? Math.max(days, 14) : days)}>
         {days} day{days === 1 ? "" : "s"} waiting
       </span>
+      {row.staleInStage && action !== "lost" && (
+        <button onClick={() => { setAction("lost"); setReason(""); }} className="text-[11px] font-bold underline" style={{ color: "var(--danger)" }}>
+          Likely lost? Close it out
+        </button>
+      )}
       {row.remindedAt && (
         <span className="px-2 py-1 rounded-full text-[10px] font-bold whitespace-nowrap" style={{ background: "var(--tag-amber-bg)", color: "var(--tag-amber-fg)" }}>
           Reminder sent

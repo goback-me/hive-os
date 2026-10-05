@@ -133,7 +133,7 @@ export async function runHealthChecks(clientId: string, now = new Date()) {
   leadCheck("LEAD_NO_CAMPAIGN", "WARNING", ids((l) => noCampaign(l.campaign)), (n) => `${plural(n, "lead")} with no campaign`, "They show as Unattributed, so campaign costs can't include them.", "Fill in the Campaign column in the sheet.", url.sheet);
   const writeFails = leads.filter((l) => l.sheetWriteError);
   leadCheck("WRITEBACK_FAILED", "WARNING", writeFails.map((l) => l.id), (n) => `${plural(n, "status change")} not written to the sheet`, writeFails[0]?.sheetWriteError ?? "", "Fix what the error says (often: reconnect Google or add the missing dropdown option), then change the status again.");
-  leadCheck("CLIENT_UPDATE_OVERDUE", "WARNING", (await overdueLeads(clientId, now)).map((l) => l.id), (n) => `${plural(n, "lead")} waiting 7+ days on the client`, "Handed over 7+ days ago with no outcome from the client yet.", "Chase the client to update them (Dashboard → Update your leads).", url.dashboard);
+  leadCheck("CLIENT_UPDATE_OVERDUE", "WARNING", (await overdueLeads(clientId, now)).map((l) => l.id), (n) => `${plural(n, "lead")} overdue for the client's update`, "Handed over 7+ days ago with no update, or sitting in a stage twice as long as this client usually takes.", "Chase the client to update them (Dashboard → Update your leads).", url.dashboard);
 
   if (scope.source === "meta") {
     const known = new Set(scope.campaigns.map((c) => c.name.toLowerCase().trim()));
