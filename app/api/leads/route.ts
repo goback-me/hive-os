@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireUser } from "@/lib/auth";
+import { requireUser, canAccessClient } from "@/lib/auth";
 import { LEAD_STAGES, type LeadStageValue } from "@/lib/lead-status";
 import { rangeFromParams } from "@/lib/date-range";
 
@@ -12,7 +12,7 @@ export async function GET(req: NextRequest) {
   if (!clientId) return NextResponse.json({ error: "clientId is required" }, { status: 400 });
 
   const user = await requireUser();
-  if (user.role === "CLIENT" && clientId !== user.clientId) {
+  if (!canAccessClient(user, clientId)) {
     return NextResponse.json({ error: "Not authorized for this client" }, { status: 403 });
   }
 
@@ -124,6 +124,9 @@ export async function GET(req: NextRequest) {
       stage: l.stage,
       dqReason: l.dqReason,
       dqPhase: l.dqPhase,
+      dqReasonSource: l.dqReasonSource,
+      dqReasonEvidence: l.dqReasonEvidence,
+      returnedCount: l.returnedCount,
       lostReason: l.lostReason,
       callAttempts: l.callAttempts,
       hqNewer: !!l.hqStatusUpdatedAt && (!l.sheetStatusUpdatedAt || l.hqStatusUpdatedAt > l.sheetStatusUpdatedAt),

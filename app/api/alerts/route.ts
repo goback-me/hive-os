@@ -6,7 +6,7 @@ import { getCurrentUser } from "@/lib/auth";
 // Coaches / admins only.
 export async function GET(req: NextRequest) {
   const user = await getCurrentUser();
-  if (user?.role !== "COACH") return NextResponse.json({ error: "Not authorized" }, { status: 403 });
+  if (user?.role !== "COACH" || user.isAgent) return NextResponse.json({ error: "Not authorized" }, { status: 403 });
   const clientId = req.nextUrl.searchParams.get("clientId");
   const alerts = await prisma.dataAlert.findMany({
     where: { status: "OPEN", client: { archivedAt: null }, ...(clientId ? { clientId } : {}) },

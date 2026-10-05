@@ -75,7 +75,9 @@ comments). `deploy.sh` won't proceed while the placeholder password is there.
 | `TOKEN_ENCRYPTION_KEY` | Yes | `openssl rand -hex 32` — encrypts stored Google / Meta tokens at rest. Meta needs no app keys: each client's ad account ID + token is pasted on their Ads tab |
 | `CRON_SECRET` | Yes | `openssl rand -hex 32` — auth for the cron (see below) |
 | `ANTHROPIC_API_KEY` | Optional | console.anthropic.com → API Keys — classifies lead-note entries the regex rules miss |
-| `RESEND_API_KEY` / `EMAIL_FROM` | Optional | resend.com — emails the 7-day "leads waiting on your update" reminders; `EMAIL_FROM` must be on a domain verified in Resend. Unset = in-app only. SMTP isn't supported |
+| `RESEND_API_KEY` / `EMAIL_FROM` | Optional | resend.com — emails the 7-day "leads waiting on your update" reminders; `EMAIL_FROM` must be on a domain verified in Resend. Unset = in-app only. SMTP isn't supported. Also used for the weekly call emails to agents |
+| `ACTION_TOKEN_SECRET` | With Resend | Signs the one-button links in action emails (`openssl rand -hex 32`). Not a login — the page still needs a sign-in. Changing it invalidates links already sent |
+| `APP_URL` | Optional | Base URL for email links; defaults to `NEXTAUTH_URL` |
 | `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET` | Optional | api.slack.com → your app → Basic Information. Under OAuth & Permissions add bot scopes `chat:write` + `chat:write.public` and redirect URL `https://<your domain>/api/slack/callback`, then use **Add to Slack** in Settings → Integrations |
 | `SLACK_BOT_TOKEN` | Optional | Fallback when Slack isn't connected in Settings: a bot token with `chat:write`, invited to every client channel and the admin channel |
 | `SLACK_ADMIN_CHANNEL` | Optional | Channel ID for the daily 8am portfolio digest |

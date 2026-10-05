@@ -4,10 +4,14 @@
 // keeps those entries as NOTE.
 
 import Anthropic from "@anthropic-ai/sdk";
-import { NOTE_EVENTS, type NoteEventValue } from "./notes-parser";
+import { type NoteEventValue } from "./notes-parser";
+import { DQ_REASONS, type DqReasonValue } from "./lead-status";
 
 const MODEL = "claude-sonnet-4-6";
 const BATCH = 100;
+// The events this pass may answer with — the call-attempt kinds and
+// AM_SCENARIO come from the rules (lib/notes-parser.ts), never from here.
+const AI_EVENTS: NoteEventValue[] = ["CALL_ATTEMPT", "DQ_SPAM", "HANDOVER_LIVE", "HANDOVER_TEXT", "CONSULT_BOOKED", "CONSULT_ATTENDED", "QUOTE_SENT", "NOTE"];
 
 const SYSTEM = `You classify short call-centre notes about sales leads for an Australian home-services agency.
 Each note is one touch logged by the team. Pick exactly one event per note:
@@ -28,7 +32,7 @@ const SCHEMA = {
       type: "array",
       items: {
         type: "object",
-        properties: { id: { type: "integer" }, event: { type: "string", enum: [...NOTE_EVENTS] } },
+        properties: { id: { type: "integer" }, event: { type: "string", enum: AI_EVENTS } },
         required: ["id", "event"],
         additionalProperties: false,
       },
@@ -65,7 +69,78 @@ export async function classifyNotesWithAI(texts: string[]): Promise<NoteEventVal
     const text = response.content.find((b): b is Anthropic.TextBlock => b.type === "text")?.text ?? "";
     const parsed = JSON.parse(text) as { results: { id: number; event: NoteEventValue }[] };
     for (const r of parsed.results) {
-      if (Number.isInteger(r.id) && r.id >= 0 && r.id < batch.length && NOTE_EVENTS.includes(r.event)) out[start + r.id] = r.event;
+      if (Number.isInteger(r.id) && r.id >= 0 && r.id < batch.length && AI_EVENTS.includes(r.event)) out[start + r.id] = r.event;
+    }
+  }
+  return out;
+}
+
+// ── Why a lead was disqualified ──────────────────────────────────────────
+// For DQ'd leads whose feedback the rules (dqFromNotes) couldn't read — an
+// account manager's write-up, say. Haiku, strict reason enum + a short
+// evidence line. Same contract as above: null without a key, throws on API
+// errors.
+const DQ_MODEL = "claude-haiku-4-5";
+const DQ_BATCH = 50;
+
+const DQ_SYSTEM = `You read the call notes for sales leads an Australian home-services agency disqualified, and say why each was disqualified.
+Pick exactly one reason per lead:
+- SPAM: fake or unreachable details (wrong/disconnected number, test lead)
+- LOCATION: outside the area the business services
+- BUDGET: couldn't afford it / too expensive
+- PRICE_SHOPPER: only collecting quotes or looking around on price
+- NOT_INTERESTED: didn't want it, didn't enquire, already has someone
+- GHOSTED: stopped responding
+- NOT_SUITABLE: the job or the person isn't a fit for the service
+- UNKNOWN: the notes don't say
+Evidence: at most 20 words, quoting or paraphrasing the notes that show the reason. When unsure, answer UNKNOWN.`;
+
+const DQ_SCHEMA = {
+  type: "object",
+  properties: {
+    results: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: { id: { type: "integer" }, reason: { type: "string", enum: [...DQ_REASONS] }, evidence: { type: "string" } },
+        required: ["id", "reason", "evidence"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["results"],
+  additionalProperties: false,
+};
+
+const words20 = (s: string) => s.trim().split(/\s+/).slice(0, 20).join(" ");
+
+// leads[i] = that lead's note entries, oldest first → its reason.
+export async function classifyDqWithAI(leads: string[][]): Promise<{ reason: DqReasonValue; evidence: string }[] | null> {
+  if (!process.env.ANTHROPIC_API_KEY || !leads.length) return null;
+  const client = new Anthropic();
+  const out = leads.map(() => ({ reason: "UNKNOWN" as DqReasonValue, evidence: "" }));
+
+  for (let start = 0; start < leads.length; start += DQ_BATCH) {
+    const batch = leads.slice(start, start + DQ_BATCH);
+    const response = await client.messages.create({
+      model: DQ_MODEL,
+      max_tokens: 8000,
+      system: DQ_SYSTEM,
+      messages: [
+        {
+          role: "user",
+          content: `Give each lead's DQ reason. Return one result per id.\n\n${batch.map((notes, i) => `Lead ${i}:\n${notes.map((n) => `- ${n}`).join("\n")}`).join("\n\n")}`,
+        },
+      ],
+      output_config: { format: { type: "json_schema", schema: DQ_SCHEMA } },
+    });
+    if (response.stop_reason === "refusal" || response.stop_reason === "max_tokens") {
+      throw new Error(`DQ classification stopped early (${response.stop_reason})`);
+    }
+    const text = response.content.find((b): b is Anthropic.TextBlock => b.type === "text")?.text ?? "";
+    const parsed = JSON.parse(text) as { results: { id: number; reason: DqReasonValue; evidence: string }[] };
+    for (const r of parsed.results) {
+      if (Number.isInteger(r.id) && r.id >= 0 && r.id < batch.length && DQ_REASONS.includes(r.reason)) out[start + r.id] = { reason: r.reason, evidence: words20(r.evidence ?? "") };
     }
   }
   return out;

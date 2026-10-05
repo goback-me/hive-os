@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { saveIntegrationSettings, disconnectSlack, createOnboardingStepTemplate, createModule, createClient } from "@/lib/actions";
 import { requireCoach } from "@/lib/auth";
+import { listClickUpMembers } from "@/lib/clickup";
 import UsersPanel from "./UsersPanel";
 import AddLessonForm from "@/components/AddLessonForm";
 
@@ -24,7 +25,10 @@ export default async function SettingsPage({ searchParams }: { searchParams: { s
     email: u.email,
     role: u.role,
     clientName: u.client?.name ?? null,
+    clickupUserId: u.clickupUserId,
   }));
+  // ClickUp members for the team-member mapping; null when ClickUp isn't set up (or is down).
+  const clickupMembers = await listClickUpMembers().catch(() => null);
 
   return (
     <div className="p-10 max-w-[1000px] mx-auto space-y-8">
@@ -33,7 +37,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: { s
         <p style={{ color: "var(--text-secondary)" }}>Connections and templates used across every client.</p>
       </div>
 
-      <UsersPanel users={userRows} clients={clients} onCreateClient={createClient} canManageAdmins={me.isAdmin} />
+      <UsersPanel users={userRows} clients={clients} onCreateClient={createClient} canManageAdmins={me.isAdmin} clickupMembers={clickupMembers} />
 
       <section className="card rounded-2xl p-6">
         <h3 className="font-heading font-bold text-lg mb-1" style={{ color: "var(--text-primary)" }}>Integrations</h3>

@@ -1,13 +1,13 @@
 "use server";
 
-import { Prisma } from "@prisma/client";
+import { Prisma, type ClientMood, type Weekday } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 import { requireAdmin, requireCoach, requireClientAccess } from "@/lib/auth";
 import { getClerkAdminClient } from "@/lib/clerk-admin";
 import { syncLeadsFromSheet, type SyncSummary } from "@/lib/lead-sync";
-import { HANDOVER_STAGES, parseTarget, planStageEvents } from "@/lib/lead-status";
+import { HANDOVER_STAGES, isReturn, parseTarget, planStageEvents } from "@/lib/lead-status";
 import { refreshHandoverAt } from "@/lib/reminders";
 import { parseCycleOverrides, recalculateCycle, type CycleStep } from "@/lib/buying-cycle";
 import { parseVisibility, type ReportVisibility } from "@/lib/report-visibility";
@@ -15,8 +15,9 @@ import { kickWriteBacks, queueLeadChange } from "@/lib/sheet-writeback";
 import { rebuildHistory } from "@/lib/kpi";
 import { runHealthChecks } from "@/lib/data-health";
 import { draftWeeklyUpdate } from "@/lib/weekly";
-import { kickSlack, parseSlackEvents, queueLeadEvent, queueTestMessage, queueWeeklyUpdatePost } from "@/lib/slack";
-import { ensureTask } from "@/lib/clickup";
+import { kickSlack, parseSlackEvents, queueLeadEvent, queueSlack, queueTestMessage, queueWeeklyUpdatePost } from "@/lib/slack";
+import { NOT_HELD_REASONS, WEEKDAYS, callDateLabel, meetingTaskUpdate } from "@/lib/weekly-meetings";
+import { ensureTask, finishTask } from "@/lib/clickup";
 import { sydneyLocalToDate } from "@/lib/sheet-parse";
 
 function slugify(name: string) {
@@ -230,13 +231,16 @@ export async function updateLeadStage(leadId: string, target: string, value?: nu
   );
   const plan = planStageEvents({ oldStage: lead.stage, newStage: stage, prior: null, eventStages });
   const now = new Date();
+  // Sent back to Chase Up after a handover: a RETURNED_BY_CLIENT event, counted on the lead.
+  const returned = isReturn(lead.stage, stage);
+  const source = (e: { kind: string; stage: string }) => (e.kind === "inferred" ? ("INFERRED" as const) : returned && e.stage === "CHASE_UP" ? ("RETURNED_BY_CLIENT" as const) : ("MANUAL" as const));
 
   await prisma.$transaction([
     prisma.leadActivity.create({
       data: { leadId, fromStatus: lead.stage, toStatus: stage, value: value ?? null, changedBy: user.name },
     }),
     prisma.leadStageEvent.createMany({
-      data: plan.events.map((e) => ({ leadId, stage: e.stage, at: now, source: e.kind === "inferred" ? ("INFERRED" as const) : ("MANUAL" as const) })),
+      data: plan.events.map((e) => ({ leadId, stage: e.stage, at: now, source: source(e) })),
     }),
     prisma.lead.update({
       where: { id: leadId },
@@ -246,6 +250,9 @@ export async function updateLeadStage(leadId: string, target: string, value?: nu
         // Re-picking the reason on an already-DQ'd lead keeps how far it got.
         dqPhase: stage === "DISQUALIFIED" ? (lead.stage === "DISQUALIFIED" && lead.dqPhase ? lead.dqPhase : plan.dqPhase) : null,
         lostReason: stage === "LOST" ? parsed.lostReason ?? "UNKNOWN" : null,
+        dqReasonSource: stage === "DISQUALIFIED" ? "MANUAL" : null,
+        dqReasonEvidence: null,
+        ...(returned ? { returnedCount: { increment: 1 }, lastReturnedAt: now } : {}),
         hqStatusUpdatedAt: now,
         // A handover → the client owes us an update (PENDING UPDATE goes to
         // the sheet via queueLeadChange); any other stage is their answer.
@@ -368,6 +375,20 @@ export async function saveCycleOverrides(clientId: string, overrides: Partial<Re
   revalidatePath(`/clients`);
 }
 
+// Coach-only: feedback-cell name aliases, one "short = Full name" per line.
+export async function saveNoteAliases(clientId: string, text: string) {
+  await requireCoach();
+  const aliases = Object.fromEntries(
+    text
+      .split("\n")
+      .map((l) => l.split("=").map((s) => s.trim()))
+      .filter((p) => p.length === 2 && p[0] && p[1])
+      .map(([k, v]) => [k.toLowerCase(), v])
+  );
+  await prisma.client.update({ where: { id: clientId }, data: { noteAliases: Object.keys(aliases).length ? aliases : Prisma.DbNull } });
+  revalidatePath(`/clients`);
+}
+
 export async function recalculateClientCycle(clientId: string) {
   await requireCoach();
   await recalculateCycle(clientId);
@@ -386,6 +407,100 @@ export async function recheckClientHealth(clientId: string) {
 
 // Log a call / meeting / message with the client. The latest one is the
 // portfolio's "Last contact" and drives the "no call in 10+ days" action.
+// ── Weekly call (lib/weekly-meetings.ts) ─────────────────────────────────
+// Coach-only: who runs this client's weekly call, and on which day.
+export async function saveWeeklyCall(clientId: string, agentId: string | null, day: string) {
+  await requireCoach();
+  if (!WEEKDAYS.includes(day as Weekday)) throw new Error("Invalid day");
+  if (agentId) {
+    const agent = await prisma.user.findUnique({ where: { id: agentId }, select: { role: true } });
+    if (!agent || agent.role === "CLIENT") throw new Error("Pick a team member");
+  }
+  await prisma.client.update({ where: { id: clientId }, data: { weeklyCallAgentId: agentId || null, weeklyCallDay: day as Weekday } });
+  revalidatePath(`/clients`);
+}
+
+export type MeetingInput = {
+  held: boolean;
+  summary: string;
+  issues: string;
+  nextSteps: string;
+  clientMood: ClientMood | "";
+  nextMeetingAt: string; // yyyy-mm-dd
+  leadsDiscussed: string[];
+  leadsReturned: string[];
+  notHeldReason: keyof typeof NOT_HELD_REASONS | "";
+  notHeldText: string;
+};
+
+// The agent logs a weekly call. HELD: saved, returned leads go back to Chase
+// Up (RETURNED_BY_CLIENT + write-back), a ContactLog entry, the summary to
+// the client's Slack channel, and the ClickUp task gets the summary and is
+// closed. NOT_HELD: saved, the task says why and is closed, MEETING_MISSED
+// is raised, and the admin channel hears about it. Slack / ClickUp failures
+// never block the save.
+export async function submitWeeklyMeeting(meetingId: string, input: MeetingInput) {
+  const meeting = await prisma.weeklyMeeting.findUnique({ where: { id: meetingId }, include: { client: { select: { id: true, name: true, slug: true, slackChannelId: true } } } });
+  if (!meeting) throw new Error("Meeting not found");
+  const user = await requireClientAccess(meeting.clientId);
+  if (user.role !== "COACH") throw new Error("Only the team logs weekly calls");
+  if (meeting.status !== "PENDING") throw new Error("This call has already been logged");
+
+  const text = (s: string) => s.trim() || null;
+  const due = input.nextMeetingAt.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const nextMeetingAt = due ? sydneyLocalToDate(Number(due[1]), Number(due[2]), Number(due[3])) : null;
+  const leadIds = async (ids: string[]) =>
+    (await prisma.lead.findMany({ where: { id: { in: ids }, clientId: meeting.clientId, deletedAt: null }, select: { id: true, stage: true } }));
+
+  if (input.held) {
+    if (!input.summary.trim()) throw new Error("Add a short summary of the call");
+    const discussed = (await leadIds(input.leadsDiscussed)).map((l) => l.id);
+    const returnable = (await leadIds(input.leadsReturned)).filter((l) => isReturn(l.stage, "CHASE_UP")).map((l) => l.id);
+    const saved = await prisma.weeklyMeeting.update({
+      where: { id: meetingId },
+      data: {
+        status: "HELD",
+        summary: text(input.summary),
+        issues: text(input.issues),
+        nextSteps: text(input.nextSteps),
+        clientMood: input.clientMood || null,
+        nextMeetingAt,
+        leadsDiscussed: discussed,
+        leadsReturned: returnable,
+        submittedAt: new Date(),
+        submittedBy: user.name,
+      },
+    });
+    for (const id of returnable) await updateLeadStage(id, "CHASE_UP");
+    await prisma.contactLog.create({
+      data: { clientId: meeting.clientId, contactedAt: meeting.weekOf, method: "meeting", loggedBy: user.name, notes: text(input.summary), nextStep: text(input.nextSteps), nextStepDue: nextMeetingAt },
+    });
+    if (meeting.client.slackChannelId) {
+      const t = [
+        `:telephone_receiver: *Weekly call — ${callDateLabel(meeting.weekOf)}* (${user.name})`,
+        input.summary.trim(),
+        input.issues.trim() && `*Issues*\n${input.issues.trim()}`,
+        input.nextSteps.trim() && `*Next steps*\n${input.nextSteps.trim()}`,
+        returnable.length ? `${returnable.length} lead${returnable.length === 1 ? "" : "s"} returned to chase up` : null,
+      ].filter(Boolean).join("\n\n");
+      await queueSlack({ clientId: meeting.clientId, channel: meeting.client.slackChannelId, kind: "weekly_call", dedupeKey: `weekly_call:${meetingId}`, text: t }).catch(() => {});
+    }
+    const update = meetingTaskUpdate(saved);
+    if (meeting.clickupTaskId && update) await finishTask(meeting.clickupTaskId, update.description);
+  } else {
+    if (!input.notHeldReason) throw new Error("Say why the call didn't happen");
+    const reason = [NOT_HELD_REASONS[input.notHeldReason], input.notHeldText.trim()].filter(Boolean).join(" — ");
+    const saved = await prisma.weeklyMeeting.update({ where: { id: meetingId }, data: { status: "NOT_HELD", notHeldReason: reason, submittedAt: new Date(), submittedBy: user.name } });
+    const update = meetingTaskUpdate(saved);
+    if (meeting.clickupTaskId && update) await finishTask(meeting.clickupTaskId, update.description);
+    const admin = process.env.SLACK_ADMIN_CHANNEL;
+    if (admin) await queueSlack({ channel: admin, clientId: meeting.clientId, kind: "meeting_missed", dedupeKey: `meeting_missed:${meetingId}`, text: `:warning: *${meeting.client.name}* — ${callDateLabel(meeting.weekOf)}'s weekly call didn't happen: ${reason} (${user.name})` }).catch(() => {});
+  }
+  kickSlack();
+  await runHealthChecks(meeting.clientId).catch((e) => console.error("Health checks failed:", e)); // MEETING_MISSED / clears MEETING_NOT_LOGGED
+  revalidatePath(`/clients`);
+}
+
 export async function logContact(clientId: string, formData: FormData) {
   const user = await requireCoach();
   const day = String(formData.get("date") || "");
@@ -697,6 +812,8 @@ export async function deleteClientPermanently(clientId: string) {
     prisma.syncReconciliation.deleteMany({ where: { clientId } }),
     prisma.leadReminder.deleteMany({ where: { clientId } }),
     prisma.clientCycle.deleteMany({ where: { clientId } }),
+    prisma.weeklyMeeting.deleteMany({ where: { clientId } }),
+    prisma.emailLog.deleteMany({ where: { clientId } }),
     prisma.contract.deleteMany({ where: { clientId } }),
     prisma.contactLog.deleteMany({ where: { clientId } }),
     prisma.adSpendDaily.deleteMany({ where: { clientId } }),
@@ -731,8 +848,8 @@ export async function createUser(formData: FormData) {
 
   const name = String(formData.get("name") || "").trim();
   const email = String(formData.get("email") || "").trim().toLowerCase();
-  const role = String(formData.get("role") || "CLIENT") as "ADMIN" | "COACH" | "CLIENT";
-  if (!["ADMIN", "COACH", "CLIENT"].includes(role)) throw new Error("Invalid role");
+  const role = String(formData.get("role") || "CLIENT") as "ADMIN" | "COACH" | "CLIENT" | "AGENT";
+  if (!["ADMIN", "COACH", "CLIENT", "AGENT"].includes(role)) throw new Error("Invalid role");
   if (role === "ADMIN" && !me.isAdmin) throw new Error("Only an admin can create another admin");
   const clientId = String(formData.get("clientId") || "") || null;
 
@@ -812,6 +929,13 @@ export async function createUser(formData: FormData) {
 
   revalidatePath("/settings");
   return { email, tempPassword };
+}
+
+// Coach-only: a team member's ClickUp user, for assigning weekly call tasks.
+export async function saveUserClickUp(userId: string, clickupUserId: string | null) {
+  await requireCoach();
+  await prisma.user.update({ where: { id: userId }, data: { clickupUserId: clickupUserId?.trim() || null } });
+  revalidatePath("/settings");
 }
 
 export async function deleteUser(userId: string) {

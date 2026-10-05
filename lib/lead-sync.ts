@@ -9,13 +9,14 @@ import { refreshHandoverAt } from "@/lib/reminders";
 import { kickSlack, queueLeadEvent } from "@/lib/slack";
 import { clampRange, getReportingScope, scopedSpend } from "@/lib/reporting-scope";
 import { classifyHive, classifyProspect, isPendingUpdate, parseMapping, resolveStatus } from "@/lib/status-classifier";
-import { NOTES_KEYWORDS, parseNotes, type ParsedNote } from "@/lib/notes-parser";
-import { classifyNotesWithAI } from "@/lib/notes-ai";
+import { NOTES_KEYWORDS, dqFromNotes, isCallAttempt, parseNotes, type ParsedNote } from "@/lib/notes-parser";
+import { classifyDqWithAI, classifyNotesWithAI } from "@/lib/notes-ai";
 import { milestoneSql } from "@/lib/milestones";
 import {
   HANDOVER_STAGES,
   awaitingClientUpdate,
   combineTargets,
+  isReturn,
   planStageEvents,
   type DqPhaseValue,
   type LeadStageValue,
@@ -206,20 +207,57 @@ type PendingUpdate = {
   value: number | null;
   events: PlannedEvent[];
   noteJob?: NoteJob;
+  returned?: boolean; // sent back to Chase Up by the client (isReturn)
+  dqNotes?: string[]; // DQ reason left to the AI pass — the lead's note entries
 };
 
-type StageEventRow = { id: string; leadId: string; stage: LeadStageValue; at: Date; source: "SYNC" | "IMPORT" | "INFERRED" };
+type StageEventRow = { id: string; leadId: string; stage: LeadStageValue; at: Date; source: "SYNC" | "IMPORT" | "INFERRED" | "RETURNED_BY_CLIENT" };
 
 // Planned events → rows. A brand-new lead's stages are IMPORT (we don't know
-// when they happened); a change seen on an existing lead is SYNC.
-function eventRows(leadId: string, planned: PlannedEvent[], isNew: boolean, at: Date): StageEventRow[] {
+// when they happened); a change seen on an existing lead is SYNC — or
+// RETURNED_BY_CLIENT when it's a handed-over lead going back to Chase Up.
+function eventRows(leadId: string, planned: PlannedEvent[], isNew: boolean, at: Date, returned = false): StageEventRow[] {
   return planned.map((e) => ({
     id: randomUUID(),
     leadId,
     stage: e.stage,
     at,
-    source: e.kind === "inferred" ? "INFERRED" : isNew ? "IMPORT" : "SYNC",
+    source: e.kind === "inferred" ? "INFERRED" : isNew ? "IMPORT" : returned && e.kind === "change" && e.stage === "CHASE_UP" ? "RETURNED_BY_CLIENT" : "SYNC",
   }));
+}
+
+// Where a DQ's reason comes from (Lead.dqReasonSource): the status columns
+// when they name one; else a reason set in HQ stands; else — when our team
+// DQ'd it in HIVE STATUS and Prospect Status is blank — the feedback notes
+// (dqFromNotes), with the AI pass for write-ups the rules can't read. An AI
+// answer is kept until the notes cell changes. Mutates `reasons`.
+function applyDqSource(
+  reasons: ReturnType<typeof reasonFields>,
+  o: { final: StageTarget & { stage: LeadStageValue }; hive?: StageTarget; prospect?: StageTarget; existing?: ExistingLead; notes: ParsedNote[]; cellChanged: boolean }
+): { fields: Record<string, unknown>; aiNotes?: string[] } {
+  if (o.final.stage !== "DISQUALIFIED") return { fields: { dqReasonSource: null, dqReasonEvidence: null } };
+  if (o.final.dqReason && o.final.dqReason !== "UNKNOWN") return { fields: { dqReasonSource: "STATUS", dqReasonEvidence: null } };
+  const ex = o.existing?.stage === "DISQUALIFIED" ? o.existing : undefined;
+  if (ex?.dqReasonSource === "MANUAL" && ex.dqReason) {
+    reasons.dqReason = ex.dqReason;
+    return { fields: { dqReasonSource: "MANUAL", dqReasonEvidence: ex.dqReasonEvidence } };
+  }
+  if (o.hive?.stage !== "DISQUALIFIED" || o.prospect?.stage) {
+    if (ex?.dqReason) reasons.dqReason = ex.dqReason; // the sheet only says "DQ" — keep what we had
+    return { fields: { dqReasonSource: ex?.dqReasonSource ?? null, dqReasonEvidence: ex?.dqReasonEvidence ?? null } };
+  }
+  const inf = dqFromNotes(o.notes);
+  if (inf.phase && reasons.dqPhase !== "POST_HANDOVER") reasons.dqPhase = inf.phase;
+  if (inf.reason) {
+    reasons.dqReason = inf.reason;
+    return { fields: { dqReasonSource: inf.reason === "UNKNOWN" ? null : "NOTES", dqReasonEvidence: inf.evidence?.slice(0, 300) ?? null } };
+  }
+  if (ex?.dqReasonSource === "AI" && !o.cellChanged) {
+    reasons.dqReason = ex.dqReason ?? "UNKNOWN";
+    return { fields: { dqReasonSource: "AI", dqReasonEvidence: ex.dqReasonEvidence } };
+  }
+  reasons.dqReason = "UNKNOWN";
+  return { fields: { dqReasonSource: null, dqReasonEvidence: null }, aiNotes: o.notes.map((n) => n.rawText) };
 }
 
 function reasonFields(target: StageTarget & { stage: LeadStageValue }, dqPhase: DqPhaseValue | null) {
@@ -310,7 +348,7 @@ async function runSync(
   // For reconciliation: every identified row as the sheet has it.
   const sheetRows: { hive: string; prospect: string; won: boolean; value: number | null }[] = [];
   const badOptIn: string[] = []; // lead id, or externalKey for a new lead
-  const creates = new Map<string, { data: Record<string, unknown>; events: PlannedEvent[]; noteJob?: NoteJob }>(); // externalKey -> new lead
+  const creates = new Map<string, { data: Record<string, unknown>; events: PlannedEvent[]; noteJob?: NoteJob; dqNotes?: string[] }>(); // externalKey -> new lead
   let identifiedRows = 0;
 
   rows.forEach((row, rowIdx) => {
@@ -392,6 +430,9 @@ async function runSync(
         noteJob = { hash, notes: parseNotes(cell, dateOptIn ?? existing?.createdAt ?? new Date()) };
       }
     }
+    // The cell's entries for the DQ-reason rules — parsed every sync (cheap,
+    // no AI); only a changed cell is re-saved and re-classified.
+    const cellNotes = noteJob?.notes ?? (notesIdx !== -1 ? parseNotes(row[notesIdx] ?? "", dateOptIn ?? existing?.createdAt ?? new Date()) : []);
 
     // Everything else — every header not otherwise mapped — goes into `raw`
     // for display only, keyed by its actual header text.
@@ -457,28 +498,41 @@ async function runSync(
       // reason HQ recorded rather than dropping it to Unknown.
       const reasons = reasonFields(final, plan.dqPhase);
       if (final.stage === existing.stage) {
-        if (reasons.dqReason === "UNKNOWN" && existing.dqReason) reasons.dqReason = existing.dqReason;
         if (reasons.lostReason === "UNKNOWN" && existing.lostReason) reasons.lostReason = existing.lostReason;
         if (final.stage === "DISQUALIFIED" && existing.dqPhase) reasons.dqPhase = existing.dqPhase;
       }
+      const dq = applyDqSource(reasons, { final, hive: statusTarget, prospect: resultTarget, existing, notes: cellNotes, cellChanged: !!noteJob });
+      // Handed back to Chase Up: logged and counted, history kept.
+      const returned = isReturn(existing.stage, final.stage);
       // Slack events (lib/slack.ts): a sale (Won, or a Won lead getting its
       // value) and a live transfer the sync just saw happen.
       if (final.stage === "WON" && value != null && (existing.stage !== "WON" || existing.value == null)) slackEvents.push({ leadId: existing.id, kind: "sale" });
       if (plan.events.some((e) => e.stage === "HANDOVER_LIVE" && e.kind !== "inferred")) slackEvents.push({ leadId: existing.id, kind: "live_transfer" });
       pending.set(existing.id, {
         lead: existing,
-        data: { ...baseData, stage: final.stage, ...reasons },
+        data: {
+          ...baseData,
+          stage: final.stage,
+          ...reasons,
+          ...dq.fields,
+          ...(returned ? { returnedCount: existing.returnedCount + 1, lastReturnedAt: new Date(), awaitingClientUpdate: false, staleInStage: false } : {}),
+        },
         ...(final.stage !== existing.stage ? { stageFrom: existing.stage, stageTo: final.stage, overrodeHq: !!existing.hqStatusUpdatedAt } : {}),
         value,
         events: plan.events,
         noteJob,
+        returned,
+        dqNotes: dq.aiNotes,
       });
     } else {
       const plan = planStageEvents({ oldStage: null, newStage: final.stage, prior, eventStages: new Set() });
+      const reasons = reasonFields(final, plan.dqPhase);
+      const dq = applyDqSource(reasons, { final, hive: statusTarget, prospect: resultTarget, notes: cellNotes, cellChanged: true });
       creates.set(externalKey, {
-        data: { id: randomUUID(), clientId, stage: final.stage, ...reasonFields(final, plan.dqPhase), ...baseData },
+        data: { id: randomUUID(), clientId, stage: final.stage, ...reasons, ...dq.fields, ...baseData },
         events: plan.events,
         noteJob,
+        dqNotes: dq.aiNotes,
       });
     }
   });
@@ -486,13 +540,15 @@ async function runSync(
   // Notes the regex rules couldn't place go to Claude in one batch. No key →
   // they stay NOTE. An API failure also leaves them NOTE but withholds the
   // new notesHash, so the next sync tries those cells again.
-  const noteHolders: { data: Record<string, unknown>; noteJob?: NoteJob }[] = [...pending.values(), ...creates.values()];
-  const unplaced = noteHolders.flatMap((h) => (h.noteJob?.notes ?? []).filter((n) => n.event === "NOTE").map((n) => ({ job: h.noteJob!, n })));
+  const noteHolders: { data: Record<string, unknown>; noteJob?: NoteJob; dqNotes?: string[] }[] = [...pending.values(), ...creates.values()];
+  // AM_SCENARIO write-ups go too — one may say a consult was booked; if the
+  // AI finds no event in it, it stays an AM note.
+  const unplaced = noteHolders.flatMap((h) => (h.noteJob?.notes ?? []).filter((n) => n.event === "NOTE" || n.event === "AM_SCENARIO").map((n) => ({ job: h.noteJob!, n })));
   let aiFailed = false;
   if (unplaced.length) {
     try {
       const events = await classifyNotesWithAI(unplaced.map((u) => u.n.rawText));
-      if (events) unplaced.forEach((u, i) => ((u.n.event = events[i]), (u.n.source = "AI")));
+      if (events) unplaced.forEach((u, i) => ((u.n.event = events[i] === "NOTE" ? u.n.event : events[i]), (u.n.source = "AI")));
     } catch (err) {
       aiFailed = true;
       console.error("Note classification failed — entries kept as NOTE, will retry next sync:", err);
@@ -500,9 +556,21 @@ async function runSync(
   }
   for (const h of noteHolders) {
     if (!h.noteJob) continue;
-    h.data.callAttempts = h.noteJob.notes.filter((n) => n.event === "CALL_ATTEMPT").length;
-    const retryLater = aiFailed && h.noteJob.notes.some((n) => n.event === "NOTE");
+    h.data.callAttempts = h.noteJob.notes.filter((n) => isCallAttempt(n.event)).length;
+    const retryLater = aiFailed && h.noteJob.notes.some((n) => (n.event === "NOTE" || n.event === "AM_SCENARIO") && n.source !== "AI");
     if (!retryLater) h.data.notesHash = h.noteJob.hash;
+  }
+
+  // DQ reasons the rules couldn't read from the notes → Haiku. No key or a
+  // failure leaves them UNKNOWN (DQ_NO_REASON) and they're retried next sync.
+  const dqQueue = noteHolders.filter((h) => h.dqNotes?.length);
+  if (dqQueue.length) {
+    try {
+      const answers = await classifyDqWithAI(dqQueue.map((h) => h.dqNotes!));
+      answers?.forEach((a, i) => Object.assign(dqQueue[i].data, { dqReason: a.reason, dqReasonSource: "AI", dqReasonEvidence: a.evidence || null }));
+    } catch (err) {
+      console.error("DQ reason classification failed — left Unknown, will retry next sync:", err);
+    }
   }
 
   // The sheet is the source of truth: an active lead whose row is gone is
@@ -526,7 +594,7 @@ async function runSync(
   const newLeads = Array.from(creates.values());
   const events: StageEventRow[] = [
     ...newLeads.flatMap((c) => eventRows(c.data.id as string, c.events, true, now)),
-    ...updates.flatMap((u) => eventRows(u.lead.id, u.events, false, now)),
+    ...updates.flatMap((u) => eventRows(u.lead.id, u.events, false, now, u.returned)),
   ];
 
   // Leads whose notes were re-parsed: their note events are replaced wholesale.
@@ -708,7 +776,7 @@ export async function getClientFunnel(clientId: string, range?: { from?: Date; t
   const [leads, spend, durations] = await Promise.all([
     prisma.lead.findMany({
       where: { clientId, deletedAt: null, ...(createdAt ? { createdAt } : {}) },
-      select: { campaign: true, stage: true, dqPhase: true, dqReason: true, lostReason: true, awaitingClientUpdate: true, handoverAt: true, createdAt: true, stageEvents: { select: { stage: true } } },
+      select: { campaign: true, stage: true, dqPhase: true, dqReason: true, lostReason: true, awaitingClientUpdate: true, handoverAt: true, createdAt: true, returnedCount: true, stageEvents: { select: { stage: true } } },
     }),
     scopedSpend(scope, dateRange),
     getFunnelDurations(clientId, dateRange),
@@ -717,7 +785,7 @@ export async function getClientFunnel(clientId: string, range?: { from?: Date; t
   const overall = emptyCounts();
   const byCampaign = new Map<string, FunnelCounts>();
   for (const l of leads) {
-    const lead: FunnelLead = { ...l, campaign: campaignKey(l.campaign), eventStages: l.stageEvents.map((e) => e.stage), stuckWithClient: isStuckWithClient(l) };
+    const lead: FunnelLead = { ...l, campaign: campaignKey(l.campaign), eventStages: l.stageEvents.map((e) => e.stage), stuckWithClient: isStuckWithClient(l), returned: l.returnedCount > 0 };
     if (!byCampaign.has(lead.campaign)) byCampaign.set(lead.campaign, emptyCounts());
     addLead(byCampaign.get(lead.campaign)!, lead);
     addLead(overall, lead);

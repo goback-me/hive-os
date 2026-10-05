@@ -48,7 +48,7 @@ export async function POST(req: Request) {
       data.email_addresses?.find((e: any) => e.id === data.primary_email_address_id)?.email_address ??
       data.email_addresses?.[0]?.email_address;
     const name = [data.first_name, data.last_name].filter(Boolean).join(" ") || email || "Unnamed";
-    const meta = (data.public_metadata ?? {}) as { role?: "ADMIN" | "COACH" | "CLIENT"; clientId?: string };
+    const meta = (data.public_metadata ?? {}) as { role?: "ADMIN" | "COACH" | "CLIENT" | "AGENT"; clientId?: string };
 
     if (email && meta.role) {
       await prisma.user.upsert({

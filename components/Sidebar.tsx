@@ -15,11 +15,12 @@ const COACH_NAV_ITEMS = [
   { href: "/settings", label: "Settings", icon: "settings" },
 ];
 
-export default function Sidebar({ user }: { user: { name: string; role: "COACH" | "CLIENT" } }) {
+export default function Sidebar({ user }: { user: { name: string; role: "COACH" | "CLIENT"; isAgent?: boolean } }) {
   const pathname = usePathname();
   // A client login only ever has their own client page — no cross-client
   // nav items are rendered for them at all, not just hidden via CSS.
-  const navItems = user.role === "COACH" ? COACH_NAV_ITEMS : [];
+  // An agent gets their client list and Leads only.
+  const navItems = user.role !== "COACH" ? [] : user.isAgent ? COACH_NAV_ITEMS.filter((i) => i.href === "/clients" || i.href === "/leads") : COACH_NAV_ITEMS;
 
   return (
     <aside
@@ -31,7 +32,7 @@ export default function Sidebar({ user }: { user: { name: string; role: "COACH" 
         <h1 className="font-heading font-bold text-xl tracking-tight flex-1" style={{ color: "var(--text-primary)" }}>
           Hive HQ
         </h1>
-        {user.role === "COACH" && <AlertBell />}
+        {user.role === "COACH" && !user.isAgent && <AlertBell />}
       </div>
 
       <nav className="flex-1 space-y-1">

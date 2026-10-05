@@ -13,6 +13,29 @@ enum UserRole {
   ADMIN
   COACH
   CLIENT
+  AGENT // a team member who sees only the clients assigned to them (Client.weeklyCallAgentId)
+}
+
+enum Weekday {
+  MONDAY
+  TUESDAY
+  WEDNESDAY
+  THURSDAY
+  FRIDAY
+  SATURDAY
+  SUNDAY
+}
+
+enum MeetingStatus {
+  PENDING
+  HELD
+  NOT_HELD
+}
+
+enum ClientMood {
+  GOOD
+  NEUTRAL
+  AT_RISK
 }
 
 enum SessionStatus {
@@ -327,6 +350,16 @@ enum StageEventSource {
   IMPORT
   INFERRED
   NOTE // dated from the team's notes cell — timed, like SYNC/MANUAL
+  RETURNED_BY_CLIENT // a handed-over lead sent back to Chase Up (lib/lead-status.ts isReturn)
+}
+
+// Where a DQ reason came from: the status columns, the feedback notes'
+// rules, the AI pass over them, or a person in HQ.
+enum DqReasonSource {
+  STATUS
+  NOTES
+  AI
+  MANUAL
 }
 
 // ── Leads (Hive OS) — synced from each client's assigned Google Sheet ───
@@ -347,6 +380,8 @@ model Lead {
   dqReason     DqReason?
   dqPhase      DqPhase?
   lostReason   LostReason?
+  dqReasonSource   DqReasonSource?
+  dqReasonEvidence String? // the note text (or AI's ≤20-word summary) behind a NOTES / AI reason
   // From a sheet column whose header contains "attempt", if there is one.
   callAttempts Int?
   value        Decimal?    @db.Decimal(10, 2)
@@ -373,6 +408,10 @@ model Lead {
   // Sat in its stage 2× the client's usual time (lib/reminders.ts) — "Likely
   // lost? Close it out" on the Update panel + CLIENT_UPDATE_OVERDUE.
   staleInStage         Boolean   @default(false)
+  // Sent back to Chase Up from a handover / consult / quote stage — history
+  // is kept, the lead is never recreated.
+  returnedCount        Int       @default(0)
+  lastReturnedAt       DateTime?
 
   // Stable identity across repeated syncs (normalized email/phone/name) —
   // no DB-level unique constraint; matched via findFirst in lib/lead-sync.ts.
@@ -479,6 +518,50 @@ model ClientCycle {
   @@id([clientId, step])
 }
 
+// One weekly client call (lib/weekly-meetings.ts): created PENDING the Monday
+// after the call day, logged by the agent as HELD / NOT_HELD.
+model WeeklyMeeting {
+  id             String        @id @default(cuid())
+  clientId       String
+  client         Client        @relation(fields: [clientId], references: [id])
+  weekOf         DateTime // the call day (Sydney midnight)
+  agentId        String?
+  agent          User?         @relation(fields: [agentId], references: [id])
+  status         MeetingStatus @default(PENDING)
+  summary        String?
+  issues         String?
+  nextSteps      String?
+  clientMood     ClientMood?
+  nextMeetingAt  DateTime?
+  notHeldReason  String?
+  leadsDiscussed String[]      @default([])
+  leadsReturned  String[]      @default([])
+  clickupTaskId  String?
+  submittedAt    DateTime?
+  submittedBy    String?
+  createdAt      DateTime      @default(now())
+
+  @@unique([clientId, weekOf])
+  @@index([status, weekOf])
+}
+
+// Every action email sent (lib/email.tsx). actionToken is the signed link's
+// token — clickedAt is set when someone opens it.
+model EmailLog {
+  id          String    @id @default(cuid())
+  to          String[]
+  type        String // "client_update" | "meeting_log" | "meeting_reminder"
+  clientId    String?
+  client      Client?   @relation(fields: [clientId], references: [id])
+  refIds      String[]  @default([])
+  sentAt      DateTime  @default(now())
+  openedAt    DateTime?
+  clickedAt   DateTime?
+  actionToken String    @unique
+
+  @@index([type, sentAt])
+}
+
 // ── Data health (lib/data-health.ts) ─────────────────────────────────────
 // Problems with a client's data, re-checked after every sync. An alert stays
 // one row per (client, type, fingerprint): re-seen → lastSeenAt; no longer
@@ -506,6 +589,8 @@ enum DataAlertType {
   RECONCILE_MISMATCH
   SLACK_FAILED
   CLICKUP_FAILED
+  MEETING_MISSED
+  MEETING_NOT_LOGGED
 }
 
 enum AlertSeverity {
@@ -660,6 +745,12 @@ enum NoteEventType {
   CONSULT_ATTENDED
   QUOTE_SENT
   NOTE
+  // Call attempts by kind (all count as CALL_ATTEMPT — lib/notes-parser.ts).
+  NO_PICKUP
+  TEXT_SENT
+  CANT_CONTACT
+  // A long account-manager write-up with no shorthand in it.
+  AM_SCENARIO
 }
 
 enum NoteEventSource {
@@ -790,6 +881,10 @@ model User {
   clientId  String? // required for role=CLIENT, null for role=COACH (coach/admin sees everything)
   client    Client?  @relation(fields: [clientId], references: [id])
   createdAt DateTime @default(now())
+  // This team member's ClickUp user id — weekly call tasks are assigned to it.
+  clickupUserId String?
+  callClients   Client[]        @relation("WeeklyCallAgent")
+  meetings      WeeklyMeeting[]
 
   @@index([clientId])
 }
@@ -892,9 +987,17 @@ model Client {
   // TRADE clients' reports say "Onsite quote" / "Job won" instead of
   // "Quote" / "Sale" (lib/client-terms.ts).
   clientType       ClientType @default(OTHER)
+  // Who runs the weekly call with this client (AGENT / COACH / ADMIN), and
+  // on which day — lib/weekly-meetings.ts. An AGENT sees only these clients.
+  weeklyCallAgentId String?
+  weeklyCallAgent   User?   @relation("WeeklyCallAgent", fields: [weeklyCallAgentId], references: [id])
+  weeklyCallDay     Weekday @default(FRIDAY)
   // Coach overrides of the buying cycle, in days, e.g. { "quoteToClose": 45 }
   // (lib/buying-cycle.ts). Missing keys = learned, else the default.
   cycleOverrides   Json?
+  // Who's who in the feedback cell, e.g. { "mddy": "Maddy" } — "hs" is the
+  // Hive call team unless set here (lib/notes-parser.ts noteAuthor).
+  noteAliases      Json?
 
   contracts      Contract[]
   monthlyKpis    MonthlyKpi[]
@@ -904,6 +1007,8 @@ model Client {
   leads          Lead[]
   leadReminders  LeadReminder[]
   cycles         ClientCycle[]
+  meetings       WeeklyMeeting[]
+  emailLogs      EmailLog[]
   dataAlerts     DataAlert[]
   weeklyUpdates  WeeklyUpdate[]
   slackPosts     SlackPostLog[]

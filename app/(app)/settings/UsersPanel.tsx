@@ -2,7 +2,7 @@
 
 import { useFormState } from "react-dom";
 import { useState } from "react";
-import { createUser, deleteUser } from "@/lib/actions";
+import { createUser, deleteUser, saveUserClickUp } from "@/lib/actions";
 import type { CreateClientState } from "@/lib/actions";
 import AddClientModal from "../clients/AddClientModal";
 
@@ -10,13 +10,15 @@ type UserRow = {
   id: string;
   name: string;
   email: string;
-  role: "ADMIN" | "COACH" | "CLIENT";
+  role: "ADMIN" | "COACH" | "CLIENT" | "AGENT";
   clientName: string | null;
+  clickupUserId: string | null;
 };
 
 const ROLE_LABELS: Record<UserRow["role"], string> = {
   ADMIN: "Admin (all clients + integrations)",
   COACH: "Manager (all clients)",
+  AGENT: "Agent (only the clients they run the weekly call for)",
   CLIENT: "Client (their data only)",
 };
 
@@ -38,11 +40,13 @@ export default function UsersPanel({
   clients,
   onCreateClient,
   canManageAdmins,
+  clickupMembers,
 }: {
   users: UserRow[];
   clients: ClientOption[];
   onCreateClient: (prev: CreateClientState, formData: FormData) => Promise<CreateClientState>;
   canManageAdmins: boolean;
+  clickupMembers: { id: string; name: string }[] | null; // null = ClickUp not set up
 }) {
   const [state, formAction] = useFormState(createUserAction, null);
   const [role, setRole] = useState<UserRow["role"]>("CLIENT");
@@ -70,6 +74,19 @@ export default function UsersPanel({
                 {u.role === "CLIENT" ? `Client · ${u.clientName ?? "—"}` : ROLE_LABELS[u.role]}
               </p>
             </div>
+            {/* Team member ↔ ClickUp user: weekly call tasks get assigned to them. */}
+            {u.role !== "CLIENT" && clickupMembers && (
+              <select
+                defaultValue={u.clickupUserId ?? ""}
+                onChange={(e) => saveUserClickUp(u.id, e.target.value || null)}
+                className="ml-auto mr-3 px-2 py-1.5 rounded-lg outline-none text-xs"
+                style={{ background: "var(--surface-card)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
+                aria-label={`${u.name}'s ClickUp user`}
+              >
+                <option value="">No ClickUp user</option>
+                {clickupMembers.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+              </select>
+            )}
             {(u.role !== "ADMIN" || canManageAdmins) && <form action={deleteUser.bind(null, u.id)}>
               <button
                 type="submit"
@@ -122,6 +139,7 @@ export default function UsersPanel({
         >
           <option value="CLIENT">{ROLE_LABELS.CLIENT}</option>
           <option value="COACH">{ROLE_LABELS.COACH}</option>
+          <option value="AGENT">{ROLE_LABELS.AGENT}</option>
           {canManageAdmins && <option value="ADMIN">{ROLE_LABELS.ADMIN}</option>}
         </select>
         {role === "CLIENT" ? (

@@ -27,7 +27,13 @@ import {
   createManualClickUpTask,
   saveCycleOverrides,
   recalculateClientCycle,
+  saveNoteAliases,
+  saveWeeklyCall,
 } from "@/lib/actions";
+import WeeklyCallCard from "@/components/WeeklyCallCard";
+import { MOOD_LABELS } from "@/lib/weekly-meetings";
+import NoteAliasesCard from "@/components/NoteAliasesCard";
+import { parseAliases } from "@/lib/notes-parser";
 import { CYCLE_SAMPLE_NOUN, CYCLE_STEPS, CYCLE_STEP_LABELS, getClientCycle, parseCycleOverrides } from "@/lib/buying-cycle";
 import BuyingCycleCard from "@/components/BuyingCycleCard";
 import { requireClientAccess } from "@/lib/auth";
@@ -79,7 +85,10 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
   // A client login gets bounced to /dashboard (which redirects to their own
   // slug) if they try to view anyone else's page. A coach can view any client.
   const viewer = await requireClientAccess(client.id);
-  const isCoach = viewer.role === "COACH";
+  // An agent is team (full numbers, weekly calls) but not a coach: no
+  // coach-only panels or settings for them.
+  const isTeam = viewer.role === "COACH";
+  const isCoach = isTeam && !viewer.isAgent;
   const visibility = parseVisibility(client.reportVisibility);
   // A report-breaking data problem is open → a client sees "Data being
   // updated" instead of any numbers (coaches see everything + the alert).
@@ -105,6 +114,8 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
     clientSheet,
     awaitingUpdates,
     cycle,
+    team,
+    meetings,
   ] = await Promise.all([
     // Re-checks revenue/module thresholds against award tiers on every visit —
     // not just when a lesson gets toggled — so editing a tier's threshold or a
@@ -135,6 +146,9 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
     prisma.lead.count({ where: updatePanelWhere(client.id) }),
     // Coaches: the buying cycle card (lib/buying-cycle.ts).
     isCoach ? getClientCycle(client.id) : null,
+    // Coaches: who can run the weekly call. Team: the recent calls.
+    isCoach ? prisma.user.findMany({ where: { role: { in: ["ADMIN", "COACH", "AGENT"] } }, select: { id: true, name: true }, orderBy: { name: "asc" } }) : null,
+    isTeam ? prisma.weeklyMeeting.findMany({ where: { clientId: client.id }, orderBy: { weekOf: "desc" }, take: 5, select: { id: true, weekOf: true, status: true, clientMood: true } }) : [],
   ]);
   const cycleOverrides = parseCycleOverrides(client.cycleOverrides);
 
@@ -269,6 +283,18 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
             />
           )}
 
+          {isTeam && (
+            <WeeklyCallCard
+              clientId={client.id}
+              clientSlug={client.slug}
+              agentId={client.weeklyCallAgentId}
+              day={client.weeklyCallDay}
+              team={team}
+              meetings={meetings.map((m) => ({ id: m.id, weekOf: m.weekOf.toISOString(), status: m.status, mood: m.clientMood ? MOOD_LABELS[m.clientMood] : null }))}
+              onSave={saveWeeklyCall}
+            />
+          )}
+
           {cycle && (
             <BuyingCycleCard
               clientId={client.id}
@@ -278,6 +304,8 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
               onRecalculate={recalculateClientCycle}
             />
           )}
+
+          {isCoach && <NoteAliasesCard clientId={client.id} initial={parseAliases(client.noteAliases)} onSave={saveNoteAliases} />}
 
           <GoalsCard clientId={client.id} initialGoals={client.goals} onSave={saveClientGoals} />
 

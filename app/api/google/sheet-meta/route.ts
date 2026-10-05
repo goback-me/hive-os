@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireUser } from "@/lib/auth";
+import { requireUser, canAccessClient } from "@/lib/auth";
 import { parseMapping } from "@/lib/status-classifier";
 import { TARGET_OPTIONS, encodeTarget, parseTarget, type LeadStageValue, type StageTarget } from "@/lib/lead-status";
 import { planStageWrite } from "@/lib/sheet-writeback";
@@ -15,7 +15,7 @@ export async function GET(req: NextRequest) {
   if (!clientId) return NextResponse.json({ error: "clientId is required" }, { status: 400 });
 
   const scope = await requireUser();
-  if (scope.role === "CLIENT" && clientId !== scope.clientId) {
+  if (!canAccessClient(scope, clientId)) {
     return NextResponse.json({ error: "Not authorized for this client" }, { status: 403 });
   }
 

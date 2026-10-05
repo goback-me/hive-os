@@ -45,12 +45,21 @@ export default function ClientUpdatesPanel({
   onUpdateStage,
   reloadKey = 0,
   onSaved,
+  pinnedIds = [],
+  keepSaved = false,
+  emptyText,
 }: {
   clientId: string;
   onUpdateStage: (leadId: string, target: string, value?: number) => Promise<void>;
   reloadKey?: number;
   onSaved?: () => void;
+  // The email landing page (/clients/<slug>/updates): the email's leads
+  // first, highlighted; saved rows stay, green, instead of dropping off.
+  pinnedIds?: string[];
+  keepSaved?: boolean;
+  emptyText?: string; // shown instead of hiding the panel when nothing's waiting
 }) {
+  const [saved, setSaved] = useState<Set<string>>(new Set());
   const [rows, setRows] = useState<Row[] | null>(null);
   const [total, setTotal] = useState(0);
   const [reminders, setReminders] = useState(0);
@@ -73,7 +82,12 @@ export default function ClientUpdatesPanel({
   }, [clientId, reloadKey, tick]);
 
   if (!rows) return null;
-  if (!rows.length) return null; // nothing waiting — no panel
+  if (!rows.length) {
+    if (!emptyText) return null; // nothing waiting — no panel
+    return <div className="card rounded-2xl p-5 text-sm" style={{ color: "var(--text-secondary)" }}>{emptyText}</div>;
+  }
+  const pinned = new Set(pinnedIds);
+  const ordered = [...rows.filter((r) => pinned.has(r.id)), ...rows.filter((r) => !pinned.has(r.id))];
 
   return (
     <div className="card rounded-2xl p-5">
@@ -93,16 +107,21 @@ export default function ClientUpdatesPanel({
       )}
       {error && <p className="text-xs mb-2" style={{ color: "var(--danger)" }}>{error}</p>}
       <div className="space-y-2">
-        {rows.map((r) => (
+        {ordered.map((r) => (
           <UpdateRow
             key={r.id}
             row={r}
+            pinned={pinned.has(r.id)}
+            saved={saved.has(r.id)}
             onSave={(target, value) =>
               onUpdateStage(r.id, target, value)
                 .then(() => {
-                  setRows((prev) => prev?.filter((x) => x.id !== r.id) ?? null);
-                  setTotal((t) => Math.max(0, t - 1));
-                  setTick((t) => t + 1);
+                  if (keepSaved) setSaved((prev) => new Set(prev).add(r.id));
+                  else {
+                    setRows((prev) => prev?.filter((x) => x.id !== r.id) ?? null);
+                    setTotal((t) => Math.max(0, t - 1));
+                    setTick((t) => t + 1);
+                  }
                   onSaved?.();
                 })
                 .catch((e) => setError(e instanceof Error ? e.message : "Couldn't save"))
@@ -115,7 +134,7 @@ export default function ClientUpdatesPanel({
   );
 }
 
-function UpdateRow({ row, onSave }: { row: Row; onSave: (target: string, value?: number) => Promise<void> }) {
+function UpdateRow({ row, onSave, pinned = false, saved = false }: { row: Row; onSave: (target: string, value?: number) => Promise<void>; pinned?: boolean; saved?: boolean }) {
   const [action, setAction] = useState("");
   const [value, setValue] = useState(row.value != null ? String(row.value) : "");
   const [reason, setReason] = useState("");
@@ -136,11 +155,26 @@ function UpdateRow({ row, onSave }: { row: Row; onSave: (target: string, value?:
   }
 
   return (
-    <div className="flex items-center gap-3 flex-wrap py-2" style={{ borderBottom: "1px solid var(--border)" }}>
+    <div
+      className={`flex items-center gap-3 flex-wrap py-2 ${pinned || saved ? "px-3 rounded-lg" : ""}`}
+      style={{
+        borderBottom: "1px solid var(--border)",
+        ...(saved ? { background: "var(--tag-green-bg)" } : pinned ? { background: "var(--primary-tint)", borderLeft: "3px solid var(--primary)" } : {}),
+      }}
+    >
       <div className="min-w-[180px] flex-1">
-        <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>{row.name || "Unnamed lead"}</p>
+        <p className="text-sm font-medium flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
+          {row.name || "Unnamed lead"}
+          {pinned && !saved && <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold" style={{ background: "var(--primary)", color: "#fff" }}>From this email</span>}
+        </p>
         <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>{[row.phone, row.email].filter(Boolean).join(" · ") || "No contact details"}</p>
       </div>
+      {saved && (
+        <span className="px-2 py-1 rounded-full text-[11px] font-bold flex items-center gap-1" style={{ color: "var(--tag-green-fg)" }}>
+          <span className="material-symbols-outlined text-[14px]">check_circle</span> Saved
+        </span>
+      )}
+      {!saved && (<>
       <div className="w-[150px]">
         <p className="text-xs font-semibold" style={{ color: "var(--text-secondary)" }}>{typeLabel}</p>
         <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>{typeDate ? sydDate(typeDate) : "Date unknown"}</p>
@@ -191,6 +225,7 @@ function UpdateRow({ row, onSave }: { row: Row; onSave: (target: string, value?:
           {saving ? "Saving…" : "Save"}
         </button>
       )}
+      </>)}
     </div>
   );
 }

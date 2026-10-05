@@ -24,6 +24,7 @@ export type FunnelLead = {
   lostReason: LostReasonValue | null;
   eventStages: LeadStageValue[]; // every LeadStageEvent stage, any source
   stuckWithClient?: boolean; // handed over STUCK_DAYS+ ago, still awaiting the client's update
+  returned?: boolean; // sent back to Chase Up by the client at least once (Lead.returnedCount)
 };
 
 // A handover still awaiting the client's update this long is "stuck with
@@ -39,6 +40,7 @@ export type FunnelCounts = {
   handovers: number;
   liveTransfers: number;
   stuckWithClient: number;
+  returned: number; // returned by the client — counted once however many times
   consultsBooked: number;
   consultsAttended: number;
   noShows: number;
@@ -55,6 +57,7 @@ export type FunnelRates = {
   contactRate: number | null;
   qualifiedRate: number | null;
   liveTransferRate: number | null;
+  returnedRate: number | null; // returned by client / handovers
   bookingRate: number | null;
   showRate: number | null;
   quoteRate: number | null;
@@ -126,6 +129,7 @@ export function emptyCounts(): FunnelCounts {
     handovers: 0,
     liveTransfers: 0,
     stuckWithClient: 0,
+    returned: 0,
     consultsBooked: 0,
     consultsAttended: 0,
     noShows: 0,
@@ -148,6 +152,7 @@ export function addLead(c: FunnelCounts, lead: FunnelLead) {
   if (r >= STAGE_RANK.HANDOVER_ATTEMPTED) c.handovers++; // any HANDOVER_STAGES (live, attempted, text) or later
   if (has(lead, "HANDOVER_LIVE")) c.liveTransfers++;
   if (lead.stuckWithClient) c.stuckWithClient++;
+  if (lead.returned) c.returned++;
   if (r >= STAGE_RANK.CONSULT_BOOKED) c.consultsBooked++;
   if (has(lead, "CONSULT_NO_SHOW")) c.noShows++;
   if (r >= STAGE_RANK.CONSULT_ATTENDED) c.consultsAttended++;
@@ -171,6 +176,7 @@ export function funnelRates(c: FunnelCounts): FunnelRates {
     contactRate: pct(c.contacted, c.leads),
     qualifiedRate: pct(c.qualified, c.contacted),
     liveTransferRate: pct(c.liveTransfers, c.handovers),
+    returnedRate: pct(c.returned, c.handovers),
     bookingRate: pct(c.consultsBooked, c.handovers),
     showRate: pct(c.consultsAttended, c.consultsBooked),
     quoteRate: pct(c.quotes, c.consultsAttended),
@@ -198,6 +204,7 @@ export function biggestDrop(c: FunnelCounts): BiggestDrop | null {
   const clientStuck = stuck > 0 && stuck * 2 >= c.handovers - c.consultsBooked;
   const handoverEvidence = [
     stuck ? `${stuck} stuck with client (no update ${STUCK_DAYS}+ days)` : null,
+    c.returned ? `${c.returned} returned by client (${Math.round(((c.returned / c.handovers) * 100) || 0)}% of handovers)` : null,
     c.dqByPhase.POST_HANDOVER ? `${c.dqByPhase.POST_HANDOVER} DQ'd after handover (${dqShare("POST_HANDOVER")}% of DQs)` : null,
   ].filter(Boolean).join(" · ");
   const steps: (BiggestDrop & { denom: number })[] = [

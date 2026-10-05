@@ -7,7 +7,7 @@ export default async function AppGroupLayout({ children }: { children: ReactNode
 
   return (
     <>
-      <Sidebar user={{ name: user.name, role: user.role }} />
+      <Sidebar user={{ name: user.name, role: user.role, isAgent: user.isAgent }} />
       <main className="ml-64 min-h-screen">{children}</main>
     </>
   );

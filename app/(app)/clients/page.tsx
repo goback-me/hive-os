@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { createClient, bulkUpdateClientStatus, archiveClient, unarchiveClient, deleteClientPermanently } from "@/lib/actions";
-import { requireCoach } from "@/lib/auth";
+import { requireTeam } from "@/lib/auth";
 import { getRevenueByMonth, revenueInMonth } from "@/lib/revenue";
 import { HOLD_TYPES } from "@/lib/data-health";
 import AddClientModal from "./AddClientModal";
@@ -28,14 +28,15 @@ export default async function ClientsPage({
 }: {
   searchParams: { view?: string };
 }) {
-  await requireCoach(); // client logins are redirected to their own client page, never this list
+  const me = await requireTeam(); // client logins are redirected to their own client page, never this list
 
   const view: View = searchParams.view === "not-active" || searchParams.view === "archived" ? searchParams.view : "active";
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
 
   const clients = await prisma.client.findMany({
-    where: VIEW_WHERE[view],
+    // An agent sees only the clients they run the weekly call for.
+    where: { ...VIEW_WHERE[view], ...(me.isAgent ? { id: { in: me.agentClientIds } } : {}) },
     orderBy: { name: "asc" },
   });
 

@@ -19,6 +19,7 @@ import {
   type LostReasonValue,
 } from "@/lib/lead-status";
 import type { SyncSummary } from "@/lib/lead-sync";
+import { NOTE_EVENT_LABELS, type NoteEventValue } from "@/lib/notes-parser";
 // Plain string, kept in sync with OVERRIDDEN_BY_HQ in lib/lead-sync.ts (a
 // server module, not imported here).
 const OVERRIDDEN_BY_HQ = "Sheet change overridden by HQ";
@@ -43,6 +44,9 @@ type LeadRow = {
   stage: LeadStageValue;
   dqReason: DqReasonValue | null;
   dqPhase: DqPhaseValue | null;
+  dqReasonSource: "STATUS" | "NOTES" | "AI" | "MANUAL" | null;
+  dqReasonEvidence: string | null;
+  returnedCount: number; // times the client sent it back to Chase Up
   lostReason: LostReasonValue | null;
   callAttempts: number | null;
   hqNewer: boolean; // changed in HQ since the sheet last changed — the sheet catches up via write-back
@@ -65,7 +69,10 @@ type ActivityRow = {
   changedAt: string;
 };
 
-type StageEventRow = { id: string; stage: LeadStageValue; source: "IMPORT" | "INFERRED"; at: string };
+type StageEventRow = { id: string; stage: LeadStageValue; source: "IMPORT" | "INFERRED" | "RETURNED_BY_CLIENT"; at: string };
+
+// One dated entry from the sheet's feedback cell (read-only).
+type SheetNoteRow = { id: string; at: string; who: string; text: string; tag: NoteEventValue };
 
 type NoteRow = {
   id: string;
@@ -78,7 +85,8 @@ type JourneyEntry =
   | { kind: "created"; at: string }
   | { kind: "note"; id: string; at: string; note: string; by: string }
   | { kind: "status"; id: string; at: string; from: LeadStageValue; to: LeadStageValue; value: number | null; by: string }
-  | { kind: "event"; id: string; at: string; stage: LeadStageValue; source: "IMPORT" | "INFERRED" };
+  | { kind: "event"; id: string; at: string; stage: LeadStageValue; source: StageEventRow["source"] }
+  | { kind: "sheet"; id: string; at: string; who: string; text: string; tag: NoteEventValue };
 
 // Only right after a status change in HQ: the sheet still says something
 // else while the write-back is on its way. (A failed write shows "Not synced
@@ -88,6 +96,9 @@ function sheetAhead(lead: Pick<LeadRow, "stage" | "hqNewer" | "sheetStage" | "wr
 }
 
 // "Disqualified · Budget (after handover)" etc.
+// Where a DQ reason came from, next to it in HQ.
+const DQ_SOURCE_LABELS: Record<NonNullable<LeadRow["dqReasonSource"]>, string> = { STATUS: "from the status", NOTES: "from the feedback notes", AI: "AI, from the feedback notes", MANUAL: "set in HQ" };
+
 function stageText(lead: Pick<LeadRow, "stage" | "dqReason" | "dqPhase" | "lostReason">) {
   if (lead.stage === "DISQUALIFIED") {
     const reason = DQ_REASON_LABELS[lead.dqReason ?? "UNKNOWN"];
@@ -191,6 +202,7 @@ export default function LeadsPanel({
   const [detailLeadId, setDetailLeadId] = useState<string | null>(null);
   const [activityByLead, setActivityByLead] = useState<Record<string, ActivityRow[]>>({});
   const [eventsByLead, setEventsByLead] = useState<Record<string, StageEventRow[]>>({});
+  const [sheetNotesByLead, setSheetNotesByLead] = useState<Record<string, SheetNoteRow[]>>({});
   const [loadingActivity, setLoadingActivity] = useState<string | null>(null);
   const [notesByLead, setNotesByLead] = useState<Record<string, NoteRow[]>>({});
   const [loadingNotes, setLoadingNotes] = useState<string | null>(null);
@@ -216,9 +228,10 @@ export default function LeadsPanel({
     const notes: JourneyEntry[] = (notesByLead[detailLead.id] ?? []).map((n) => ({ kind: "note", id: n.id, at: n.createdAt, note: n.note, by: n.createdBy }));
     const statuses: JourneyEntry[] = (activityByLead[detailLead.id] ?? []).map((a) => ({ kind: "status", id: a.id, at: a.changedAt, from: a.fromStatus, to: a.toStatus, value: a.value, by: a.changedBy }));
     const events: JourneyEntry[] = (eventsByLead[detailLead.id] ?? []).map((e) => ({ kind: "event", id: e.id, at: e.at, stage: e.stage, source: e.source }));
+    const sheet: JourneyEntry[] = (sheetNotesByLead[detailLead.id] ?? []).map((n) => ({ kind: "sheet", ...n }));
     const created: JourneyEntry[] = [{ kind: "created", at: detailLead.createdAt }];
-    return [...notes, ...statuses, ...events, ...created].sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
-  }, [detailLead, notesByLead, activityByLead, eventsByLead]);
+    return [...notes, ...statuses, ...events, ...sheet, ...created].sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
+  }, [detailLead, notesByLead, activityByLead, eventsByLead, sheetNotesByLead]);
 
   // Each load stamps a request number; a response that isn't the latest is
   // dropped, so quick filter/page clicks can never paint stale rows.
@@ -369,6 +382,7 @@ export default function LeadsPanel({
         if (data.error) throw new Error(data.error);
         setActivityByLead((prev) => ({ ...prev, [leadId]: data.activity }));
         setEventsByLead((prev) => ({ ...prev, [leadId]: data.events ?? [] }));
+        setSheetNotesByLead((prev) => ({ ...prev, [leadId]: data.sheet ?? [] }));
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoadingActivity(null));
@@ -600,6 +614,7 @@ export default function LeadsPanel({
                           )}
                           {sheetAhead(lead) && <SheetSaysBadge stage={sheetAhead(lead)!} />}
                           {lead.sheetWriteError && <NotSyncedBadge reason={lead.sheetWriteError} />}
+                          {lead.returnedCount > 0 && <ReturnedBadge n={lead.returnedCount} />}
                         </td>
                         <td className="py-2 pr-4 whitespace-nowrap" style={{ color: "var(--text-primary)" }}>
                           {lead.value != null ? `$${lead.value.toLocaleString()}` : "—"}
@@ -696,6 +711,12 @@ export default function LeadsPanel({
                 </span>
                 {sheetAhead(detailLead) && <SheetSaysBadge stage={sheetAhead(detailLead)!} />}
                 {detailLead.sheetWriteError && <NotSyncedBadge reason={detailLead.sheetWriteError} showReason />}
+                {detailLead.returnedCount > 0 && <ReturnedBadge n={detailLead.returnedCount} />}
+                {detailLead.stage === "DISQUALIFIED" && detailLead.dqReasonSource && (
+                  <span className="text-xs" style={{ color: "var(--text-secondary)" }} title={detailLead.dqReasonEvidence ?? undefined}>
+                    Reason {DQ_SOURCE_LABELS[detailLead.dqReasonSource]}{detailLead.dqReasonEvidence ? `: “${detailLead.dqReasonEvidence}”` : ""}
+                  </span>
+                )}
                 {detailLead.callAttempts != null && (
                   <span className="text-xs" style={{ color: "var(--text-secondary)" }}>{detailLead.callAttempts} call attempt{detailLead.callAttempts === 1 ? "" : "s"}</span>
                 )}
@@ -762,6 +783,22 @@ export default function LeadsPanel({
                             </div>
                           );
                         }
+                        if (entry.kind === "sheet") {
+                          return (
+                            <div key={entry.id} className="relative pl-5">
+                              <span className="absolute left-0 top-1 w-2.5 h-2.5 rounded-full" style={{ background: "var(--surface-hover)", border: "1px solid var(--text-muted)" }} />
+                              <div className="p-2.5 rounded-lg" style={{ background: "var(--surface-hover)" }}>
+                                <p className="text-xs" style={{ color: "var(--text-primary)" }}>
+                                  <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold mr-1.5" style={{ background: "var(--surface-card)", color: "var(--text-secondary)" }}>{NOTE_EVENT_LABELS[entry.tag]}</span>
+                                  {entry.text}
+                                </p>
+                                <p className="text-[10px] mt-1" style={{ color: "var(--text-muted)" }}>
+                                  {entry.who} · {new Date(entry.at).toLocaleDateString("en-AU", { timeZone: "Australia/Sydney", day: "numeric", month: "short" })} · from the sheet
+                                </p>
+                              </div>
+                            </div>
+                          );
+                        }
                         if (entry.kind === "event") {
                           const evStyle = STAGE_STYLE[entry.stage];
                           return (
@@ -771,7 +808,7 @@ export default function LeadsPanel({
                                 <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold" style={{ background: evStyle.bg, color: evStyle.color }}>
                                   {STAGE_LABELS[entry.stage]}
                                 </span>{" "}
-                                {entry.source === "IMPORT" ? "already reached when first synced" : "inferred (skipped over)"}
+                                {entry.source === "IMPORT" ? "already reached when first synced" : entry.source === "RETURNED_BY_CLIENT" ? "returned by the client" : "inferred (skipped over)"}
                                 <span> · {when}</span>
                               </p>
                             </div>
@@ -939,6 +976,14 @@ function SkeletonRows() {
 }
 
 // The last write-back to the sheet failed — reason on hover (or shown).
+function ReturnedBadge({ n }: { n: number }) {
+  return (
+    <span className="ml-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold whitespace-nowrap" style={{ background: "var(--tag-amber-bg)", color: "var(--tag-amber-fg)" }} title="Sent back to Chase Up by the client">
+      Returned ×{n}
+    </span>
+  );
+}
+
 function NotSyncedBadge({ reason, showReason }: { reason: string; showReason?: boolean }) {
   return (
     <span

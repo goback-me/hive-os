@@ -1,6 +1,6 @@
 import { Prisma } from "@prisma/client";
 import type { LeadStageValue } from "./lead-status";
-import type { NoteEventValue } from "./notes-parser";
+import { CALL_ATTEMPT_EVENTS, type NoteEventValue } from "./notes-parser";
 
 // When a lead reached a funnel step — the one rule every duration, KPI,
 // comparison and sale date uses:
@@ -13,7 +13,7 @@ import type { NoteEventValue } from "./notes-parser";
 
 // Which note events stand for which stage.
 const NOTE_EVENTS_FOR: Partial<Record<LeadStageValue, NoteEventValue[]>> = {
-  CONTACTED: ["CALL_ATTEMPT"],
+  CONTACTED: CALL_ATTEMPT_EVENTS,
   HANDOVER_LIVE: ["HANDOVER_LIVE"],
   HANDOVER_TEXT: ["HANDOVER_TEXT"],
   CONSULT_BOOKED: ["CONSULT_BOOKED"],

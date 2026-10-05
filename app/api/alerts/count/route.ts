@@ -6,7 +6,7 @@ import { getCurrentUser } from "@/lib/auth";
 // Coaches / admins only — clients never see data alerts.
 export async function GET() {
   const user = await getCurrentUser();
-  if (user?.role !== "COACH") return NextResponse.json({ error: "Not authorized" }, { status: 403 });
+  if (user?.role !== "COACH" || user.isAgent) return NextResponse.json({ error: "Not authorized" }, { status: 403 });
   const where = { status: "OPEN" as const, client: { archivedAt: null } };
   const [open, danger] = await Promise.all([prisma.dataAlert.count({ where }), prisma.dataAlert.count({ where: { ...where, severity: "DANGER" } })]);
   return NextResponse.json({ open, danger });

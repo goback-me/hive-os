@@ -1,15 +1,18 @@
 // Run: npx tsx lib/notes-parser.check.ts — throws on the first failure.
 import assert from "node:assert/strict";
-import { classifyNoteText, parseNotes } from "./notes-parser";
+import { classifyNoteText, dqFromNotes, isCallAttempt, noteAuthor, parseNotes } from "./notes-parser";
+import { isReturn } from "./lead-status";
 import { formatSheetDate, parseSheetDate } from "./sheet-parse";
 
 // Event rules, first match wins
 const rules: [string, string][] = [
-  ["NP", "CALL_ATTEMPT"],
-  ["no pickup, left vm", "CALL_ATTEMPT"],
-  ["voicemail", "CALL_ATTEMPT"],
-  ["txt sent", "CALL_ATTEMPT"],
-  ["DND", "CALL_ATTEMPT"],
+  ["NP", "NO_PICKUP"],
+  ["no pickup, left vm", "NO_PICKUP"],
+  ["voicemail", "CANT_CONTACT"],
+  ["txt sent", "TEXT_SENT"],
+  ["DND", "CANT_CONTACT"],
+  ["incoming call restrictions", "CANT_CONTACT"],
+  ["weird number", "DQ_SPAM"],
   ["wrong num", "DQ_SPAM"],
   ["test lead", "DQ_SPAM"],
   ["live to Jake", "HANDOVER_LIVE"],
@@ -25,10 +28,12 @@ const rules: [string, string][] = [
   // real entries from a client sheet
   ["no pickup from jake, email handover.", "HANDOVER_TEXT"],
   ["email handover, no pickup from jake, call bck today before 6", "HANDOVER_TEXT"],
-  ["nopicup", "CALL_ATTEMPT"],
-  ["no picukp", "CALL_ATTEMPT"],
+  ["nopicup", "NO_PICKUP"],
+  ["no picukp", "NO_PICKUP"],
   ["live attmpted, email handover to jake", "HANDOVER_TEXT"],
-  ["just goes to a busy dialtone.", "CALL_ATTEMPT"],
+  ["just goes to a busy dialtone.", "CANT_CONTACT"],
+  // a long write-up with no shorthand → an AM scenario
+  ["spoke with the owner about the rear extension, they want to wait until after christmas before deciding", "AM_SCENARIO"],
   // short tokens don't fire inside other words
   ["inpection pending", "NOTE"],
   ["salt water pool", "NOTE"],
@@ -41,7 +46,7 @@ const notes = parseNotes("HS 12/3> NP, left vm\nMaddy 13/3 live to Jake, mddy 2/
 assert.deepEqual(
   notes.map((n) => [formatSheetDate(n.at), n.who, n.event, n.rawText]),
   [
-    ["12/03/2026", "hs", "CALL_ATTEMPT", "NP, left vm"],
+    ["12/03/2026", "hs", "NO_PICKUP", "NP, left vm"],
     ["13/03/2026", "maddy", "HANDOVER_LIVE", "live to Jake"],
     ["02/04/2026", "mddy", "QUOTE_SENT", "quote provided"],
   ]
@@ -67,5 +72,39 @@ assert.deepEqual(
 // Junk: leading undated text dropped, impossible dates skipped, empty cell
 assert.deepEqual(parseNotes("called twice, HS 31/2 np", optIn), []);
 assert.deepEqual(parseNotes("", optIn), []);
+
+// Every kind of failed reach is a call attempt
+for (const e of ["CALL_ATTEMPT", "NO_PICKUP", "TEXT_SENT", "CANT_CONTACT"] as const) assert.equal(isCallAttempt(e), true, e);
+assert.equal(isCallAttempt("AM_SCENARIO"), false);
+
+// Who wrote it: hs = Hive call team, aliases fix shorthand, else the name
+assert.equal(noteAuthor("hs"), "Hive call team");
+assert.equal(noteAuthor("mddy", { mddy: "Maddy" }), "Maddy");
+assert.equal(noteAuthor("MDDY", { mddy: "Maddy" }), "Maddy");
+assert.equal(noteAuthor("al"), "Al");
+
+// DQ reason from the feedback: latest entry first
+const dq = (cell: string) => dqFromNotes(parseNotes(cell, optIn));
+assert.deepEqual(dq(""), { reason: "UNKNOWN", phase: null, evidence: null, needsAI: false });
+assert.deepEqual([dq("HS 12/3> NP, HS 13/3 txt sent").reason, dq("HS 12/3> NP, HS 13/3 txt sent").phase], ["GHOSTED", "PRE_CONTACT"]);
+assert.equal(dq("HS 12/3> number disconnected").reason, "SPAM");
+assert.equal(dq("HS 12/3> spoke, too far for them").reason, "LOCATION");
+assert.equal(dq("HS 12/3> spoke, they don't service that suburb").reason, "LOCATION");
+assert.equal(dq("HS 12/3> said too expensive").reason, "BUDGET");
+assert.equal(dq("HS 12/3> getting 3 quotes, price is key").reason, "PRICE_SHOPPER");
+assert.equal(dq("HS 12/3> not interested anymore").reason, "NOT_INTERESTED");
+assert.equal(dq("HS 12/3> didnt inquire").reason, "NOT_INTERESTED");
+assert.equal(dq("HS 12/3> spoke, too far, HS 14/3 actually not interested").reason, "NOT_INTERESTED"); // latest wins
+assert.equal(dq("HS 12/3> spoke, too far").phase, "POST_CONTACT");
+assert.equal(dq("HS 12/3> spoke, too far").evidence, "spoke, too far");
+// Something said but no rule matches → the AI pass decides
+assert.deepEqual(dq("HS 12/3> spoke to them, will think about it"), { reason: null, phase: "POST_CONTACT", evidence: null, needsAI: true });
+
+// Returned by client: handover / consult / quote → Chase Up only
+assert.equal(isReturn("HANDOVER_LIVE", "CHASE_UP"), true);
+assert.equal(isReturn("QUOTE_SENT", "CHASE_UP"), true);
+assert.equal(isReturn("CONTACTED", "CHASE_UP"), false);
+assert.equal(isReturn("HANDOVER_LIVE", "CONTACTED"), false);
+assert.equal(isReturn(null, "CHASE_UP"), false);
 
 console.log("notes-parser: all checks passed");

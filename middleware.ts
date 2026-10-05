@@ -33,7 +33,7 @@ export default clerkMiddleware(async (auth, req) => {
   // publicMetadata is set the moment an account is created — see
   // lib/actions.ts createUser — and mirrored by the Clerk webhook,
   // app/api/webhooks/clerk/route.ts.
-  type Metadata = { role?: "ADMIN" | "COACH" | "CLIENT"; clientId?: string; clientSlug?: string };
+  type Metadata = { role?: "ADMIN" | "COACH" | "CLIENT" | "AGENT"; clientId?: string; clientSlug?: string };
   let metadata = (sessionClaims?.publicMetadata ?? {}) as Metadata;
 
   // Some Clerk instances' default session token doesn't include
@@ -56,6 +56,13 @@ export default clerkMiddleware(async (auth, req) => {
 
   const { pathname } = req.nextUrl;
 
+  // An agent works only on their assigned clients: the client list (filtered
+  // to them), those clients' pages (checked on the page) and Leads. Nothing
+  // agency-wide.
+  if (metadata.role === "AGENT" && isCoachOnlyRoute(req) && pathname !== "/clients") {
+    return NextResponse.redirect(new URL("/clients", req.url));
+  }
+
   if (metadata.role === "CLIENT") {
     const home = metadata.clientSlug ? `/clients/${metadata.clientSlug}` : "/login?error=no-client";
 
@@ -63,9 +70,11 @@ export default clerkMiddleware(async (auth, req) => {
       return NextResponse.redirect(new URL(home, req.url));
     }
 
-    // Block a client account from viewing another client's detail page.
+    // Block a client account from viewing another client's detail page. An
+    // email action link (?a=) for someone else's client is a plain 403.
     const clientDetailMatch = pathname.match(/^\/clients\/([^/]+)/);
     if (clientDetailMatch && clientDetailMatch[1] !== metadata.clientSlug) {
+      if (req.nextUrl.searchParams.has("a")) return new NextResponse("You don't have access to this client.", { status: 403 });
       return NextResponse.redirect(new URL(home, req.url));
     }
 

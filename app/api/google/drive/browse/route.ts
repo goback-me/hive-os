@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireUser } from "@/lib/auth";
+import { requireUser, canAccessClient } from "@/lib/auth";
 import { getValidAccessToken } from "@/lib/google-sheets";
 import { getDriveMeta, isFolder, isWithinDriveTree, listDriveChildren, parseDriveLink } from "@/lib/google-drive";
 
@@ -15,7 +15,7 @@ export async function GET(req: NextRequest) {
   if (!clientId) return NextResponse.json({ error: "clientId is required" }, { status: 400 });
 
   const user = await requireUser();
-  if (user.role === "CLIENT" && clientId !== user.clientId) {
+  if (!canAccessClient(user, clientId)) {
     return NextResponse.json({ error: "Not authorized for this client" }, { status: 403 });
   }
 

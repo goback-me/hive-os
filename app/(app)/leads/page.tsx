@@ -3,7 +3,7 @@ import ClientFilter from "@/components/ClientFilter";
 import GoogleAccountCard from "@/components/GoogleAccountCard";
 import LeadsSheetPanel from "@/components/LeadsSheetPanel";
 import AddClientSheetButton from "@/components/AddClientSheetButton";
-import { requireUser } from "@/lib/auth";
+import { canAccessClient, requireUser } from "@/lib/auth";
 import { hasWriteScope } from "@/lib/google-sheets";
 
 export const dynamic = "force-dynamic";
@@ -26,7 +26,7 @@ export default async function LeadsPage({
 
   // A client login never sees the other clients in the picker — this list
   // backs both the dropdown and the fallback/lookup below.
-  const clients = user.role === "COACH" ? allClients : allClients.filter((c) => c.id === user.clientId);
+  const clients = allClients.filter((c) => canAccessClient(user, c.id));
 
   if (clients.length === 0) {
     return (

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireUser } from "@/lib/auth";
+import { requireUser, canAccessClient } from "@/lib/auth";
 
 // Lazy-loaded only when a lead's detail popup is open (components/LeadsPanel.tsx)
 // — keeps the paginated lead list itself light. Adding a note goes through
@@ -13,7 +13,7 @@ export async function GET(req: NextRequest) {
   if (!lead || lead.deletedAt) return NextResponse.json({ error: "Lead not found" }, { status: 404 });
 
   const user = await requireUser();
-  if (user.role === "CLIENT" && lead.clientId !== user.clientId) {
+  if (!canAccessClient(user, lead.clientId)) {
     return NextResponse.json({ error: "Not authorized for this client" }, { status: 403 });
   }
 

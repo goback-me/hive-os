@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireUser } from "@/lib/auth";
+import { requireUser, canAccessClient } from "@/lib/auth";
 import { holdResponse } from "@/lib/report-hold";
 import { getReportVisibility } from "@/lib/client-stats";
 import { getSnapshot, isMonthKey } from "@/lib/kpi";
@@ -11,7 +11,7 @@ export async function GET(req: NextRequest) {
   if (!clientId) return NextResponse.json({ error: "clientId is required" }, { status: 400 });
 
   const user = await requireUser();
-  if (user.role === "CLIENT" && clientId !== user.clientId) {
+  if (!canAccessClient(user, clientId)) {
     return NextResponse.json({ error: "Not authorized for this client" }, { status: 403 });
   }
   const hold = await holdResponse(user, clientId);

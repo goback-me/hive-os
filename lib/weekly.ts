@@ -12,7 +12,7 @@ export { weekStart };
 // coach edits it. (Internal data alerts stay out: the client reads this.)
 export async function draftWeeklyUpdate(clientId: string, now = new Date()) {
   const from = weekStart(now);
-  const [client, k, overdue, steps] = await Promise.all([
+  const [client, k, overdue, steps, call] = await Promise.all([
     prisma.client.findUnique({ where: { id: clientId }, select: { clientType: true } }),
     getRangeKpis(clientId, { from, to: now }, now),
     overdueLeads(clientId, now),
@@ -22,6 +22,8 @@ export async function draftWeeklyUpdate(clientId: string, now = new Date()) {
       select: { nextStep: true, nextStepDue: true },
       take: 5,
     }),
+    // The latest held weekly call (lib/weekly-meetings.ts) prefills the rest.
+    prisma.weeklyMeeting.findFirst({ where: { clientId, status: "HELD", weekOf: { gte: new Date(now.getTime() - 14 * 86_400_000) } }, orderBy: { weekOf: "desc" }, select: { summary: true, issues: true, nextSteps: true } }),
   ]);
   const t = terms(client?.clientType);
   const n = (v: number, one: string, many = `${one}s`) => `${v} ${v === 1 ? one : many}`;
@@ -30,5 +32,10 @@ export async function draftWeeklyUpdate(clientId: string, now = new Date()) {
   ];
   const issues = overdue.length ? [`- ${n(overdue.length, "lead")} waiting 7+ days on your update — please mark them won or lost`] : [];
   const nextSteps = steps.map((s) => `- ${s.nextStep}${s.nextStepDue ? ` (by ${s.nextStepDue.toLocaleDateString("en-AU", { timeZone: "Australia/Sydney", day: "numeric", month: "short" })})` : ""}`);
+  // A held weekly call's summary / issues / next steps come first — the
+  // agent's notes from talking to the client.
+  if (call?.summary) wins.push(call.summary);
+  if (call?.issues) issues.unshift(call.issues);
+  if (call?.nextSteps) nextSteps.unshift(call.nextSteps);
   return { weekOf: from.toISOString(), wins: wins.join("\n"), issues: issues.join("\n") || "Nothing blocking.", nextSteps: nextSteps.join("\n") };
 }

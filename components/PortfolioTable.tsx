@@ -80,7 +80,7 @@ export default function PortfolioTable() {
         <table className="w-full text-left text-sm min-w-[1200px]">
           <thead>
             <tr style={{ borderBottom: "1px solid var(--border)" }}>
-              {["Client", ...METRICS.map((m) => m.label), "Alerts", "Needs action", "Last contact"].map((h) => (
+              {["Client", ...METRICS.map((m) => m.label), "Alerts", "Needs action", "Last contact", "Last call"].map((h) => (
                 <th key={h} className="py-3 px-3 text-xs font-bold whitespace-nowrap" style={{ color: "var(--text-secondary)" }}>{h}</th>
               ))}
             </tr>
@@ -126,6 +126,9 @@ export default function PortfolioTable() {
                 </td>
                 <td className="py-2.5 px-3 whitespace-nowrap" style={{ color: r.needsAction ? "var(--text-primary)" : "var(--text-muted)" }}>{r.needsAction || "—"}</td>
                 <td className="py-2.5 px-3 whitespace-nowrap" style={{ color: "var(--text-secondary)" }}>{r.lastContact ? sydDate(r.lastContact) : "Never"}</td>
+                <td className="py-2.5 px-3 whitespace-nowrap" style={{ color: r.lastMeeting?.mood === "AT_RISK" ? "var(--danger)" : "var(--text-secondary)" }}>
+                  {r.lastMeeting ? `${sydDate(r.lastMeeting.at)}${r.lastMeeting.mood ? ` · ${{ GOOD: "Good", NEUTRAL: "Neutral", AT_RISK: "At risk" }[r.lastMeeting.mood]}` : ""}` : "—"}
+                </td>
               </tr>
             ))}
           </tbody>

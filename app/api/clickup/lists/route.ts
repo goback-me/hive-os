@@ -5,7 +5,7 @@ import { listClickUpLists } from "@/lib/clickup";
 // The connected ClickUp workspace's lists — for picking a client's list.
 export async function GET() {
   const user = await getCurrentUser();
-  if (user?.role !== "COACH") return NextResponse.json({ error: "Not authorized" }, { status: 403 });
+  if (user?.role !== "COACH" || user.isAgent) return NextResponse.json({ error: "Not authorized" }, { status: 403 });
   try {
     return NextResponse.json({ lists: await listClickUpLists() });
   } catch (e) {

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireUser } from "@/lib/auth";
+import { requireUser, canAccessClient } from "@/lib/auth";
 
 // Re-fetched by ProgressNotesPanel right after adding a note — the form
 // itself is a client component now (see that file for why), so it needs its
@@ -11,7 +11,7 @@ export async function GET(req: NextRequest) {
   if (!clientId) return NextResponse.json({ error: "clientId is required" }, { status: 400 });
 
   const user = await requireUser();
-  if (user.role === "CLIENT" && clientId !== user.clientId) {
+  if (!canAccessClient(user, clientId)) {
     return NextResponse.json({ error: "Not authorized for this client" }, { status: 403 });
   }
 

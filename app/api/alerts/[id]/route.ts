@@ -6,7 +6,7 @@ import { getCurrentUser } from "@/lib/auth";
 // quiet unless the problem grows (lib/data-health.ts).
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   const user = await getCurrentUser();
-  if (user?.role !== "COACH") return NextResponse.json({ error: "Not authorized" }, { status: 403 });
+  if (user?.role !== "COACH" || user.isAgent) return NextResponse.json({ error: "Not authorized" }, { status: 403 });
   const { note } = await req.json().catch(() => ({ note: "" }));
   const text = String(note ?? "").trim();
   if (!text) return NextResponse.json({ error: "A note is required" }, { status: 400 });

@@ -4,6 +4,7 @@ import { getAdminGoogleConnection, getValidAccessToken } from "./google-sheets";
 import { getMetaTokenInfo } from "./meta-ads";
 import { overdueLeads } from "./reminders";
 import { syncAlertTasks } from "./clickup";
+import { callDateLabel, meetingSchedule } from "./weekly-meetings";
 import { DATE_OPT_IN_KEYWORDS, findColumn, findHeaderIndex } from "./sheet-parse";
 import type { AlertSeverity, DataAlertType } from "@prisma/client";
 import type { Diff } from "./reconcile";
@@ -152,6 +153,19 @@ export async function runHealthChecks(clientId: string, now = new Date()) {
   if (slackFails.length) {
     f.push({ type: "SLACK_FAILED", severity: "WARNING", title: `${plural(slackFails.length, "Slack post")} failed`, detail: slackFails[0].error ?? "", fixHint: 'Check the channel ID in Client Details → Integrations, invite the Hive bot to the channel, and "Send test message".', fixUrl: url.dashboard, count: slackFails.length });
   }
+  // ── Weekly call (lib/weekly-meetings.ts) ──
+  const [unlogged, lastLogged] = await Promise.all([
+    prisma.weeklyMeeting.findMany({ where: { clientId, status: "PENDING" }, select: { weekOf: true } }),
+    prisma.weeklyMeeting.findFirst({ where: { clientId, status: { not: "PENDING" } }, orderBy: { weekOf: "desc" }, select: { weekOf: true, status: true, notHeldReason: true } }),
+  ]);
+  const overdueCalls = unlogged.filter((m) => now >= meetingSchedule(m.weekOf).alertAt);
+  if (overdueCalls.length) {
+    f.push({ type: "MEETING_NOT_LOGGED", severity: "WARNING", title: `${plural(overdueCalls.length, "weekly call")} not logged`, detail: `${overdueCalls.map((m) => callDateLabel(m.weekOf)).join(", ")} — the agent hasn't said how the call went.`, fixHint: "Ask the agent to log it (Client Details → Weekly call).", fixUrl: url.dashboard, count: overdueCalls.length });
+  }
+  if (lastLogged?.status === "NOT_HELD") {
+    f.push({ type: "MEETING_MISSED", severity: "WARNING", title: "Last weekly call didn't happen", detail: `${callDateLabel(lastLogged.weekOf)}: ${lastLogged.notHeldReason ?? "no reason given"}.`, fixHint: "Rebook the call with the client — this clears once the next call is logged as held.", fixUrl: url.dashboard });
+  }
+
   if (clickupFails.length) {
     f.push({ type: "CLICKUP_FAILED", severity: "WARNING", title: `${plural(clickupFails.length, "ClickUp task")} couldn't be created or closed`, detail: `${clickupFails[0].title}: ${clickupFails[0].error ?? ""}`, fixHint: "Check the ClickUp API key under Settings → Integrations and the client's ClickUp list.", fixUrl: url.dashboard, count: clickupFails.length });
   }

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getValidAccessToken, getSheetValues } from "@/lib/google-sheets";
-import { requireUser } from "@/lib/auth";
+import { requireUser, canAccessClient } from "@/lib/auth";
 import { findHeaderIndex, normalizeStatus } from "@/lib/sheet-parse";
 
 // Fetches live rows for a client's assigned sheet. Only visibleColumns are
@@ -12,7 +12,7 @@ export async function GET(req: NextRequest) {
   if (!clientId) return NextResponse.json({ error: "clientId is required" }, { status: 400 });
 
   const scope = await requireUser();
-  if (scope.role === "CLIENT" && clientId !== scope.clientId) {
+  if (!canAccessClient(scope, clientId)) {
     return NextResponse.json({ error: "Not authorized for this client" }, { status: 403 });
   }
 

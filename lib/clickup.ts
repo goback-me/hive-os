@@ -39,7 +39,15 @@ export async function listClickUpLists(): Promise<{ id: string; name: string }[]
   return out;
 }
 
-type Task = { kind: string; dedupeKey: string; title: string; description: string; dueDate?: Date | null };
+// Team members, for the Settings mapping (User.clickupUserId).
+export async function listClickUpMembers(): Promise<{ id: string; name: string }[]> {
+  const c = await config();
+  if (!c?.teamId) throw new Error("ClickUp isn't set up");
+  const { team } = await call<{ team: { members: { user: { id: number; username: string | null; email: string } }[] } }>(c.key, `/team/${c.teamId}`);
+  return team.members.map((m) => ({ id: String(m.user.id), name: m.user.username || m.user.email }));
+}
+
+type Task = { kind: string; dedupeKey: string; title: string; description: string; dueDate?: Date | null; assignees?: string[] };
 
 // Create a task once per dedupeKey (a failed attempt is retried next time).
 export async function ensureTask(clientId: string, t: Task): Promise<string | null> {
@@ -51,13 +59,47 @@ export async function ensureTask(clientId: string, t: Task): Promise<string | nu
   try {
     const task = await call<{ id: string; url: string }>(c.key, `/list/${client.clickupListId}/task`, {
       method: "POST",
-      body: JSON.stringify({ name: t.title, markdown_description: t.description, ...(t.dueDate ? { due_date: t.dueDate.getTime(), due_date_time: true } : {}) }),
+      body: JSON.stringify({
+        name: t.title,
+        markdown_description: t.description,
+        ...(t.dueDate ? { due_date: t.dueDate.getTime(), due_date_time: true } : {}),
+        ...(t.assignees?.length ? { assignees: t.assignees.map(Number) } : {}),
+      }),
     });
     await prisma.clickUpTaskLog.update({ where: { id: log.id }, data: { taskId: task.id, taskUrl: task.url, status: "SENT", error: null } });
     return task.id;
   } catch (e) {
     await prisma.clickUpTaskLog.update({ where: { id: log.id }, data: { status: "FAILED", error: (e instanceof Error ? e.message : String(e)).slice(0, 300) } });
     return null;
+  }
+}
+
+// A task we made: new description, then closed — e.g. a logged weekly call.
+// A failure is recorded on its ClickUpTaskLog row (→ CLICKUP_FAILED warning);
+// it never throws.
+export async function finishTask(taskId: string, description: string) {
+  const c = await config();
+  if (!c) return false;
+  try {
+    await call(c.key, `/task/${taskId}`, { method: "PUT", body: JSON.stringify({ description }) });
+    await closeTask(c.key, taskId);
+    await prisma.clickUpTaskLog.updateMany({ where: { taskId }, data: { closedAt: new Date() } });
+    return true;
+  } catch (e) {
+    await prisma.clickUpTaskLog.updateMany({ where: { taskId }, data: { status: "FAILED", error: `Update failed: ${e instanceof Error ? e.message : e}`.slice(0, 300) } });
+    return false;
+  }
+}
+
+export async function commentOnTask(taskId: string, text: string) {
+  const c = await config();
+  if (!c) return false;
+  try {
+    await call(c.key, `/task/${taskId}/comment`, { method: "POST", body: JSON.stringify({ comment_text: text, notify_all: true }) });
+    return true;
+  } catch (e) {
+    await prisma.clickUpTaskLog.updateMany({ where: { taskId }, data: { status: "FAILED", error: `Comment failed: ${e instanceof Error ? e.message : e}`.slice(0, 300) } });
+    return false;
   }
 }
 

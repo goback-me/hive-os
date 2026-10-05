@@ -103,6 +103,12 @@ export const TERMINAL_STAGES: LeadStageValue[] = ["WON", "LOST", "DISQUALIFIED"]
 export const HANDOVER_STAGES: LeadStageValue[] = ["HANDOVER_LIVE", "HANDOVER_ATTEMPTED", "HANDOVER_TEXT"];
 export const isTerminal = (s: LeadStageValue) => TERMINAL_STAGES.includes(s);
 
+// Returned by the client: a lead past the handover (handover / consult /
+// quote) sent back to Chase Up. Logged as a RETURNED_BY_CLIENT stage event;
+// the lead keeps its history and counts once per stage in the funnel.
+export const RETURNABLE_STAGES: LeadStageValue[] = [...HANDOVER_STAGES, "CONSULT_BOOKED", "CONSULT_CANCELLED", "CONSULT_NO_SHOW", "CONSULT_ATTENDED", "QUOTE_SENT"];
+export const isReturn = (from: LeadStageValue | null, to: LeadStageValue) => to === "CHASE_UP" && !!from && RETURNABLE_STAGES.includes(from);
+
 // The steps every won deal must have passed. "A handover" is any of the
 // three handover stages; when one has to be inferred we record
 // HANDOVER_ATTEMPTED — the weakest claim (a handover happened, method unknown).

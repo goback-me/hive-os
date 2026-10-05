@@ -2,6 +2,8 @@ import { redirect } from "next/navigation";
 import { cache } from "react";
 import { auth } from "@clerk/nextjs/server";
 import { getClerkAdminClient } from "@/lib/clerk-admin";
+import { prisma } from "@/lib/prisma";
+import { canAccessClient } from "@/lib/access";
 
 export type CurrentUser = {
   id: string; // Clerk user id — app-side User.id is looked up separately where needed (e.g. Settings)
@@ -14,6 +16,11 @@ export type CurrentUser = {
   // that needs isAdmin itself.
   role: "COACH" | "CLIENT";
   isAdmin: boolean;
+  // AGENT accounts are team members (role "COACH") limited to the clients
+  // they run the weekly call for — agentClientIds. requireCoach() still turns
+  // them away: agency-wide and coach-only actions aren't theirs.
+  isAgent: boolean;
+  agentClientIds: string[];
   clientId: string | null;
   clientSlug: string | null;
 };
@@ -30,7 +37,7 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
   const { userId, sessionClaims } = await auth();
   if (!userId) return null;
 
-  type Metadata = { role?: "ADMIN" | "COACH" | "CLIENT"; clientId?: string; clientSlug?: string; name?: string };
+  type Metadata = { role?: "ADMIN" | "COACH" | "CLIENT" | "AGENT"; clientId?: string; clientSlug?: string; name?: string };
   let metadata = (sessionClaims?.publicMetadata ?? {}) as Metadata;
   let email = sessionClaims?.email as string | undefined;
   let firstName = sessionClaims?.firstName as string | undefined;
@@ -58,6 +65,10 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
   if (!metadata.role) return null;
 
   const name = metadata.name || [firstName, lastName].filter(Boolean).join(" ") || email || "Unnamed";
+  const isAgent = metadata.role === "AGENT";
+  const agentClientIds = isAgent
+    ? ((await prisma.user.findUnique({ where: { clerkId: userId }, select: { callClients: { where: { archivedAt: null }, select: { id: true } } } }))?.callClients.map((c) => c.id) ?? [])
+    : [];
 
   return {
     id: userId,
@@ -66,6 +77,8 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
     name,
     role: metadata.role === "CLIENT" ? "CLIENT" : "COACH",
     isAdmin: metadata.role === "ADMIN",
+    isAgent,
+    agentClientIds,
     clientId: metadata.clientId ?? null,
     clientSlug: metadata.clientSlug ?? null,
   };
@@ -78,12 +91,22 @@ export async function requireUser(): Promise<CurrentUser> {
   return user;
 }
 
-/** Require a COACH or ADMIN. Sends clients back to their own dashboard instead of leaking a 403. */
+/** Require a COACH or ADMIN. Sends clients back to their own dashboard instead of leaking a 403; agents to their client list. */
 export async function requireCoach(): Promise<CurrentUser> {
+  const user = await requireUser();
+  if (user.role !== "COACH") redirect("/dashboard");
+  if (user.isAgent) redirect("/clients");
+  return user;
+}
+
+/** Require a team member — COACH, ADMIN or AGENT. */
+export async function requireTeam(): Promise<CurrentUser> {
   const user = await requireUser();
   if (user.role !== "COACH") redirect("/dashboard");
   return user;
 }
+
+export { canAccessClient };
 
 /** Require an ADMIN — agency-level controls (Google connection, creating admins). */
 export async function requireAdmin(): Promise<CurrentUser> {
@@ -99,8 +122,7 @@ export async function requireAdmin(): Promise<CurrentUser> {
  */
 export async function requireClientAccess(clientId: string): Promise<CurrentUser> {
   const user = await requireUser();
-  if (user.role === "COACH") return user;
-  if (user.clientId !== clientId) redirect("/dashboard");
+  if (!canAccessClient(user, clientId)) redirect(user.role === "COACH" ? "/clients" : "/dashboard");
   return user;
 }
 
@@ -110,6 +132,7 @@ export async function requireClientAccess(clientId: string): Promise<CurrentUser
  * `{ clientId: <their own id> }` for a CLIENT. Spread this into `where`
  * clauses, e.g. `prisma.task.findMany({ where: { ...scope, status: "DONE" } })`.
  */
-export function clientScopeWhere(user: CurrentUser): { clientId?: string } {
-  return user.role === "COACH" ? {} : { clientId: user.clientId ?? "__none__" };
+export function clientScopeWhere(user: CurrentUser): { clientId?: string | { in: string[] } } {
+  if (user.role === "CLIENT") return { clientId: user.clientId ?? "__none__" };
+  return user.isAgent ? { clientId: { in: user.agentClientIds } } : {};
 }

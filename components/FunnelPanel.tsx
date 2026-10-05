@@ -102,6 +102,7 @@ export default function FunnelPanel({
         <div className="flex flex-wrap gap-x-6 gap-y-1 mt-4 pt-3" style={{ borderTop: "1px solid var(--border)" }}>
           <Stat label="Overall conversion" value={fmtPct(overall.rates.overallConversion)} strong />
           <Stat label="Live transfer rate" value={fmtPct(overall.rates.liveTransferRate)} />
+          <Stat label="Returned by client" value={`${c.returned.toLocaleString()} (${fmtPct(overall.rates.returnedRate)} of handovers)`} />
           <Stat label="No-shows" value={c.noShows.toLocaleString()} />
           {dq && <Stat label="Lost" value={dq.lost.toLocaleString()} />}
           {dq && <Stat label="Disqualified" value={dq.dq.toLocaleString()} />}

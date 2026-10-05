@@ -20,7 +20,8 @@ export type PortfolioRow = {
   openAlerts: number;
   dangerAlerts: number;
   needsAction: number;
-  lastContact: string | null;
+  lastContact: string | null; // ContactLog — a held weekly call adds one too
+  lastMeeting: { at: string; mood: "GOOD" | "NEUTRAL" | "AT_RISK" | null } | null; // latest HELD weekly call
 };
 
 const pick = (v: KpiValues): Values => ({
@@ -40,10 +41,11 @@ export async function getPortfolio(report: ReportRange, now = new Date()): Promi
   const prev = previousReportRange(report, now);
   const clients = await prisma.client.findMany({ where: { archivedAt: null, status: { not: "CHURNED" } }, select: { id: true, name: true, slug: true }, orderBy: { name: "asc" } });
   const ids = clients.map((c) => c.id);
-  const [alerts, contacts, needs] = await Promise.all([
+  const [alerts, contacts, needs, meetings] = await Promise.all([
     prisma.dataAlert.groupBy({ by: ["clientId", "severity"], where: { clientId: { in: ids }, status: "OPEN" }, _count: true }),
     prisma.contactLog.groupBy({ by: ["clientId"], where: { clientId: { in: ids } }, _max: { contactedAt: true } }),
     getNeedsAction(),
+    prisma.weeklyMeeting.findMany({ where: { clientId: { in: ids }, status: "HELD" }, orderBy: { weekOf: "desc" }, distinct: ["clientId"], select: { clientId: true, weekOf: true, clientMood: true } }),
   ]);
 
   const rows = await Promise.all(
@@ -66,6 +68,7 @@ export async function getPortfolio(report: ReportRange, now = new Date()): Promi
         dangerAlerts,
         needsAction: mine.filter((n) => n.severity !== "success").length,
         lastContact: last ? new Date(last).toISOString() : null,
+        lastMeeting: ((m) => (m ? { at: m.weekOf.toISOString(), mood: m.clientMood } : null))(meetings.find((x) => x.clientId === c.id)),
       };
     })
   );

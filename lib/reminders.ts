@@ -6,6 +6,7 @@ import { sydneyDay, sydneyHour, weekStart } from "./sheet-parse";
 import { queueSlack } from "./slack";
 import { ensureTask } from "./clickup";
 import { getClientCycle, type CycleStep } from "./buying-cycle";
+import { appUrl, emailConfigured, sendActionEmail } from "./email";
 
 // "This lead needs your update". The daily cron (from 9am Sydney) reminds
 // the client about leads waiting on them, on a schedule per step — using
@@ -207,13 +208,26 @@ export async function raiseReminders(now = new Date()) {
     if (!client) continue;
     const mine = planned.filter((p) => p.c.clientId === clientId && p.outstanding).sort((a, b) => a.anchor.getTime() - b.anchor.getTime());
     const lines = mine.map((p) => line(p.c, p.anchor, p.stale, now));
-    const link = `${process.env.NEXTAUTH_URL || ""}/clients/${client.slug}?tab=dashboard`;
+    const path = `/clients/${client.slug}/updates`;
+    const link = `${appUrl()}${path}`;
     const n = `${mine.length} lead${mine.length === 1 ? "" : "s"}`;
 
-    if (process.env.RESEND_API_KEY && process.env.EMAIL_FROM) {
+    if (emailConfigured()) {
       try {
-        const body = [`Hi ${client.name},`, "", `${n} ${mine.length === 1 ? "needs" : "need"} an update from you — tell us what happened with each:`, "", ...lines, "", `Update them here: ${link}`, "", "— Hive Social"].join("\n");
-        if (await email(client, `${n} waiting on your update`, body)) {
+        // The leads in this email are pinned at the top of the page it opens.
+        const sent = await sendActionEmail({
+          to: client.users.length ? client.users.map((u) => u.email) : client.email ? [client.email] : [],
+          type: "client_update",
+          clientId,
+          refIds: mine.map((p) => p.c.id),
+          path,
+          subject: `${n} waiting on your update`,
+          heading: `Hi ${client.name}, ${n} ${mine.length === 1 ? "needs" : "need"} your update`,
+          intro: "Tell us what happened with each — it takes a few seconds per lead and updates your sheet too.",
+          lines,
+          button: "Update your leads",
+        });
+        if (sent) {
           emailed++;
           await prisma.leadReminder.updateMany({ where: { clientId, leadId: { in: due.map((p) => p.c.id) }, emailedAt: null }, data: { emailedAt: now } });
         }
@@ -227,16 +241,4 @@ export async function raiseReminders(now = new Date()) {
     await ensureTask(clientId, { kind: "chase_client", dedupeKey: `chase:${clientId}:${weekKey}`, title: `Chase client to update ${n}`, description: `${lines.join("\n")}\n\n${link}` });
   }
   return { raised: due.length, emailed, clients: dueClients.size, stale: staleIds.length };
-}
-
-async function email(client: { email: string | null; users: { email: string }[] }, subject: string, text: string) {
-  const to = client.users.length ? client.users.map((u) => u.email) : client.email ? [client.email] : [];
-  if (!to.length) return false;
-  const res = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ from: process.env.EMAIL_FROM, to, subject, text }),
-  });
-  if (!res.ok) throw new Error(`Resend ${res.status}: ${await res.text()}`);
-  return true;
 }
