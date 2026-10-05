@@ -1,5 +1,4 @@
 import { prisma } from "./prisma";
-import { STAGE_LABELS } from "./lead-status";
 
 // ClickUp tasks for the account team, created in each client's ClickUp list
 // (Client.clickupListId) with the API key + team saved under Settings →
@@ -79,18 +78,15 @@ export async function syncAlertTasks(clientId: string) {
   const c = await config();
   if (!c) return;
   const alerts = await prisma.dataAlert.findMany({ where: { clientId, OR: [{ severity: "DANGER" }, { type: "CLIENT_UPDATE_OVERDUE" }] } });
-  for (const a of alerts.filter((x) => x.status === "OPEN" && !x.clickupTaskId)) {
-    const chase = a.type === "CLIENT_UPDATE_OVERDUE";
-    let description = `${a.detail}\n\n**Fix:** ${a.fixHint}${a.fixUrl ? `\n\n${appUrl()}${a.fixUrl}` : ""}`;
-    if (chase && a.affectedLeadIds.length) {
-      const leads = await prisma.lead.findMany({ where: { id: { in: a.affectedLeadIds } }, select: { name: true, phone: true, stage: true }, take: 50 });
-      description = `${leads.map((l) => `- ${l.name || l.phone || "Unnamed lead"} (${STAGE_LABELS[l.stage]})`).join("\n")}\n\n${description}`;
-    }
+  // CLIENT_UPDATE_OVERDUE doesn't open one here — the weekly "Chase client"
+  // task comes from the reminders (lib/reminders.ts). Its old alert tasks
+  // still close below.
+  for (const a of alerts.filter((x) => x.status === "OPEN" && !x.clickupTaskId && x.type !== "CLIENT_UPDATE_OVERDUE")) {
     const taskId = await ensureTask(clientId, {
-      kind: chase ? "chase_client" : "alert",
+      kind: "alert",
       dedupeKey: `alert:${a.id}:${a.firstSeenAt.getTime()}`,
-      title: chase ? `Chase client to update ${a.count} lead${a.count === 1 ? "" : "s"}` : `Fix data: ${a.title}`,
-      description,
+      title: `Fix data: ${a.title}`,
+      description: `${a.detail}\n\n**Fix:** ${a.fixHint}${a.fixUrl ? `\n\n${appUrl()}${a.fixUrl}` : ""}`,
     });
     if (taskId) await prisma.dataAlert.update({ where: { id: a.id }, data: { clickupTaskId: taskId } });
   }

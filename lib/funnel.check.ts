@@ -1,6 +1,6 @@
 // Run: npx tsx lib/funnel.check.ts — throws on the first failure.
 import assert from "node:assert/strict";
-import { addLead, biggestDrop, emptyCounts, funnelRates, reachedRank, type FunnelLead } from "./funnel";
+import { addLead, biggestDrop, emptyCounts, funnelRates, isStuckWithClient, reachedRank, type FunnelLead } from "./funnel";
 import { STAGE_RANK } from "./lead-status";
 
 const lead = (p: Partial<FunnelLead>): FunnelLead => ({ campaign: "A", stage: "CHASE_UP", dqPhase: null, dqReason: null, lostReason: null, eventStages: [], ...p });
@@ -51,3 +51,30 @@ assert.equal(drop?.step, "Lead → contacted");
 assert.match(drop!.advice, /Offer\/intent/);
 
 console.log("funnel: all checks passed");
+
+// Handovers = every HANDOVER_STAGES; live transfers = HANDOVER_LIVE only;
+// liveTransferRate = live / all handovers.
+{
+  const h = emptyCounts();
+  [lead({ stage: "HANDOVER_LIVE" }), lead({ stage: "HANDOVER_ATTEMPTED" }), lead({ stage: "HANDOVER_TEXT" }), lead({ stage: "HANDOVER_ATTEMPTED" })].forEach((l) => addLead(h, l));
+  assert.equal(h.handovers, 4);
+  assert.equal(h.liveTransfers, 1);
+  assert.equal(funnelRates(h).liveTransferRate, 25);
+}
+
+// Handovers stuck with the client 14+ days → that drop is the client's.
+{
+  const day = 86_400_000;
+  const now = new Date("2026-10-05T00:00:00Z");
+  assert.equal(isStuckWithClient({ awaitingClientUpdate: true, handoverAt: new Date(now.getTime() - 14 * day), createdAt: now }, now), true);
+  assert.equal(isStuckWithClient({ awaitingClientUpdate: true, handoverAt: new Date(now.getTime() - 13 * day), createdAt: now }, now), false);
+  assert.equal(isStuckWithClient({ awaitingClientUpdate: false, handoverAt: new Date(0), createdAt: now }, now), false);
+
+  const s = emptyCounts();
+  for (let i = 0; i < 6; i++) addLead(s, lead({ stage: "HANDOVER_LIVE", stuckWithClient: i < 4 }));
+  addLead(s, lead({ stage: "CONSULT_BOOKED" }));
+  const d = biggestDrop(s)!;
+  assert.equal(d.step, "Handover → consult booked");
+  assert.equal(d.owner, "client");
+  assert.match(d.evidence ?? "", /4 stuck with client/);
+}

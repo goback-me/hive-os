@@ -32,9 +32,9 @@ export const STAGE_LABELS: Record<LeadStageValue, string> = {
   CHASE_UP: "Chase Up",
   CONTACTED: "Contacted",
   NURTURE: "Not ready yet (soft handover)",
-  HANDOVER_ATTEMPTED: "Handover Attempted",
-  HANDOVER_LIVE: "Live Transfer",
-  HANDOVER_TEXT: "Text Handover",
+  HANDOVER_ATTEMPTED: "Live attempted (details sent)",
+  HANDOVER_LIVE: "Live transfer",
+  HANDOVER_TEXT: "Text handover",
   CLIENT_CONTACTED: "Client Contacted",
   CONSULT_BOOKED: "Consult Booked",
   CONSULT_CANCELLED: "Consult Cancelled",
@@ -97,7 +97,10 @@ export const STAGE_RANK: Record<LeadStageValue, number> = Object.fromEntries(
 ) as Record<LeadStageValue, number>;
 
 export const TERMINAL_STAGES: LeadStageValue[] = ["WON", "LOST", "DISQUALIFIED"];
-export const HANDOVER_STAGES: LeadStageValue[] = ["HANDOVER_ATTEMPTED", "HANDOVER_LIVE", "HANDOVER_TEXT"];
+// A handover = the lead handed to the client. The one list behind the
+// handovers KPI, handoverAt, PENDING UPDATE write-back and awaitingClientUpdate
+// — add CLIENT_CONTACTED / NURTURE here if they should count too.
+export const HANDOVER_STAGES: LeadStageValue[] = ["HANDOVER_LIVE", "HANDOVER_ATTEMPTED", "HANDOVER_TEXT"];
 export const isTerminal = (s: LeadStageValue) => TERMINAL_STAGES.includes(s);
 
 // The steps every won deal must have passed. "A handover" is any of the
@@ -185,14 +188,11 @@ export function dqPhaseFor(furthest: LeadStageValue | null): DqPhaseValue {
   return "POST_HANDOVER";
 }
 
-// Handed to the client — they owe us an update until Prospect Status says
-// what happened. Nurture counts (a soft handover), for this accountability
-// only; it's still not a live transfer or a completed handover in the funnel.
-export const CLIENT_OWNED_STAGES: LeadStageValue[] = [...HANDOVER_STAGES, "NURTURE", "CLIENT_CONTACTED", "CONSULT_BOOKED"];
-
 // The client owes us an update: Prospect Status literally says "pending
-// update", or our team handed the lead over (HIVE STATUS is a client-owned
-// stage) and Prospect Status is still blank — while the lead isn't closed.
+// update", or our team handed the lead over (HIVE STATUS is a handover) and
+// Prospect Status is still blank — while the lead isn't closed. Any stage in
+// Prospect Status (booked, cancelled, no-show, attended, quoted, won, lost,
+// DQ) ends it.
 // `prospect` = the prospect column's resolved target (undefined = no column
 // or an unrecognised value; { stage: null } = blank / N/A).
 export function awaitingClientUpdate(opts: {
@@ -203,7 +203,7 @@ export function awaitingClientUpdate(opts: {
 }): boolean {
   if (isTerminal(opts.stage)) return false;
   if (opts.prospectPending) return true;
-  return !!opts.hive?.stage && CLIENT_OWNED_STAGES.includes(opts.hive.stage) && opts.prospect?.stage === null;
+  return !!opts.hive?.stage && HANDOVER_STAGES.includes(opts.hive.stage) && opts.prospect?.stage === null;
 }
 
 // Furthest non-terminal stage a lead is known to have reached.

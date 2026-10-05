@@ -5,6 +5,7 @@ import { getAdminGoogleConnection, getDropdownOptions, getValidAccessToken, getS
 import { automationWrites, queueWrites, type CellWrite } from "@/lib/sheet-writeback";
 import { countValues, reconcile, type SideCounts } from "@/lib/reconcile";
 import { runHealthChecks } from "@/lib/data-health";
+import { refreshHandoverAt } from "@/lib/reminders";
 import { kickSlack, queueLeadEvent } from "@/lib/slack";
 import { clampRange, getReportingScope, scopedSpend } from "@/lib/reporting-scope";
 import { classifyHive, classifyProspect, isPendingUpdate, parseMapping, resolveStatus } from "@/lib/status-classifier";
@@ -39,6 +40,7 @@ import {
   costPer,
   emptyCounts,
   funnelRates,
+  isStuckWithClient,
   type Durations,
   type FunnelCounts,
   type FunnelGroup,
@@ -87,6 +89,7 @@ export async function syncLeadsFromSheet(clientId: string): Promise<SyncSummary>
   try {
     sheet = await refreshDropdownOptions(sheet);
     const { summary, unmapped, automation, recon, slackEvents } = await runSync(clientId, sheet);
+    await refreshHandoverAt({ clientId });
     await prisma.clientSheet.update({
       where: { clientId },
       data: { lastSyncedAt: new Date(), lastSyncError: null, unmappedStatuses: unmapped },
@@ -705,7 +708,7 @@ export async function getClientFunnel(clientId: string, range?: { from?: Date; t
   const [leads, spend, durations] = await Promise.all([
     prisma.lead.findMany({
       where: { clientId, deletedAt: null, ...(createdAt ? { createdAt } : {}) },
-      select: { campaign: true, stage: true, dqPhase: true, dqReason: true, lostReason: true, stageEvents: { select: { stage: true } } },
+      select: { campaign: true, stage: true, dqPhase: true, dqReason: true, lostReason: true, awaitingClientUpdate: true, handoverAt: true, createdAt: true, stageEvents: { select: { stage: true } } },
     }),
     scopedSpend(scope, dateRange),
     getFunnelDurations(clientId, dateRange),
@@ -714,7 +717,7 @@ export async function getClientFunnel(clientId: string, range?: { from?: Date; t
   const overall = emptyCounts();
   const byCampaign = new Map<string, FunnelCounts>();
   for (const l of leads) {
-    const lead: FunnelLead = { ...l, campaign: campaignKey(l.campaign), eventStages: l.stageEvents.map((e) => e.stage) };
+    const lead: FunnelLead = { ...l, campaign: campaignKey(l.campaign), eventStages: l.stageEvents.map((e) => e.stage), stuckWithClient: isStuckWithClient(l) };
     if (!byCampaign.has(lead.campaign)) byCampaign.set(lead.campaign, emptyCounts());
     addLead(byCampaign.get(lead.campaign)!, lead);
     addLead(overall, lead);

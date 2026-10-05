@@ -23,7 +23,14 @@ export type FunnelLead = {
   dqReason: DqReasonValue | null;
   lostReason: LostReasonValue | null;
   eventStages: LeadStageValue[]; // every LeadStageEvent stage, any source
+  stuckWithClient?: boolean; // handed over STUCK_DAYS+ ago, still awaiting the client's update
 };
+
+// A handover still awaiting the client's update this long is "stuck with
+// client" — the drop is theirs to fix, not ours.
+export const STUCK_DAYS = 14;
+export const isStuckWithClient = (l: { awaitingClientUpdate: boolean; handoverAt: Date | null; createdAt: Date }, now = new Date()) =>
+  l.awaitingClientUpdate && now.getTime() - (l.handoverAt ?? l.createdAt).getTime() >= STUCK_DAYS * 86_400_000;
 
 export type FunnelCounts = {
   leads: number;
@@ -31,6 +38,7 @@ export type FunnelCounts = {
   qualified: number;
   handovers: number;
   liveTransfers: number;
+  stuckWithClient: number;
   consultsBooked: number;
   consultsAttended: number;
   noShows: number;
@@ -117,6 +125,7 @@ export function emptyCounts(): FunnelCounts {
     qualified: 0,
     handovers: 0,
     liveTransfers: 0,
+    stuckWithClient: 0,
     consultsBooked: 0,
     consultsAttended: 0,
     noShows: 0,
@@ -136,8 +145,9 @@ export function addLead(c: FunnelCounts, lead: FunnelLead) {
   c.leads++;
   if (r >= STAGE_RANK.CONTACTED && !preContactDq) c.contacted++;
   if (r >= STAGE_RANK.HANDOVER_ATTEMPTED) c.qualified++; // any handover or CLIENT_CONTACTED (or later)
-  if (r >= STAGE_RANK.HANDOVER_LIVE) c.handovers++; // a completed handover — attempts alone don't count
+  if (r >= STAGE_RANK.HANDOVER_ATTEMPTED) c.handovers++; // any HANDOVER_STAGES (live, attempted, text) or later
   if (has(lead, "HANDOVER_LIVE")) c.liveTransfers++;
+  if (lead.stuckWithClient) c.stuckWithClient++;
   if (r >= STAGE_RANK.CONSULT_BOOKED) c.consultsBooked++;
   if (has(lead, "CONSULT_NO_SHOW")) c.noShows++;
   if (r >= STAGE_RANK.CONSULT_ATTENDED) c.consultsAttended++;
@@ -176,11 +186,20 @@ export const costPer = (spend: number | null, n: number) => (spend != null && n 
 // denominator is under MIN_SAMPLE are skipped — 1 of 2 isn't a signal.
 const MIN_SAMPLE = 5;
 
-export type BiggestDrop = { step: string; rate: number; from: number; to: number; advice: string; evidence?: string };
+// owner = who has to act: our team, or the client.
+export type BiggestDrop = { step: string; rate: number; from: number; to: number; advice: string; evidence?: string; owner: "team" | "client" };
 
 export function biggestDrop(c: FunnelCounts): BiggestDrop | null {
   const r = funnelRates(c);
   const dqShare = (phase: DqPhaseValue) => (c.dq > 0 ? Math.round((c.dqByPhase[phase] / c.dq) * 100) : 0);
+  // Handovers that never got to a booking: mostly stuck with the client →
+  // the client's drop to fix.
+  const stuck = c.stuckWithClient;
+  const clientStuck = stuck > 0 && stuck * 2 >= c.handovers - c.consultsBooked;
+  const handoverEvidence = [
+    stuck ? `${stuck} stuck with client (no update ${STUCK_DAYS}+ days)` : null,
+    c.dqByPhase.POST_HANDOVER ? `${c.dqByPhase.POST_HANDOVER} DQ'd after handover (${dqShare("POST_HANDOVER")}% of DQs)` : null,
+  ].filter(Boolean).join(" · ");
   const steps: (BiggestDrop & { denom: number })[] = [
     {
       step: "Lead → contacted",
@@ -189,6 +208,7 @@ export function biggestDrop(c: FunnelCounts): BiggestDrop | null {
       to: c.contacted,
       denom: c.leads,
       advice: "Offer/intent weak — check ads & offer",
+      owner: "team",
       evidence: c.dqByPhase.PRE_CONTACT ? `${c.dqByPhase.PRE_CONTACT} DQ'd before contact (${dqShare("PRE_CONTACT")}% of DQs)` : undefined,
     },
     {
@@ -198,6 +218,7 @@ export function biggestDrop(c: FunnelCounts): BiggestDrop | null {
       to: c.qualified,
       denom: c.contacted,
       advice: "Targeting off — tighten audience & qualifying questions",
+      owner: "team",
       evidence: c.dqByPhase.POST_CONTACT ? `${c.dqByPhase.POST_CONTACT} DQ'd after contact (${dqShare("POST_CONTACT")}% of DQs)` : undefined,
     },
     {
@@ -206,12 +227,15 @@ export function biggestDrop(c: FunnelCounts): BiggestDrop | null {
       from: c.handovers,
       to: c.consultsBooked,
       denom: c.handovers,
-      advice: "DQs after handover — handover / team training, faster client callback",
-      evidence: c.dqByPhase.POST_HANDOVER ? `${c.dqByPhase.POST_HANDOVER} DQ'd after handover (${dqShare("POST_HANDOVER")}% of DQs)` : undefined,
+      advice: clientStuck
+        ? "Stuck with client — chase them to update their leads (Dashboard → Update your leads)"
+        : "DQs after handover — handover / team training, faster client callback",
+      evidence: handoverEvidence || undefined,
+      owner: clientStuck ? "client" : "team",
     },
-    { step: "Booked → attended", rate: r.showRate ?? NaN, from: c.consultsBooked, to: c.consultsAttended, denom: c.consultsBooked, advice: "Low show rate — add consult reminders" },
-    { step: "Consult → quote", rate: r.quoteRate ?? NaN, from: c.consultsAttended, to: c.quotes, denom: c.consultsAttended, advice: "Client selling — work through the sales Playbooks with them" },
-    { step: "Quote → won", rate: r.closeRate ?? NaN, from: c.quotes, to: c.won, denom: c.quotes, advice: "Client selling — work through the sales Playbooks with them" },
+    { step: "Booked → attended", rate: r.showRate ?? NaN, from: c.consultsBooked, to: c.consultsAttended, denom: c.consultsBooked, advice: "Low show rate — add consult reminders", owner: "client" },
+    { step: "Consult → quote", rate: r.quoteRate ?? NaN, from: c.consultsAttended, to: c.quotes, denom: c.consultsAttended, advice: "Client selling — work through the sales Playbooks with them", owner: "client" },
+    { step: "Quote → won", rate: r.closeRate ?? NaN, from: c.quotes, to: c.won, denom: c.quotes, advice: "Client selling — work through the sales Playbooks with them", owner: "client" },
   ];
   const candidates = steps.filter((s) => s.denom >= MIN_SAMPLE && Number.isFinite(s.rate));
   if (!candidates.length) return null;

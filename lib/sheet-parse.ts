@@ -5,6 +5,15 @@ export const SHEET_TZ = "Australia/Sydney";
 
 // The Sydney calendar day an instant falls on, as "2026-09-29".
 export const sydneyDay = (d: Date) => new Intl.DateTimeFormat("en-CA", { timeZone: SHEET_TZ }).format(d);
+export const sydneyHour = (d: Date) => Number(new Intl.DateTimeFormat("en-AU", { timeZone: SHEET_TZ, hour: "numeric", hourCycle: "h23" }).format(d));
+
+// Monday 00:00 Sydney of the week `now` is in.
+export function weekStart(now = new Date()): Date {
+  const [y, m, d] = sydneyDay(now).split("-").map(Number);
+  const dow = new Date(Date.UTC(y, m - 1, d)).getUTCDay(); // 0 = Sunday
+  const monday = new Date(Date.UTC(y, m - 1, d - ((dow + 6) % 7)));
+  return sydneyLocalToDate(monday.getUTCFullYear(), monday.getUTCMonth() + 1, monday.getUTCDate())!;
+}
 
 export function normalizeHeader(h: string) {
   return h.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();

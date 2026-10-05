@@ -1,5 +1,5 @@
 import { prisma } from "./prisma";
-import { sydneyDay, sydneyLocalToDate } from "./sheet-parse";
+import { sydneyDay, sydneyHour, sydneyLocalToDate } from "./sheet-parse";
 import { getRangeKpis } from "./kpi";
 import { getPortfolio } from "./portfolio";
 import { getNeedsAction } from "./needs-action";
@@ -18,7 +18,6 @@ import { terms } from "./client-terms";
 
 const DIGEST_HOUR = 8;
 const appUrl = () => process.env.NEXTAUTH_URL || "";
-const sydneyHour = (d: Date) => Number(new Intl.DateTimeFormat("en-AU", { timeZone: "Australia/Sydney", hour: "numeric", hourCycle: "h23" }).format(d));
 const startOfDay = (day: string) => {
   const [y, m, d] = day.split("-").map(Number);
   return sydneyLocalToDate(y, m, d)!;
@@ -34,7 +33,7 @@ async function nextStepFor(clientId: string, needs: Awaited<ReturnType<typeof ge
   const top = needs.find((n) => n.clientId === clientId && n.severity !== "success");
   const funnel = await getClientFunnel(clientId, resolveReportRange({ preset: "this_month" }, now)).catch(() => null);
   const drop = funnel ? biggestDrop(funnel.overall.counts) : null;
-  return [top?.description, drop ? `${drop.step} is the weakest step (${Math.round(drop.rate)}%) — ${drop.advice}` : null].filter(Boolean).join(". ");
+  return [top?.description, drop ? `${drop.step} is the weakest step (${Math.round(drop.rate)}%, owner: ${drop.owner === "client" ? "client" : "our team"}) — ${drop.advice}` : null].filter(Boolean).join(". ");
 }
 
 export async function runDailyJobs(now = new Date()) {

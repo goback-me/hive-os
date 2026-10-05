@@ -98,6 +98,7 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
     recentLeads,
     progressNotes,
     clientSheet,
+    awaitingUpdates,
   ] = await Promise.all([
     // Re-checks revenue/module thresholds against award tiers on every visit —
     // not just when a lesson gets toggled — so editing a tier's threshold or a
@@ -124,6 +125,8 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
     }),
     prisma.progressNote.findMany({ where: { clientId: client.id }, orderBy: { createdAt: "desc" }, take: 5 }),
     prisma.clientSheet.findUnique({ where: { clientId: client.id } }),
+    // The Dashboard tab's "N leads need an update" badge.
+    prisma.lead.count({ where: { clientId: client.id, deletedAt: null, awaitingClientUpdate: true } }),
   ]);
 
   // Coaches: this client's open data alerts (lib/data-health.ts).
@@ -401,7 +404,12 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
       <ClientTabsShell
         tabs={[
           { key: "onboarding", label: "Onboarding", content: onboardingContent },
-          { key: "dashboard", label: "Dashboard", content: dashboardContent },
+          {
+            key: "dashboard",
+            label: "Dashboard",
+            content: dashboardContent,
+            badge: awaitingUpdates ? `${awaitingUpdates} lead${awaitingUpdates === 1 ? " needs" : "s need"} an update` : undefined,
+          },
           ...(clientSheet || isCoach ? [{ key: "leads", label: "Leads", content: leadsContent }] : []),
           { key: "growth", label: "Growth", content: hold ? <HoldNote /> : <GrowthPanel clientId={client.id} isCoach={isCoach} /> },
           { key: "gameplan", label: "Gameplan", content: gameplanContent },

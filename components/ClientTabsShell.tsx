@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 
 // The open tab is kept in the URL (?tab=leads) alongside the report range, so
 // a refresh or a shared link lands on the same tab and period.
-export default function ClientTabsShell({ tabs }: { tabs: { key: string; label: string; content: ReactNode }[] }) {
+export default function ClientTabsShell({ tabs }: { tabs: { key: string; label: string; content: ReactNode; badge?: string }[] }) {
   const fromUrl = useSearchParams().get("tab");
   const [active, setActiveState] = useState(tabs.some((t) => t.key === fromUrl) ? fromUrl! : tabs[0]?.key);
   function setActive(key: string) {
@@ -35,6 +35,11 @@ export default function ClientTabsShell({ tabs }: { tabs: { key: string; label: 
             }}
           >
             {t.label}
+            {t.badge && (
+              <span className="ml-2 px-2 py-0.5 rounded-full text-[10px] font-bold align-middle" style={{ background: "var(--tag-amber-bg)", color: "var(--tag-amber-fg)" }}>
+                {t.badge}
+              </span>
+            )}
           </button>
         ))}
       </div>

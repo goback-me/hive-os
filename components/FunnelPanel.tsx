@@ -115,7 +115,9 @@ export default function FunnelPanel({
             <p className="text-sm font-bold" style={{ color: "var(--text-primary)" }}>
               Biggest drop: {drop.step} — {fmtPct(drop.rate)} ({drop.to} of {drop.from})
             </p>
-            <p className="text-sm" style={{ color: "var(--text-secondary)" }}>{drop.advice}</p>
+            <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
+              {drop.advice} <span className="text-xs font-semibold" style={{ color: "var(--text-muted)" }}>· Owner: {drop.owner === "client" ? "client" : "our team"}</span>
+            </p>
             {drop.evidence && <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>{drop.evidence}</p>}
           </div>
         </div>

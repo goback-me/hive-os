@@ -99,7 +99,11 @@ assert.equal(combineTargets(undefined, undefined).final.stage, "CHASE_UP");
 const live = classifyHive("LIVE TRANSFER");
 const blank = { stage: null };
 assert.equal(awaitingClientUpdate({ stage: "HANDOVER_LIVE", hive: live, prospect: blank, prospectPending: false }), true);
-assert.equal(awaitingClientUpdate({ stage: "NURTURE", hive: classifyHive("Not ready yet"), prospect: blank, prospectPending: false }), true);
+// Only HANDOVER_STAGES make the client owe an update.
+assert.equal(awaitingClientUpdate({ stage: "NURTURE", hive: classifyHive("Not ready yet"), prospect: blank, prospectPending: false }), false);
+assert.equal(awaitingClientUpdate({ stage: "HANDOVER_ATTEMPTED", hive: classifyHive("Live attempted"), prospect: blank, prospectPending: false }), true);
+// Any prospect stage ends it — cancelled / no-show included.
+assert.equal(awaitingClientUpdate({ stage: "CONSULT_CANCELLED", hive: live, prospect: { stage: "CONSULT_CANCELLED" }, prospectPending: false }), false);
 assert.equal(awaitingClientUpdate({ stage: "CONTACTED", hive: classifyHive("Lead contacted"), prospect: blank, prospectPending: false }), false);
 assert.equal(awaitingClientUpdate({ stage: "CONSULT_BOOKED", hive: live, prospect: classifyProspect("Booked")!, prospectPending: false }), false);
 assert.equal(awaitingClientUpdate({ stage: "CHASE_UP", hive: CHASE, prospect: blank, prospectPending: true }), true);

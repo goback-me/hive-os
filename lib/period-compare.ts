@@ -1,12 +1,13 @@
 import { prisma } from "./prisma";
 import { milestoneSql, wonAtSql } from "./milestones";
+import { HANDOVER_STAGES } from "./lead-status";
 import { clampRange, getReportingScope, type Range } from "./reporting-scope";
 
 // Leads tab comparison chart: what happened in the selected period vs the
 // period before it. Activity-based, like the Snapshot KPIs (lib/kpi.ts):
 //
 // leads           opt-in date in the window
-// handovers       leads whose live or text handover happened in the window
+// handovers       leads whose first handover (any HANDOVER_STAGES) happened in the window
 // consultsBooked  leads whose consult was booked in the window
 // quotes          leads whose quote went out in the window
 // won             leads won in the window (wonAtSql, same as the Sales section)
@@ -26,7 +27,7 @@ async function countPeriod(clientId: string, since: Date, r: Range): Promise<Per
       SELECT id, "createdAt", stage FROM "Lead" WHERE "clientId" = ${clientId} AND "deletedAt" IS NULL AND "createdAt" >= ${since}
     ), m AS (
       SELECT l."createdAt" AS opt_in,
-        ${milestoneSql(["HANDOVER_LIVE", "HANDOVER_TEXT"])} AS handover,
+        ${milestoneSql(HANDOVER_STAGES)} AS handover,
         ${milestoneSql("CONSULT_BOOKED")} AS booked,
         ${milestoneSql("QUOTE_SENT")} AS quote,
         CASE WHEN l.stage = 'WON' THEN ${wonAtSql()} END AS won

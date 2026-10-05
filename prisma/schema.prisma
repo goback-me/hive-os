@@ -365,6 +365,11 @@ model Lead {
   // but they haven't reported back yet: Prospect Status is blank or
   // "pending update" and the lead isn't closed. See lib/lead-sync.ts.
   awaitingClientUpdate Boolean @default(false)
+  // When the lead was first handed over (any HANDOVER_STAGES): its milestone
+  // (dated note, else a stage change seen live), else when a sync first saw
+  // it at a handover. The "Update your leads" clock and reminders run from
+  // this. Kept by refreshHandoverAt (lib/reminders.ts).
+  handoverAt           DateTime?
 
   // Stable identity across repeated syncs (normalized email/phone/name) —
   // no DB-level unique constraint; matched via findFirst in lib/lead-sync.ts.

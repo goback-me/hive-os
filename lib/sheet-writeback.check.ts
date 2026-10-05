@@ -64,12 +64,14 @@ const auto = (hive: string, prospect: string) => automationWrites({ raw: hive, s
 assert.deepEqual(auto("", ""), [{ column: "HIVE STATUS", value: "Chase up" }]);
 assert.deepEqual(auto("New lead", "N/A"), [{ column: "HIVE STATUS", value: "Chase up" }]);
 assert.deepEqual(auto("LIVE TRANSFER", ""), [{ column: "Prospect Status", value: "PENDING UPDATE" }]);
-assert.deepEqual(auto("Not ready yet", "N/A"), [{ column: "Prospect Status", value: "PENDING UPDATE" }]);
+// Only HANDOVER_STAGES get PENDING UPDATE — Not ready yet / Client contacted don't.
+assert.deepEqual(auto("Not ready yet", "N/A"), []);
+assert.deepEqual(automationWrites({ raw: "LIVE ATTEMPTED", stage: "HANDOVER_ATTEMPTED" }, "N/A", sheet), [{ column: "Prospect Status", value: "PENDING UPDATE" }]);
 assert.deepEqual(auto("Self booked", ""), [{ column: "Prospect Status", value: "AUTO BOOKED" }]);
 assert.deepEqual(auto("LIVE TRANSFER", "BOOKED"), []); // client already updated
 assert.deepEqual(auto("DISQUALIFIED", "N/A"), []); // stays N/A
 assert.deepEqual(auto("Chase up", ""), []);
-assert.deepEqual(auto("Live attempted", ""), []); // an attempt isn't a handover
+assert.deepEqual(auto("Live attempted", ""), [{ column: "Prospect Status", value: "PENDING UPDATE" }]); // details sent = a handover
 // A dropdown with no "pending update" option → nothing written (never off-list).
 assert.deepEqual(automationWrites({ raw: "LIVE TRANSFER", stage: "HANDOVER_LIVE" }, "", { ...sheet, resultStatusOptions: ["N/A", "WON"] }), []);
 // Free-text column → the literal text.

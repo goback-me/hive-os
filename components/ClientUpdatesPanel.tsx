@@ -1,18 +1,18 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { DQ_REASONS, DQ_REASON_LABELS, LOST_REASONS, LOST_REASON_LABELS, STAGE_LABELS, STAGE_STYLE, type LeadStageValue } from "@/lib/lead-status";
+import { DQ_REASONS, DQ_REASON_LABELS, LOST_REASONS, LOST_REASON_LABELS, STAGE_LABELS, type LeadStageValue } from "@/lib/lead-status";
 
 type Row = {
   id: string;
   name: string | null;
   phone: string | null;
   email: string | null;
-  campaign: string | null;
   stage: LeadStageValue;
+  handoverType: LeadStageValue | null; // which handover (live / attempted / text)
+  handoverAt: string | null;
+  waitingSince: string; // the reminders' clock: handoverAt, else opt-in
   value: number | null;
-  awaitingClientUpdate: boolean;
-  createdAt: string;
   remindedAt: string | null; // a 7-day reminder is out — this is a task
 };
 
@@ -30,8 +30,12 @@ const ACTIONS: { key: string; label: string; stage: LeadStageValue; needs?: "val
 
 const sydDate = (iso: string) => new Date(iso).toLocaleDateString("en-AU", { timeZone: "Australia/Sydney", day: "numeric", month: "short" });
 const daysAgo = (iso: string) => Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000));
+// Days waiting: 0–6 grey, 7–13 amber (reminded), 14+ red.
+const waitStyle = (d: number) =>
+  d >= 14 ? { background: "var(--danger-tint)", color: "var(--danger)" } : d >= 7 ? { background: "var(--tag-amber-bg)", color: "var(--tag-amber-fg)" } : { background: "var(--surface-hover)", color: "var(--text-secondary)" };
 
-// "Update your leads": the client's to-do list of leads waiting on their news.
+// "Update your leads": every handed-over lead waiting on the client's news,
+// oldest handover first.
 // Saving goes through the normal stage change (logged, written back to the
 // sheet), and the row drops off once it's no longer waiting.
 export default function ClientUpdatesPanel({
@@ -117,7 +121,7 @@ function UpdateRow({ row, onSave }: { row: Row; onSave: (target: string, value?:
   const a = ACTIONS.find((x) => x.key === action);
   const amount = Number(value);
   const valid = !!a && (a.needs === "value" ? value.trim() !== "" && Number.isFinite(amount) && amount > 0 : a.needs ? !!reason : true);
-  const st = STAGE_STYLE[row.stage];
+  const days = daysAgo(row.waitingSince);
   const inputStyle = { background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" };
 
   function save() {
@@ -130,19 +134,21 @@ function UpdateRow({ row, onSave }: { row: Row; onSave: (target: string, value?:
   return (
     <div className="flex items-center gap-3 flex-wrap py-2" style={{ borderBottom: "1px solid var(--border)" }}>
       <div className="min-w-[180px] flex-1">
-        <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>{row.name || row.phone || row.email || "Unnamed lead"}</p>
-        <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>
-          {[row.phone, `in ${sydDate(row.createdAt)} (${daysAgo(row.createdAt)}d ago)`].filter(Boolean).join(" · ")}
-        </p>
+        <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>{row.name || "Unnamed lead"}</p>
+        <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>{[row.phone, row.email].filter(Boolean).join(" · ") || "No contact details"}</p>
       </div>
+      <div className="w-[150px]">
+        <p className="text-xs font-semibold" style={{ color: "var(--text-secondary)" }}>{row.handoverType ? STAGE_LABELS[row.handoverType] : "Handed over"}</p>
+        <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>{row.handoverAt ? sydDate(row.handoverAt) : "Date unknown"}</p>
+      </div>
+      <span className="px-2 py-1 rounded-full text-[10px] font-bold whitespace-nowrap" style={waitStyle(days)}>
+        {days} day{days === 1 ? "" : "s"} waiting
+      </span>
       {row.remindedAt && (
         <span className="px-2 py-1 rounded-full text-[10px] font-bold whitespace-nowrap" style={{ background: "var(--tag-amber-bg)", color: "var(--tag-amber-fg)" }}>
           Reminder sent
         </span>
       )}
-      <span className="px-2 py-1 rounded-full text-[10px] font-bold whitespace-nowrap" style={{ background: st.bg, color: st.color }}>
-        {row.awaitingClientUpdate ? "Awaiting your update" : STAGE_LABELS[row.stage]}
-      </span>
       <select value={action} onChange={(e) => { setAction(e.target.value); setReason(""); }} className="px-2 py-1.5 rounded-lg text-xs font-bold outline-none" style={inputStyle} aria-label="What happened">
         <option value="">What happened?</option>
         {ACTIONS.filter((x) => x.stage !== row.stage).map((x) => (

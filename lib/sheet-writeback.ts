@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import { prisma } from "./prisma";
 import { batchUpdateValues, columnLetter, getAdminGoogleConnection, getSheetValues, getValidAccessToken, hasWriteScope } from "./google-sheets";
-import { encodeTarget, targetLabel, type DqPhaseValue, type LeadStageValue, type StageTarget } from "./lead-status";
+import { HANDOVER_STAGES, encodeTarget, targetLabel, type DqPhaseValue, type LeadStageValue, type StageTarget } from "./lead-status";
 import { classifyHive, classifyProspect, normalizeStatusText, parseMapping, resolveStatus } from "./status-classifier";
 import { findColumn, findHeaderIndex, normalizeEmail, normalizeName, normalizePhone } from "./sheet-parse";
 
@@ -128,7 +128,7 @@ export function automationWrites(hive: { raw: string; stage: LeadStageValue | nu
   if (sheet.resultStatusColumn && (p === "" || p === "n a" || p === "na")) {
     const v = /\b(self|auto) booked\b/.test(h)
       ? option("result", "AUTO BOOKED")
-      : hive.stage && ["HANDOVER_LIVE", "HANDOVER_TEXT", "CLIENT_CONTACTED", "NURTURE"].includes(hive.stage)
+      : hive.stage && HANDOVER_STAGES.includes(hive.stage)
       ? option("result", "PENDING UPDATE")
       : null;
     if (v) out.push({ column: sheet.resultStatusColumn, value: v });

@@ -6,7 +6,8 @@ import { headers } from "next/headers";
 import { requireAdmin, requireCoach, requireClientAccess } from "@/lib/auth";
 import { getClerkAdminClient } from "@/lib/clerk-admin";
 import { syncLeadsFromSheet, type SyncSummary } from "@/lib/lead-sync";
-import { parseTarget, planStageEvents } from "@/lib/lead-status";
+import { HANDOVER_STAGES, parseTarget, planStageEvents } from "@/lib/lead-status";
+import { refreshHandoverAt } from "@/lib/reminders";
 import { parseVisibility, type ReportVisibility } from "@/lib/report-visibility";
 import { kickWriteBacks, queueLeadChange } from "@/lib/sheet-writeback";
 import { rebuildHistory } from "@/lib/kpi";
@@ -244,10 +245,14 @@ export async function updateLeadStage(leadId: string, target: string, value?: nu
         dqPhase: stage === "DISQUALIFIED" ? (lead.stage === "DISQUALIFIED" && lead.dqPhase ? lead.dqPhase : plan.dqPhase) : null,
         lostReason: stage === "LOST" ? parsed.lostReason ?? "UNKNOWN" : null,
         hqStatusUpdatedAt: now,
+        // A handover → the client owes us an update (PENDING UPDATE goes to
+        // the sheet via queueLeadChange); any other stage is their answer.
+        awaitingClientUpdate: HANDOVER_STAGES.includes(stage),
         ...(value !== undefined ? { value } : {}),
       },
     }),
   ]);
+  await refreshHandoverAt({ leadId });
   await queueLeadChange(leadId);
   kickWriteBacks();
   // Slack (queued, never blocking): a sale once it has its value, a live transfer.

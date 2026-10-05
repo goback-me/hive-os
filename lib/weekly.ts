@@ -1,16 +1,11 @@
 import { prisma } from "./prisma";
-import { sydneyDay, sydneyLocalToDate } from "./sheet-parse";
+import { weekStart } from "./sheet-parse";
 import { getRangeKpis } from "./kpi";
 import { overdueLeads } from "./reminders";
 import { terms } from "./client-terms";
 
 // Weekly status updates: weeks start Monday, Sydney time.
-export function weekStart(now = new Date()): Date {
-  const [y, m, d] = sydneyDay(now).split("-").map(Number);
-  const dow = new Date(Date.UTC(y, m - 1, d)).getUTCDay(); // 0 = Sunday
-  const monday = new Date(Date.UTC(y, m - 1, d - ((dow + 6) % 7)));
-  return sydneyLocalToDate(monday.getUTCFullYear(), monday.getUTCMonth() + 1, monday.getUTCDate())!;
-}
+export { weekStart };
 
 // A starting draft for this week's update: the week's numbers so far, leads
 // waiting on the client, and the account manager's open next steps — the
