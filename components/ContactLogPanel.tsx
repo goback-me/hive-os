@@ -58,8 +58,7 @@ export default function ContactLogPanel({
         <form action={submit} className="space-y-2 mb-4">
           <div className="grid grid-cols-2 gap-2">
             <input type="date" name="date" defaultValue={today()} required className="px-2 py-1.5 rounded-lg text-sm outline-none" style={input} aria-label="Date" />
-            <select name="type" defaultValue="call" className="px-2 py-1.5 rounded-lg text-sm outline-none" style={input} aria-label="Type">
-              <option value="call">Call</option>
+            <select name="type" defaultValue="message" className="px-2 py-1.5 rounded-lg text-sm outline-none" style={input} aria-label="Type">
               <option value="meeting">Meeting</option>
               <option value="message">Message</option>
             </select>

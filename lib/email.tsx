@@ -97,11 +97,16 @@ function Template({ heading, intro, rows = [], button, href, footnote }: Pick<Ac
   );
 }
 
+// The button's deep link: <APP_URL><path>?a=<signed token>.
+export function actionLink(e: Pick<ActionEmail, "type" | "clientId" | "refIds" | "path">, opts?: { now?: Date; secret?: string }) {
+  const actionToken = signActionToken({ type: e.type, clientId: e.clientId, refIds: e.refIds }, opts);
+  return { actionToken, href: `${appUrl()}${e.path}${e.path.includes("?") ? "&" : "?"}a=${actionToken}` };
+}
+
 export async function sendActionEmail(e: ActionEmail): Promise<boolean> {
   const to = Array.from(new Set(e.to.filter(Boolean)));
   if (!emailConfigured() || !to.length) return false;
-  const actionToken = signActionToken({ type: e.type, clientId: e.clientId, refIds: e.refIds });
-  const href = `${appUrl()}${e.path}?a=${actionToken}`;
+  const { actionToken, href } = actionLink(e);
   const el = <Template heading={e.heading} intro={e.intro} rows={e.rows} button={e.button} href={href} footnote={e.footnote} />;
   const [html, text] = await Promise.all([render(el), render(el, { plainText: true })]);
 

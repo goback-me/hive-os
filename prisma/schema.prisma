@@ -38,6 +38,14 @@ enum ClientMood {
   AT_RISK
 }
 
+// A client's account health (lib/client-health.ts). Client.health is the
+// coach's manual override; the computed one is shown next to it.
+enum ClientHealth {
+  ON_TRACK
+  AT_RISK
+  CRITICAL
+}
+
 enum SessionStatus {
   SCHEDULED
   COMPLETED
@@ -518,28 +526,34 @@ model ClientCycle {
   @@id([clientId, step])
 }
 
-// One weekly client call (lib/weekly-meetings.ts): created PENDING the Monday
-// after the call day, logged by the agent as HELD / NOT_HELD.
+// One account-manager call (lib/weekly-meetings.ts) — the "AmCall": created
+// PENDING the Monday after the call day (or ad hoc from "Log a call"), logged
+// by the account manager as HELD / NOT_HELD.
+// Client-facing: summary, nextSteps (one per line), nextMeetingAt. Team only —
+// never sent to a CLIENT: internalNotes (see CLIENT_CALL_SELECT).
 model WeeklyMeeting {
-  id             String        @id @default(cuid())
-  clientId       String
-  client         Client        @relation(fields: [clientId], references: [id])
-  weekOf         DateTime // the call day (Sydney midnight)
-  agentId        String?
-  agent          User?         @relation(fields: [agentId], references: [id])
-  status         MeetingStatus @default(PENDING)
-  summary        String?
-  issues         String?
-  nextSteps      String?
-  clientMood     ClientMood?
-  nextMeetingAt  DateTime?
-  notHeldReason  String?
-  leadsDiscussed String[]      @default([])
-  leadsReturned  String[]      @default([])
-  clickupTaskId  String?
-  submittedAt    DateTime?
-  submittedBy    String?
-  createdAt      DateTime      @default(now())
+  id                String        @id @default(cuid())
+  clientId          String
+  client            Client        @relation(fields: [clientId], references: [id])
+  weekOf            DateTime // the call day (Sydney midnight)
+  scheduledAt       DateTime?
+  agentId           String? // the account manager
+  agent             User?         @relation(fields: [agentId], references: [id])
+  status            MeetingStatus @default(PENDING)
+  summary           String?
+  internalNotes     String?
+  nextSteps         String?
+  clientMood        ClientMood? // the call's outcome
+  nextMeetingAt     DateTime?
+  notHeldReason     String?
+  leadsDiscussed    String[]      @default([])
+  leadsReturned     String[]      @default([])
+  durationMins      Int?
+  clickupTaskId     String?
+  emailedToClientAt DateTime?
+  submittedAt       DateTime?
+  submittedBy       String?
+  createdAt         DateTime      @default(now())
 
   @@unique([clientId, weekOf])
   @@index([status, weekOf])
@@ -589,8 +603,8 @@ enum DataAlertType {
   RECONCILE_MISMATCH
   SLACK_FAILED
   CLICKUP_FAILED
-  MEETING_MISSED
-  MEETING_NOT_LOGGED
+  AM_CALL_MISSED
+  AM_CALL_NOT_LOGGED
 }
 
 enum AlertSeverity {
@@ -990,11 +1004,13 @@ model Client {
   // TRADE clients' reports say "Onsite quote" / "Job won" instead of
   // "Quote" / "Sale" (lib/client-terms.ts).
   clientType       ClientType @default(OTHER)
-  // Who runs the weekly call with this client (AGENT / COACH / ADMIN), and
-  // on which day — lib/weekly-meetings.ts. An AGENT sees only these clients.
+  // The account manager — who runs the weekly call with this client (AGENT /
+  // COACH / ADMIN) — and on which day (lib/weekly-meetings.ts). An AGENT sees
+  // only these clients.
   weeklyCallAgentId String?
   weeklyCallAgent   User?   @relation("WeeklyCallAgent", fields: [weeklyCallAgentId], references: [id])
   weeklyCallDay     Weekday @default(FRIDAY)
+  health            ClientHealth? // manual override; null = computed (lib/client-health.ts)
   // Coach overrides of the buying cycle, in days, e.g. { "quoteToClose": 45 }
   // (lib/buying-cycle.ts). Missing keys = learned, else the default.
   cycleOverrides   Json?

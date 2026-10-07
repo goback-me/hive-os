@@ -31,7 +31,9 @@ import {
   saveNoteAliases,
   saveWeeklyCall,
   saveClientEmail,
+  startCall,
 } from "@/lib/actions";
+import { HEALTH_LABELS, getClientHealth } from "@/lib/client-health";
 import SetupChecklist, { type SetupItem } from "@/components/SetupChecklist";
 import { slackConfigured } from "@/lib/slack";
 import { emailConfigured } from "@/lib/email";
@@ -155,6 +157,8 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
     isCoach ? prisma.user.findMany({ where: { role: { in: ["ADMIN", "COACH", "AGENT"] } }, select: { id: true, name: true }, orderBy: { name: "asc" } }) : null,
     isTeam ? prisma.weeklyMeeting.findMany({ where: { clientId: client.id }, orderBy: { weekOf: "desc" }, take: 5, select: { id: true, weekOf: true, status: true, clientMood: true } }) : [],
   ]);
+  // Team: account health (lib/client-health.ts) — the override and the computed one.
+  const health = isTeam ? await getClientHealth(client.id) : null;
   const cycleOverrides = parseCycleOverrides(client.cycleOverrides);
 
   // Coaches: this client's open data alerts (lib/data-health.ts).
@@ -295,6 +299,7 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
               clientSlug={client.slug}
               agentId={client.weeklyCallAgentId}
               day={client.weeklyCallDay}
+              health={client.health}
               team={team}
               meetings={meetings.map((m) => ({ id: m.id, weekOf: m.weekOf.toISOString(), status: m.status, mood: m.clientMood ? MOOD_LABELS[m.clientMood] : null }))}
               onSave={saveWeeklyCall}
@@ -455,6 +460,22 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
         <div>
           <div className="flex items-center gap-3">
             <h1 className="page-title font-heading" style={{ color: "var(--text-primary)" }}>{client.name}</h1>
+            {health && (
+              <span
+                className="px-2.5 py-1 rounded-full text-xs font-bold"
+                title={health.reasons.join(" · ") || "No warning signs"}
+                style={
+                  health.effective === "ON_TRACK"
+                    ? { background: "var(--tag-green-bg)", color: "var(--tag-green-fg)" }
+                    : health.effective === "AT_RISK"
+                    ? { background: "var(--tag-amber-bg)", color: "var(--tag-amber-fg)" }
+                    : { background: "var(--danger-tint)", color: "var(--danger)" }
+                }
+              >
+                {HEALTH_LABELS[health.effective]}
+                {health.override ? ` (set by coach · computed: ${HEALTH_LABELS[health.level]})` : ""}
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-3 mt-1 flex-wrap">
             <p className="text-sm" style={{ color: "var(--text-secondary)" }}>Since {client.joinedAt.toLocaleDateString("en-US", { month: "short", year: "numeric" })}</p>
@@ -477,6 +498,14 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
           </div>
         </div>
       </div>
+
+      {isTeam && (
+        <form action={startCall.bind(null, client.id)} className="-mt-4 mb-6">
+          <button className="btn-gradient px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-1.5">
+            <span className="material-symbols-outlined text-[16px]">call</span> Log a call
+          </button>
+        </form>
+      )}
 
       {isCoach && <SetupChecklist clientId={client.id} items={setup} onSaveEmail={saveClientEmail} />}
 

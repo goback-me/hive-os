@@ -1,5 +1,6 @@
 import { clerkMiddleware, createRouteMatcher, clerkClient } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
+import { signInReturnUrl } from "@/lib/access";
 
 // Routes that don't require a signed-in session at all.
 const isPublicRoute = createRouteMatcher([
@@ -29,7 +30,7 @@ export default clerkMiddleware(async (auth, req) => {
   if (isPublicRoute(req)) return NextResponse.next();
 
   const { userId, sessionClaims, redirectToSignIn } = await auth();
-  if (!userId) return redirectToSignIn({ returnBackUrl: req.url });
+  if (!userId) return redirectToSignIn({ returnBackUrl: signInReturnUrl(req.url, process.env.NEXTAUTH_URL || process.env.APP_URL) });
 
   // publicMetadata is set the moment an account is created — see
   // lib/actions.ts createUser — and mirrored by the Clerk webhook,

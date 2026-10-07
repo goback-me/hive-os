@@ -1,8 +1,9 @@
 "use server";
 
-import { Prisma, type ClientMood, type Weekday } from "@prisma/client";
+import { Prisma, type ClientHealth, type ClientMood, type Weekday } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import { headers } from "next/headers";
 import { requireAdmin, requireCoach, requireClientAccess } from "@/lib/auth";
 import { getClerkAdminClient } from "@/lib/clerk-admin";
@@ -12,11 +13,13 @@ import { refreshHandoverAt } from "@/lib/reminders";
 import { parseCycleOverrides, recalculateCycle, type CycleStep } from "@/lib/buying-cycle";
 import { parseVisibility, type ReportVisibility } from "@/lib/report-visibility";
 import { kickWriteBacks, queueLeadChange } from "@/lib/sheet-writeback";
-import { rebuildHistory } from "@/lib/kpi";
+import { getMonthToDateVsLast, rebuildHistory } from "@/lib/kpi";
+import { reportsOnHold } from "@/lib/report-hold";
+import { sendActionEmail } from "@/lib/email";
 import { runHealthChecks } from "@/lib/data-health";
 import { draftWeeklyUpdate } from "@/lib/weekly";
 import { kickSlack, parseSlackEvents, queueLeadEvent, queueSlack, queueTestMessage, queueWeeklyUpdatePost } from "@/lib/slack";
-import { NOT_HELD_REASONS, WEEKDAYS, callDateLabel, meetingTaskUpdate } from "@/lib/weekly-meetings";
+import { NOT_HELD_REASONS, WEEKDAYS, callDateLabel, clientCallEmail, currentCallDate, meetingPath, meetingTaskUpdate } from "@/lib/weekly-meetings";
 import { createClientFolder, ensureTask, finishTask } from "@/lib/clickup";
 import { sydneyLocalToDate } from "@/lib/sheet-parse";
 
@@ -418,39 +421,60 @@ export async function saveClientEmail(clientId: string, email: string) {
   revalidatePath(`/clients`);
 }
 
-// Coach-only: who runs this client's weekly call, and on which day.
-export async function saveWeeklyCall(clientId: string, agentId: string | null, day: string) {
+// Coach-only: the account manager (who runs the weekly call), the call day,
+// and the manual health override (null = use the computed one).
+export async function saveWeeklyCall(clientId: string, agentId: string | null, day: string, health: string | null = null) {
   await requireCoach();
   if (!WEEKDAYS.includes(day as Weekday)) throw new Error("Invalid day");
+  if (health && !["ON_TRACK", "AT_RISK", "CRITICAL"].includes(health)) throw new Error("Invalid health");
   if (agentId) {
     const agent = await prisma.user.findUnique({ where: { id: agentId }, select: { role: true } });
     if (!agent || agent.role === "CLIENT") throw new Error("Pick a team member");
   }
-  await prisma.client.update({ where: { id: clientId }, data: { weeklyCallAgentId: agentId || null, weeklyCallDay: day as Weekday } });
+  await prisma.client.update({ where: { id: clientId }, data: { weeklyCallAgentId: agentId || null, weeklyCallDay: day as Weekday, health: (health as ClientHealth) || null } });
   revalidatePath(`/clients`);
+}
+
+// Team: "Log a call" — this week's call for the client (made if it isn't
+// there yet, so Monday's job won't create a second one), then its log form.
+export async function startCall(clientId: string) {
+  const user = await requireClientAccess(clientId);
+  if (user.role !== "COACH") throw new Error("Only the team logs calls");
+  const client = await prisma.client.findUniqueOrThrow({ where: { id: clientId }, select: { slug: true, weeklyCallDay: true, weeklyCallAgentId: true } });
+  const me = await prisma.user.findUnique({ where: { clerkId: user.clerkId }, select: { id: true } });
+  const weekOf = currentCallDate(new Date(), client.weeklyCallDay);
+  const call = await prisma.weeklyMeeting.upsert({
+    where: { clientId_weekOf: { clientId, weekOf } },
+    create: { clientId, weekOf, scheduledAt: new Date(), agentId: client.weeklyCallAgentId ?? me?.id ?? null },
+    update: {},
+  });
+  redirect(meetingPath(client.slug, call.id));
 }
 
 export type MeetingInput = {
   held: boolean;
   summary: string;
-  issues: string;
+  internalNotes: string; // team only — never shown or sent to the client
   nextSteps: string;
   clientMood: ClientMood | "";
   nextMeetingAt: string; // yyyy-mm-dd
   leadsDiscussed: string[];
   leadsReturned: string[];
+  durationMins: string;
+  skipEmail: boolean; // "Don't email client this time"
   notHeldReason: keyof typeof NOT_HELD_REASONS | "";
   notHeldText: string;
 };
 
 // The agent logs a weekly call. HELD: saved, returned leads go back to Chase
-// Up (RETURNED_BY_CLIENT + write-back), a ContactLog entry, the summary to
-// the client's Slack channel, and the ClickUp task gets the summary and is
-// closed. NOT_HELD: saved, the task says why and is closed, MEETING_MISSED
+// Up (RETURNED_BY_CLIENT + write-back), a ContactLog entry, the client gets a
+// "Weekly status update" email (unless skipEmail), the summary goes to the
+// client's Slack channel, and the ClickUp task gets the summary and is
+// closed. NOT_HELD: saved, the task says why and is closed, AM_CALL_MISSED
 // is raised, and the admin channel hears about it. Slack / ClickUp failures
 // never block the save.
 export async function submitWeeklyMeeting(meetingId: string, input: MeetingInput) {
-  const meeting = await prisma.weeklyMeeting.findUnique({ where: { id: meetingId }, include: { client: { select: { id: true, name: true, slug: true, slackChannelId: true } } } });
+  const meeting = await prisma.weeklyMeeting.findUnique({ where: { id: meetingId }, include: { client: { select: { id: true, name: true, slug: true, slackChannelId: true, clientType: true, email: true, users: { where: { role: "CLIENT" }, select: { email: true } } } }, agent: { select: { name: true } } } });
   if (!meeting) throw new Error("Meeting not found");
   const user = await requireClientAccess(meeting.clientId);
   if (user.role !== "COACH") throw new Error("Only the team logs weekly calls");
@@ -464,6 +488,8 @@ export async function submitWeeklyMeeting(meetingId: string, input: MeetingInput
 
   if (input.held) {
     if (!input.summary.trim()) throw new Error("Add a short summary of the call");
+    const mins = input.durationMins.trim() ? Number(input.durationMins) : null;
+    if (mins != null && !(Number.isInteger(mins) && mins > 0 && mins <= 600)) throw new Error("Duration is whole minutes (1–600)");
     const discussed = (await leadIds(input.leadsDiscussed)).map((l) => l.id);
     const returnable = (await leadIds(input.leadsReturned)).filter((l) => isReturn(l.stage, "CHASE_UP")).map((l) => l.id);
     const saved = await prisma.weeklyMeeting.update({
@@ -471,17 +497,34 @@ export async function submitWeeklyMeeting(meetingId: string, input: MeetingInput
       data: {
         status: "HELD",
         summary: text(input.summary),
-        issues: text(input.issues),
+        internalNotes: text(input.internalNotes),
         nextSteps: text(input.nextSteps),
         clientMood: input.clientMood || null,
         nextMeetingAt,
         leadsDiscussed: discussed,
         leadsReturned: returnable,
+        durationMins: mins,
         submittedAt: new Date(),
         submittedBy: user.name,
       },
     });
     for (const id of returnable) await updateLeadStage(id, "CHASE_UP");
+    if (!input.skipEmail) {
+      // Numbers are left out while the client's reports are on hold.
+      const kpis = (await reportsOnHold(meeting.clientId)) ? null : (await getMonthToDateVsLast(meeting.clientId)).current;
+      const e = clientCallEmail({ clientName: meeting.client.name, clientType: meeting.client.clientType, amName: meeting.agent?.name ?? user.name, weekOf: meeting.weekOf, summary: saved.summary!, nextSteps: saved.nextSteps, kpis });
+      const sent = await sendActionEmail({
+        to: meeting.client.users.length ? meeting.client.users.map((u) => u.email) : meeting.client.email ? [meeting.client.email] : [],
+        type: "call_update",
+        clientId: meeting.clientId,
+        refIds: [meetingId],
+        path: `/clients/${meeting.client.slug}?tab=weekly`,
+        ...e,
+        button: "View in portal",
+        footnote: "You're getting this because Hive Social runs a weekly call with you.",
+      }).catch((err) => (console.error(`Call update email for ${meetingId} failed:`, err), false));
+      if (sent) await prisma.weeklyMeeting.update({ where: { id: meetingId }, data: { emailedToClientAt: new Date() } });
+    }
     await prisma.contactLog.create({
       data: { clientId: meeting.clientId, contactedAt: meeting.weekOf, method: "meeting", loggedBy: user.name, notes: text(input.summary), nextStep: text(input.nextSteps), nextStepDue: nextMeetingAt },
     });
@@ -489,7 +532,6 @@ export async function submitWeeklyMeeting(meetingId: string, input: MeetingInput
       const t = [
         `:telephone_receiver: *Weekly call — ${callDateLabel(meeting.weekOf)}* (${user.name})`,
         input.summary.trim(),
-        input.issues.trim() && `*Issues*\n${input.issues.trim()}`,
         input.nextSteps.trim() && `*Next steps*\n${input.nextSteps.trim()}`,
         returnable.length ? `${returnable.length} lead${returnable.length === 1 ? "" : "s"} returned to chase up` : null,
       ].filter(Boolean).join("\n\n");
@@ -507,7 +549,7 @@ export async function submitWeeklyMeeting(meetingId: string, input: MeetingInput
     if (admin) await queueSlack({ channel: admin, clientId: meeting.clientId, kind: "meeting_missed", dedupeKey: `meeting_missed:${meetingId}`, text: `:warning: *${meeting.client.name}* — ${callDateLabel(meeting.weekOf)}'s weekly call didn't happen: ${reason} (${user.name})` }).catch(() => {});
   }
   kickSlack();
-  await runHealthChecks(meeting.clientId).catch((e) => console.error("Health checks failed:", e)); // MEETING_MISSED / clears MEETING_NOT_LOGGED
+  await runHealthChecks(meeting.clientId).catch((e) => console.error("Health checks failed:", e)); // AM_CALL_MISSED / clears AM_CALL_NOT_LOGGED
   revalidatePath(`/clients`);
 }
 
@@ -517,8 +559,9 @@ export async function logContact(clientId: string, formData: FormData) {
   const m = day.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   const contactedAt = m ? sydneyLocalToDate(Number(m[1]), Number(m[2]), Number(m[3]), 12) : null;
   if (!contactedAt) throw new Error("Pick a date");
-  const method = String(formData.get("type") || "call");
-  if (!["call", "meeting", "message"].includes(method)) throw new Error("Invalid contact type");
+  // Calls are logged as structured calls ("Log a call"), not here.
+  const method = String(formData.get("type") || "message");
+  if (!["meeting", "message"].includes(method)) throw new Error("Invalid contact type");
   const due = String(formData.get("nextStepDue") || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
   const text = (k: string) => String(formData.get(k) || "").trim() || null;
   await prisma.contactLog.create({

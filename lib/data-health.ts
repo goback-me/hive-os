@@ -160,10 +160,10 @@ export async function runHealthChecks(clientId: string, now = new Date()) {
   ]);
   const overdueCalls = unlogged.filter((m) => now >= meetingSchedule(m.weekOf).alertAt);
   if (overdueCalls.length) {
-    f.push({ type: "MEETING_NOT_LOGGED", severity: "WARNING", title: `${plural(overdueCalls.length, "weekly call")} not logged`, detail: `${overdueCalls.map((m) => callDateLabel(m.weekOf)).join(", ")} — the agent hasn't said how the call went.`, fixHint: "Ask the agent to log it (Client Details → Weekly call).", fixUrl: url.dashboard, count: overdueCalls.length });
+    f.push({ type: "AM_CALL_NOT_LOGGED", severity: "WARNING", title: `${plural(overdueCalls.length, "weekly call")} not logged`, detail: `${overdueCalls.map((m) => callDateLabel(m.weekOf)).join(", ")} — the agent hasn't said how the call went.`, fixHint: "Ask the agent to log it (Client Details → Weekly call).", fixUrl: url.dashboard, count: overdueCalls.length });
   }
   if (lastLogged?.status === "NOT_HELD") {
-    f.push({ type: "MEETING_MISSED", severity: "WARNING", title: "Last weekly call didn't happen", detail: `${callDateLabel(lastLogged.weekOf)}: ${lastLogged.notHeldReason ?? "no reason given"}.`, fixHint: "Rebook the call with the client — this clears once the next call is logged as held.", fixUrl: url.dashboard });
+    f.push({ type: "AM_CALL_MISSED", severity: "WARNING", title: "Last weekly call didn't happen", detail: `${callDateLabel(lastLogged.weekOf)}: ${lastLogged.notHeldReason ?? "no reason given"}.`, fixHint: "Rebook the call with the client — this clears once the next call is logged as held.", fixUrl: url.dashboard });
   }
 
   if (clickupFails.length) {

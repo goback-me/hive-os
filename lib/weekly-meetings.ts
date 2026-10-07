@@ -1,8 +1,10 @@
-import type { ClientMood, MeetingStatus, Weekday } from "@prisma/client";
+import type { ClientMood, MeetingStatus, Prisma, Weekday } from "@prisma/client";
 import { prisma } from "./prisma";
 import { sydneyDay, sydneyLocalToDate, weekStart } from "./sheet-parse";
 import { ensureTask, commentOnTask } from "./clickup";
-import { appUrl, sendActionEmail } from "./email";
+import { appUrl, sendActionEmail, type EmailRow } from "./email";
+import type { KpiValues } from "./kpi";
+import { terms, type ClientTypeValue } from "./client-terms";
 
 // The weekly client call. Each client with a call agent (Client.
 // weeklyCallAgentId) gets a WeeklyMeeting for its call day (weeklyCallDay,
@@ -10,8 +12,8 @@ import { appUrl, sendActionEmail } from "./email";
 //   Monday 9am after it   created PENDING + a ClickUp task for the agent +
 //                         an email "Log last Friday's call with <client>"
 //   Wednesday 9am         still PENDING → a second email + a ClickUp comment
-//   Friday 9am            still PENDING → MEETING_NOT_LOGGED (lib/data-health.ts)
-// The agent logs it on /clients/<slug>/meetings/<id> (submitWeeklyMeeting in
+//   Friday 9am            still PENDING → AM_CALL_NOT_LOGGED (lib/data-health.ts)
+// The agent logs it on /clients/<slug>/calls/<id> (submitWeeklyMeeting in
 // lib/actions.ts). Every step is idempotent — the 5-minute cron re-runs it.
 
 export const WEEKDAYS: Weekday[] = ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"];
@@ -36,6 +38,8 @@ function sydneyDayPlus(d: Date, days: number, hour = 0) {
 
 // The call day in the week before `now`'s week (Sydney) — what Monday's job logs.
 export const previousCallDate = (now: Date, day: Weekday) => sydneyDayPlus(weekStart(now), WEEKDAYS.indexOf(day) - 7);
+// The call day in `now`'s week — what an ad-hoc "Log a call" is filed under.
+export const currentCallDate = (now: Date, day: Weekday) => sydneyDayPlus(weekStart(now), WEEKDAYS.indexOf(day));
 
 // When each step is due for a meeting on `weekOf`: Monday / Wednesday /
 // Friday 9am of the following week.
@@ -52,6 +56,7 @@ export function meetingsToCreate(clients: { id: string; weeklyCallAgentId: strin
   return clients
     .filter((c) => c.weeklyCallAgentId)
     .map((c) => ({ clientId: c.id, agentId: c.weeklyCallAgentId, weekOf: previousCallDate(now, c.weeklyCallDay) }))
+    .map((m) => ({ ...m, scheduledAt: m.weekOf }))
     .filter((m) => now >= meetingSchedule(m.weekOf).createAt && !existing.has(meetingKey(m.clientId, m.weekOf)));
 }
 
@@ -62,7 +67,6 @@ export const callDateLabel = (d: Date) => d.toLocaleDateString("en-AU", { timeZo
 export function meetingTaskUpdate(m: {
   status: MeetingStatus;
   summary?: string | null;
-  issues?: string | null;
   nextSteps?: string | null;
   clientMood?: ClientMood | null;
   notHeldReason?: string | null;
@@ -71,14 +75,52 @@ export function meetingTaskUpdate(m: {
   if (m.status === "NOT_HELD") return { description: `Meeting did not happen: ${m.notHeldReason || "no reason given"}`, close: true };
   const parts = [
     m.summary?.trim() && `Summary:\n${m.summary.trim()}`,
-    m.issues?.trim() && `Issues:\n${m.issues.trim()}`,
     m.nextSteps?.trim() && `Next steps:\n${m.nextSteps.trim()}`,
-    m.clientMood && `Client mood: ${MOOD_LABELS[m.clientMood]}`,
+    m.clientMood && `Outcome: ${MOOD_LABELS[m.clientMood]}`,
   ].filter(Boolean);
   return { description: parts.join("\n\n") || "Meeting held.", close: true };
 }
 
-const meetingPath = (slug: string, id: string) => `/clients/${slug}/meetings/${id}`;
+export const meetingPath = (slug: string, id: string) => `/clients/${slug}/calls/${id}`;
+
+// What a CLIENT may see of a call — internalNotes and the outcome are never
+// selected for them, so they can't leak through any page built on this.
+export const CLIENT_CALL_SELECT = {
+  id: true,
+  weekOf: true,
+  status: true,
+  summary: true,
+  nextSteps: true,
+  nextMeetingAt: true,
+  submittedAt: true,
+  agent: { select: { name: true } },
+} satisfies Prisma.WeeklyMeetingSelect;
+export const TEAM_CALL_SELECT = { ...CLIENT_CALL_SELECT, internalNotes: true, clientMood: true, notHeldReason: true } satisfies Prisma.WeeklyMeetingSelect;
+export const callSelectFor = (role: "COACH" | "CLIENT") => (role === "CLIENT" ? CLIENT_CALL_SELECT : TEAM_CALL_SELECT);
+
+// Next steps are stored one per line; leading bullets are dropped.
+export const splitSteps = (s: string | null | undefined) => (s ?? "").split("\n").map((l) => l.replace(/^\s*[-•*]\s*/, "").trim()).filter(Boolean);
+
+// The "Weekly status update" email to the client after a held call: summary,
+// next steps and this month's numbers so far. Only client-facing fields go in.
+export function clientCallEmail(c: { clientName: string; clientType: ClientTypeValue; amName: string | null; weekOf: Date; summary: string; nextSteps: string | null; kpis: KpiValues | null }) {
+  const t = terms(c.clientType);
+  const rows: EmailRow[] = splitSteps(c.nextSteps).map((step) => ({ title: step, detail: "Next step" }));
+  if (c.kpis) {
+    const k = c.kpis;
+    rows.push({
+      title: "This month so far",
+      detail: `${k.leads} leads · ${k.liveTransfers} live transfers · ${k.consultsBooked} consults booked · ${k.quotes} ${t.quotes.toLowerCase()} · ${k.sales} ${t.sales.toLowerCase()}`,
+    });
+  }
+  const day = callDateLabel(c.weekOf);
+  return {
+    subject: `${c.clientName}: your weekly status update — ${day}`,
+    heading: "Your weekly status update",
+    intro: `${c.amName ? `From ${c.amName}, after` : "After"} our call on ${day}: ${c.summary}`,
+    rows,
+  };
+}
 
 export async function runMeetingJobs(now = new Date()) {
   const out = { created: 0, tasks: 0, emails: 0, reminders: 0 };
@@ -109,7 +151,7 @@ export async function runMeetingJobs(now = new Date()) {
       const taskId = await ensureTask(m.clientId, {
         kind: "weekly_call",
         dedupeKey: `meeting:${m.id}`,
-        title: `Log the weekly call — ${day}`,
+        title: `AM call: ${m.client.name} – ${day}`,
         why: `${m.agent?.name ?? "The agent"} ran (or should have run) this client's weekly call on ${day} — log how it went in Hive HQ. This task closes itself once it's logged.`,
         description: `Log the call in Hive HQ:\n${link}`,
         assignees: m.agent?.clickupUserId ? [m.agent.clickupUserId] : [],
@@ -139,7 +181,7 @@ export async function runMeetingJobs(now = new Date()) {
       }).catch((e) => (console.error(`Meeting email (${type}) for ${m.id} failed:`, e), false));
 
     if (!sentTypes.has("meeting_log")) {
-      if (await email("meeting_log", `[${m.client.name}] Log your weekly call — ${day}`, `How did ${day}'s call with ${m.client.name} go?`, `Log the summary, issues, next steps and the client's mood — it takes a minute. If the call didn't happen, just say why.`)) out.emails++;
+      if (await email("meeting_log", `[${m.client.name}] Log your weekly call — ${day}`, `How did ${day}'s call with ${m.client.name} go?`, `Log the summary, next steps and how it went — it takes a minute. If the call didn't happen, just say why.`)) out.emails++;
     } else if (now >= when.remindAt && !sentTypes.has("meeting_reminder")) {
       if (await email("meeting_reminder", `[${m.client.name}] Reminder: weekly call not logged yet — ${day}`, `${day}'s call with ${m.client.name} still isn't logged`, `Please log it today — if it's still open on Friday it's flagged to the admins.`)) {
         out.reminders++;

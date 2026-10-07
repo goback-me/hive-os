@@ -89,7 +89,7 @@ export default async function AccountsPage() {
                           <div className="flex flex-wrap gap-1">
                             {c.meetings.length ? (
                               c.meetings.map((m) => (
-                                <Link key={m.id} href={`/clients/${c.slug}/meetings/${m.id}`} title={sydDate(m.weekOf)} className="px-2 py-0.5 rounded-full text-[11px] font-bold" style={chip(m.status).style}>
+                                <Link key={m.id} href={`/clients/${c.slug}/calls/${m.id}`} title={sydDate(m.weekOf)} className="px-2 py-0.5 rounded-full text-[11px] font-bold" style={chip(m.status).style}>
                                   {sydDate(m.weekOf).replace(/^\w+ /, "")} · {chip(m.status).label}
                                 </Link>
                               ))

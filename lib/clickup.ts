@@ -121,12 +121,12 @@ export async function listClickUpMembers(): Promise<{ id: string; name: string }
 // and why it exists, so nobody has to guess (see taskText).
 type Task = { kind: string; dedupeKey: string; title: string; why: string; description: string; dueDate?: Date | null; assignees?: string[] };
 
-// "[Client] Title", and a description that opens with the client, why the
+// "[Client] Title" (unless the title already names the client), and a description that opens with the client, why the
 // task exists and a link to the client in HQ.
 export function taskText(client: { name: string; slug: string }, t: Pick<Task, "kind" | "title" | "why" | "description">, base = appUrl()) {
   const prefix = `[${client.name}]`;
   return {
-    title: t.title.startsWith(prefix) ? t.title : `${prefix} ${t.title}`,
+    title: t.title.startsWith(prefix) || t.title.includes(client.name) ? t.title : `${prefix} ${t.title}`,
     description: [
       `**Client:** ${client.name}`,
       `**Why this task:** ${t.why}`,

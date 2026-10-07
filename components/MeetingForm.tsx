@@ -17,8 +17,9 @@ const NOT_HELD: { value: MeetingInput["notHeldReason"]; label: string }[] = [
   { value: "OTHER", label: "Other" },
 ];
 
-// The weekly call log (app/(app)/clients/[slug]/meetings/[id]): "Meeting
-// happened" with the summary, mood, next date and leads, or "Didn't happen"
+// The account manager's call log (app/(app)/clients/[slug]/calls/[id]):
+// "Call happened" with the client-facing summary + next steps, team-only
+// internal notes, outcome, next call, leads and duration — or "Didn't happen"
 // with a reason. Saved by submitWeeklyMeeting (lib/actions.ts).
 export default function MeetingForm({
   meetingId,
@@ -35,12 +36,14 @@ export default function MeetingForm({
   const [f, setF] = useState<MeetingInput>({
     held: true,
     summary: "",
-    issues: "",
+    internalNotes: "",
     nextSteps: "",
     clientMood: "",
     nextMeetingAt: "",
     leadsDiscussed: [],
     leadsReturned: [],
+    durationMins: "",
+    skipEmail: false,
     notHeldReason: "",
     notHeldText: "",
   });
@@ -54,7 +57,7 @@ export default function MeetingForm({
       setError(null);
       try {
         await onSubmit(meetingId, f);
-        router.push(`/clients/${clientSlug}?tab=dashboard`);
+        router.push(`/clients/${clientSlug}?tab=weekly`);
       } catch (e) {
         setError(e instanceof Error ? e.message : "Couldn't save");
       }
@@ -66,7 +69,7 @@ export default function MeetingForm({
       className="px-4 py-2 rounded-lg text-sm font-bold"
       style={f.held === on ? { background: "var(--primary)", color: "#fff" } : { border: "1px solid var(--border)", color: "var(--text-secondary)" }}
     >
-      {on ? "Meeting happened" : "Didn't happen"}
+      {on ? "Call happened" : "Didn't happen"}
     </button>
   );
 
@@ -79,12 +82,14 @@ export default function MeetingForm({
 
       {f.held ? (
         <>
-          <Area label="Summary" value={f.summary} onChange={(v) => set("summary", v)} style={input} rows={3} />
-          <Area label="Issues" value={f.issues} onChange={(v) => set("issues", v)} style={input} />
-          <Area label="Next steps" value={f.nextSteps} onChange={(v) => set("nextSteps", v)} style={input} />
+          <Area label="Summary — the client sees this" value={f.summary} onChange={(v) => set("summary", v)} style={input} rows={3} />
+          <Area label="Next steps — one per line, the client sees these" value={f.nextSteps} onChange={(v) => set("nextSteps", v)} style={input} rows={3} />
+          <div className="rounded-xl p-3" style={{ background: "var(--tag-amber-bg)" }}>
+            <Area label="Internal — not visible to client" value={f.internalNotes} onChange={(v) => set("internalNotes", v)} style={input} />
+          </div>
           <div className="flex gap-4 flex-wrap">
             <label className="block">
-              <span className="text-xs" style={{ color: "var(--text-muted)" }}>Client mood</span>
+              <span className="text-xs" style={{ color: "var(--text-muted)" }}>Outcome (team only)</span>
               <div className="flex gap-1.5 mt-1">
                 {MOODS.map((m) => (
                   <button
@@ -99,8 +104,12 @@ export default function MeetingForm({
               </div>
             </label>
             <label className="block">
-              <span className="text-xs" style={{ color: "var(--text-muted)" }}>Next meeting</span>
+              <span className="text-xs" style={{ color: "var(--text-muted)" }}>Next call</span>
               <input type="date" value={f.nextMeetingAt} onChange={(e) => set("nextMeetingAt", e.target.value)} className="block mt-1 px-2 py-1.5 rounded-lg text-sm outline-none" style={input} />
+            </label>
+            <label className="block">
+              <span className="text-xs" style={{ color: "var(--text-muted)" }}>Duration (mins)</span>
+              <input type="number" min={1} max={600} value={f.durationMins} onChange={(e) => set("durationMins", e.target.value)} className="block mt-1 w-24 px-2 py-1.5 rounded-lg text-sm outline-none" style={input} />
             </label>
           </div>
           <LeadPicker label="Leads discussed" leads={leads} value={f.leadsDiscussed} onChange={(v) => set("leadsDiscussed", v)} style={input} />
@@ -128,6 +137,13 @@ export default function MeetingForm({
           </div>
           <Area label="Details (optional)" value={f.notHeldText} onChange={(v) => set("notHeldText", v)} style={input} />
         </>
+      )}
+
+      {f.held && (
+        <label className="flex items-center gap-2 text-xs" style={{ color: "var(--text-secondary)" }}>
+          <input type="checkbox" checked={f.skipEmail} onChange={(e) => set("skipEmail", e.target.checked)} />
+          Don&apos;t email client this time
+        </label>
       )}
 
       <div className="flex items-center gap-3">
