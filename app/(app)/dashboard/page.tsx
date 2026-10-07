@@ -6,6 +6,9 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import RevenueChart from "@/components/RevenueChart";
 import PortfolioTable from "@/components/PortfolioTable";
+import CallBoard, { type BoardRow } from "@/components/CallBoard";
+import { ACTIVE_CLIENT } from "@/lib/am-calls";
+import { getClientsHealth } from "@/lib/client-health";
 import { sydneyDay } from "@/lib/sheet-parse";
 
 export const dynamic = "force-dynamic";
@@ -40,6 +43,34 @@ export default async function DashboardPage() {
   // One card per client — their most urgent item (list is already sorted by urgency).
   const seenClients = new Set<string>();
   const items = allItems.filter((i) => !seenClients.has(i.clientId) && seenClients.add(i.clientId)).slice(0, 8);
+
+  // The call board: active clients with an account manager.
+  const now = new Date();
+  const boardClients = await prisma.client.findMany({
+    where: { ...ACTIVE_CLIENT, accountManagerId: { not: null } },
+    orderBy: { name: "asc" },
+    select: { id: true, name: true, slug: true, callDay: true, callTime: true, accountManager: { select: { name: true } } },
+  });
+  const boardIds = boardClients.map((c) => c.id);
+  const [nextCalls, overdueCalls, noted, boardHealth] = await Promise.all([
+    prisma.amCall.findMany({ where: { clientId: { in: boardIds }, status: "PENDING", scheduledAt: { gt: now } }, orderBy: { scheduledAt: "asc" }, distinct: ["clientId"], select: { id: true, clientId: true, scheduledAt: true } }),
+    prisma.amCall.findMany({ where: { clientId: { in: boardIds }, status: "PENDING", scheduledAt: { lte: now } }, orderBy: { scheduledAt: "asc" }, distinct: ["clientId"], select: { id: true, clientId: true, scheduledAt: true } }),
+    prisma.amCall.groupBy({ by: ["clientId"], where: { clientId: { in: boardIds }, status: { in: ["HELD", "NOT_HELD"] }, OR: [{ summary: { not: null } }, { internalNotes: { not: null } }] }, _count: true }),
+    getClientsHealth(boardIds, { now }),
+  ]);
+  const at = (c?: { id: string; scheduledAt: Date }) => (c ? { id: c.id, at: c.scheduledAt.toISOString() } : null);
+  const board: BoardRow[] = boardClients.map((c) => ({
+    id: c.id,
+    name: c.name,
+    slug: c.slug,
+    am: c.accountManager?.name ?? null,
+    callDay: c.callDay,
+    callTime: c.callTime,
+    next: at(nextCalls.find((n) => n.clientId === c.id)),
+    overdue: at(overdueCalls.find((n) => n.clientId === c.id)),
+    notes: noted.find((n) => n.clientId === c.id)?._count ?? 0,
+    health: boardHealth.get(c.id)!,
+  }));
 
   const lastMonth = trend.at(-2)?.revenue ?? 0;
   const delta = lastMonth > 0 ? Math.round(((kpis.revenueThisMonth - lastMonth) / lastMonth) * 100) : null;
@@ -82,6 +113,11 @@ export default async function DashboardPage() {
             );
           })}
         </div>
+      </div>
+
+      <div>
+        <div className="text-xs font-bold tracking-widest mb-3" style={{ color: "var(--text-secondary)" }}>CLIENT CALLS</div>
+        <CallBoard rows={board} />
       </div>
 
       <div className="card rounded-2xl p-6">

@@ -30,6 +30,7 @@ import {
   saveHealthOverride,
   saveClientEmail,
   callToLog,
+  submitClientReferral,
   toggleCallStep,
   markWeeklyStatusViewed,
 } from "@/lib/actions";
@@ -446,6 +447,8 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
 
   const referralsContent = (
     <ClientReferralPanel
+      clientId={client.id}
+      onSubmit={submitClientReferral}
       code={referralLink.code}
       referrals={referrals.map((r) => ({ id: r.id, name: r.name, stage: r.stage, createdAt: r.createdAt.toISOString() }))}
     />

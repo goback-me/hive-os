@@ -1,7 +1,6 @@
 import type { CallFrequency, CallReminderKind, ClientMood, MeetingStatus, Prisma, Weekday } from "@prisma/client";
 import { prisma } from "./prisma";
 import { sydneyDay, sydneyLocalToDate } from "./sheet-parse";
-import { commentOnTask, ensureTask, setTaskDue } from "./clickup";
 import { appUrl, emailConfigured, sendActionEmail, type EmailRow } from "./email";
 import type { KpiValues } from "./kpi";
 import { terms, type ClientTypeValue } from "./client-terms";
@@ -10,9 +9,11 @@ import { terms, type ClientTypeValue } from "./client-terms";
 // any time. Every client with an account manager always has one future
 // PENDING call, from their regular slot (Client.callDay / callTime /
 // callFrequency) unless one is already booked:
-//   scheduled          → calendar invite (.ics) to the call person
-//   +24h, still PENDING → "How did your call go?" email + ClickUp task + My Calls badge
+//   scheduled          → calendar invite (.ics) to the call person; it shows on
+//                        the Dashboard's call board and Account Management
+//   +24h, still PENDING → "How did your call go?" email + bell + Account Management badge
 //   +72h, still PENDING → second email + AM_CALL_NOT_LOGGED (lib/data-health.ts)
+// No ClickUp tasks — the reminders all live in HQ.
 // Logging it HELD / NOT_HELD books the next call (at nextCallAt if given);
 // RESCHEDULED replaces it with a new PENDING call (rescheduledFromId), whose
 // reminders run from the new time. Every cron step is idempotent
@@ -118,18 +119,6 @@ export const callSelectFor = (role: "COACH" | "CLIENT") => (role === "CLIENT" ? 
 export const splitSteps = (s: string | null | undefined) => (s ?? "").split("\n").map((l) => l.replace(/^\s*[-•*]\s*/, "").trim()).filter(Boolean);
 
 // ── Text for the ClickUp task and the client's email ───────────────────────
-
-// The ClickUp task once the call is logged — always closed after.
-export function callTaskUpdate(c: { status: MeetingStatus; summary?: string | null; nextSteps?: string[]; outcome?: ClientMood | null; notHeldReason?: string | null }): { description: string; close: true } | null {
-  if (c.status === "NOT_HELD") return { description: `Meeting did not happen: ${c.notHeldReason || "no reason given"}`, close: true };
-  if (c.status !== "HELD") return null;
-  const parts = [
-    c.summary?.trim() && `Summary:\n${c.summary.trim()}`,
-    c.nextSteps?.length && `Next steps:\n${c.nextSteps.map((s) => `- ${s}`).join("\n")}`,
-    c.outcome && `Outcome: ${OUTCOME_LABELS[c.outcome]}`,
-  ].filter(Boolean);
-  return { description: parts.join("\n\n") || "Call held.", close: true };
-}
 
 // The "Weekly status update" email to the client after a held call: summary,
 // next steps and this month's numbers so far. Only client-facing fields go in.
@@ -246,10 +235,9 @@ export async function ensureNextCall(clientId: string, opts: { now?: Date; prefe
 }
 
 // Move a call that hasn't happened yet (a planning change — no reschedule
-// record): the ClickUp due date and the invite follow.
+// record): the invite follows.
 export async function moveCall(callId: string, at: Date) {
   const call = await prisma.amCall.update({ where: { id: callId }, data: { scheduledAt: at } });
-  if (call.clickupTaskId) await setTaskDue(call.clickupTaskId, at);
   await sendCallInvite(call.id);
   return call;
 }
@@ -268,20 +256,16 @@ export async function applySlotChange(clientId: string, now = new Date()) {
 }
 
 // The call didn't happen at its time but will at `at`: it becomes RESCHEDULED
-// (with the reason) and a new PENDING call takes over — same call person, same
-// ClickUp task (commented, due date moved). Reminders run from the new time.
+// (with the reason) and a new PENDING call takes over — same call person.
+// Reminders run from the new time.
 export async function rescheduleCall(callId: string, at: Date, reason: string, by: string) {
   const old = await prisma.amCall.findUnique({ where: { id: callId }, include: { client: { select: { name: true } } } });
   if (!old) throw new Error("Call not found");
   if (old.status !== "PENDING") throw new Error("Only an upcoming or unlogged call can be rescheduled");
   const [, next] = await prisma.$transaction([
     prisma.amCall.update({ where: { id: callId }, data: { status: "RESCHEDULED", rescheduleReason: reason || null, loggedAt: new Date(), submittedBy: by } }),
-    prisma.amCall.create({ data: { clientId: old.clientId, callPersonId: old.callPersonId, scheduledAt: at, rescheduledFromId: old.id, clickupTaskId: old.clickupTaskId } }),
+    prisma.amCall.create({ data: { clientId: old.clientId, callPersonId: old.callPersonId, scheduledAt: at, rescheduledFromId: old.id } }),
   ]);
-  if (old.clickupTaskId) {
-    await commentOnTask(old.clickupTaskId, `Rescheduled to ${callWhenLabel(at)}${reason ? `: ${reason}` : ""}`);
-    await setTaskDue(old.clickupTaskId, at);
-  }
   await sendCallInvite(next.id);
   return next;
 }
@@ -309,7 +293,7 @@ export async function dropFutureCalls(clientIds: string[], now = new Date()) {
 
 // Hourly-or-more: book everyone's next call, then send what's due.
 export async function runCallJobs(now = new Date()) {
-  const out = { booked: 0, dayAfter: 0, second: 0, tasks: 0 };
+  const out = { booked: 0, dayAfter: 0, second: 0 };
   const clients = await prisma.client.findMany({ where: { ...ACTIVE_CLIENT, accountManagerId: { not: null } }, select: { id: true } });
   for (const c of clients) {
     const had = await prisma.amCall.count({ where: { clientId: c.id, status: "PENDING", scheduledAt: { gt: now } } });
@@ -318,7 +302,7 @@ export async function runCallJobs(now = new Date()) {
 
   const due = await prisma.amCall.findMany({
     where: { status: "PENDING", client: ACTIVE_CLIENT, scheduledAt: { lte: new Date(now.getTime() - DAY), gte: new Date(now.getTime() - 30 * DAY) } },
-    include: { client: { select: { name: true } }, callPerson: { select: { email: true, name: true, clickupUserId: true } }, reminders: true },
+    include: { client: { select: { name: true } }, callPerson: { select: { email: true, name: true } }, reminders: true },
   });
   for (const c of due) {
     const kind = reminderDue(c.scheduledAt, Object.fromEntries(c.reminders.map((r) => [r.kind, r.sentAt])), now);
@@ -327,25 +311,6 @@ export async function runCallJobs(now = new Date()) {
     const claimed = await prisma.callReminder.createMany({ data: [{ callId: c.id, kind }], skipDuplicates: true });
     if (!claimed.count) continue;
     const day = callDateLabel(c.scheduledAt);
-    const link = `${appUrl()}${callUpdatePath(c.id)}`;
-
-    if (kind === "DAY_AFTER" && !c.clickupTaskId) {
-      const taskId = await ensureTask(c.clientId, {
-        kind: "weekly_call",
-        dedupeKey: `call:${c.id}`,
-        title: `AM call: ${c.client.name} – ${day}`,
-        why: `${c.callPerson?.name ?? "The account manager"} had a call with this client on ${day} — log how it went in Hive HQ. This task closes itself once it's logged.`,
-        description: `Log the call in Hive HQ:\n${link}`,
-        dueDate: c.scheduledAt,
-        assignees: c.callPerson?.clickupUserId ? [c.callPerson.clickupUserId] : [],
-      }).catch(() => null);
-      if (taskId) {
-        await prisma.amCall.update({ where: { id: c.id }, data: { clickupTaskId: taskId } });
-        out.tasks++;
-      }
-    }
-    if (kind === "SECOND" && c.clickupTaskId) await commentOnTask(c.clickupTaskId, `Reminder: this call still isn't logged in Hive HQ — ${link}`);
-
     if (c.callPerson?.email) {
       const sent = await sendActionEmail({
         to: [c.callPerson.email],

@@ -2,6 +2,7 @@
 // (DB-backed checks — booking, reschedule, reminders once — are in
 // scripts run against a copy of the DB; these are the pure rules.)
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import React from "react";
 import { renderToString } from "react-dom/server";
 import { signActionToken, verifyActionToken, ACTION_TOKEN_DAYS } from "./action-token";
@@ -12,7 +13,6 @@ import {
   buildHistory,
   callInvite,
   callSelectFor,
-  callTaskUpdate,
   callUpdatePath,
   clientCallEmail,
   defaultNextCall,
@@ -26,7 +26,6 @@ import { actionLink } from "./email";
 import { computeHealth, kpisRed, lastTwoMissed } from "./client-health";
 import type { KpiValues } from "./kpi";
 import { sydneyDay } from "./sheet-parse";
-import { taskText } from "./clickup";
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -88,15 +87,8 @@ const moved = new Date("2026-10-08T23:00:00Z");
 assert.equal(reminderDue(moved, {}, new Date(at.getTime() + 30 * HOUR)), null);
 assert.equal(reminderDue(moved, {}, new Date(moved.getTime() + 25 * HOUR)), "DAY_AFTER");
 
-// ── Logging closes the ClickUp task, HELD or NOT_HELD ──
-assert.deepEqual(callTaskUpdate({ status: "NOT_HELD", notHeldReason: "Client no-show" }), { description: "Meeting did not happen: Client no-show", close: true });
-const held = callTaskUpdate({ status: "HELD", summary: "Went well", nextSteps: ["Send quote"], outcome: "GOOD" })!;
-assert.equal(held.close, true);
-assert.match(held.description, /Summary:\nWent well/);
-assert.match(held.description, /Next steps:\n- Send quote/);
-assert.equal(callTaskUpdate({ status: "PENDING" }), null);
-assert.equal(callTaskUpdate({ status: "RESCHEDULED" }), null, "a reschedule keeps the task open");
-assert.equal(taskText({ name: "Jake", slug: "jake" }, { kind: "weekly_call", title: "AM call: Jake – Fri 2 Oct", why: "x", description: "" }, "").title, "AM call: Jake – Fri 2 Oct");
+// ── No ClickUp tasks for calls: the call flow never touches ClickUp ──
+assert.ok(!readFileSync("lib/am-calls.ts", "utf8").includes('from "./clickup"'), "lib/am-calls.ts must not use ClickUp");
 
 // ── internalNotes / outcome never reach a CLIENT ──
 assert.equal(callSelectFor("CLIENT"), CLIENT_CALL_SELECT);

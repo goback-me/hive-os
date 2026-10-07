@@ -18,8 +18,8 @@ import { reportsOnHold } from "@/lib/report-hold";
 import { sendActionEmail } from "@/lib/email";
 import { runHealthChecks } from "@/lib/data-health";
 import { kickSlack, parseSlackEvents, queueLeadEvent, queueSlack, queueTestMessage } from "@/lib/slack";
-import { NOT_HELD_REASONS, WEEKDAYS, applySlotChange, dropFutureCalls, callDateLabel, callTaskUpdate, clientCallEmail, ensureNextCall, isCallTime, moveCall, parseCallWhen, rescheduleCall, sendCallInvite, splitSteps } from "@/lib/am-calls";
-import { createClientFolder, ensureTask, finishTask } from "@/lib/clickup";
+import { NOT_HELD_REASONS, WEEKDAYS, applySlotChange, dropFutureCalls, callDateLabel, clientCallEmail, ensureNextCall, isCallTime, moveCall, parseCallWhen, rescheduleCall, sendCallInvite, splitSteps } from "@/lib/am-calls";
+import { createClientFolder, ensureTask } from "@/lib/clickup";
 import { sydneyLocalToDate } from "@/lib/sheet-parse";
 
 function slugify(name: string) {
@@ -105,6 +105,29 @@ function referralRateLimited(ip: string) {
   referralHits.set(ip, hits);
   if (referralHits.size > 10_000) referralHits.clear(); // crude memory cap
   return false;
+}
+
+// A client (or the team, on their page) adds someone they're referring, from
+// the client's Referrals tab — straight into the referral pipeline
+// (/referrals), tagged as theirs. The admin Slack channel hears about it.
+export async function submitClientReferral(clientId: string, input: { name: string; phone: string; email: string; note: string }) {
+  const user = await requireClientAccess(clientId);
+  const name = input.name.trim();
+  const phone = input.phone.trim();
+  const email = input.email.trim().toLowerCase();
+  if (!name) throw new Error("Add their name or business");
+  if (!phone && !email) throw new Error("Add a phone number or email so we can reach them");
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error("That email doesn't look right");
+  const client = await prisma.client.findUniqueOrThrow({ where: { id: clientId }, select: { name: true } });
+  const link = await getOrCreateClientReferralLink(clientId, client.name);
+  const note = [phone && `Phone: ${phone}`, email && `Email: ${email}`, input.note.trim()].filter(Boolean).join(" · ");
+  await prisma.referral.create({ data: { name, source: `Referred by ${client.name}${user.role === "CLIENT" ? "" : ` (added by ${user.name})`}`, note: note || null, stage: "INTRODUCED", referralLinkId: link.id } });
+  const admin = process.env.SLACK_ADMIN_CHANNEL;
+  if (admin) {
+    await queueSlack({ channel: admin, clientId, kind: "referral", dedupeKey: `referral:${clientId}:${name}:${Date.now()}`, text: `:handshake: *${client.name}* referred *${name}* — ${note || "no details"}. It's in the referral pipeline.` }).catch(() => {});
+    kickSlack();
+  }
+  revalidatePath("/", "layout");
 }
 
 // Public submission — used by the /refer/[code] page, no auth required
@@ -533,9 +556,8 @@ export type CallLogInput = {
 
 // ✅ Call happened. Returned leads go back to Chase Up (RETURNED_BY_CLIENT +
 // write-back), a ContactLog entry, the client's "Weekly status update" email
-// (unless skipped), the summary to their Slack channel, the ClickUp task gets
-// the summary and is closed, and the next call is booked. Slack / ClickUp /
-// email failures never block the save.
+// (unless skipped), the summary to their Slack channel, and the next call is
+// booked. Slack / email failures never block the save.
 export async function logCallHeld(callId: string, input: CallLogInput) {
   const call = await prisma.amCall.findUnique({
     where: { id: callId },
@@ -599,15 +621,12 @@ export async function logCallHeld(callId: string, input: CallLogInput) {
     await queueSlack({ clientId: call.clientId, channel: call.client.slackChannelId, kind: "weekly_call", dedupeKey: `weekly_call:${callId}`, text: t }).catch(() => {});
     kickSlack();
   }
-  const update = callTaskUpdate(saved);
-  if (call.clickupTaskId && update) await finishTask(call.clickupTaskId, update.description);
   await ensureNextCall(call.clientId, { preferred: nextCallAt });
   await runHealthChecks(call.clientId).catch((e) => console.error("Health checks failed:", e)); // clears AM_CALL_NOT_LOGGED / AM_CALL_MISSED
   revalidatePath("/", "layout");
 }
 
-// ❌ Didn't happen: the ClickUp task says why and is closed, AM_CALL_MISSED
-// is raised (data health), the admin channel hears about it, no client
+// ❌ Didn't happen: AM_CALL_MISSED is raised (data health), the admin channel hears about it, no client
 // email; the next call is booked.
 export async function logCallNotHeld(callId: string, reasonKey: string, text: string) {
   const call = await prisma.amCall.findUnique({ where: { id: callId }, include: { client: { select: { name: true } } } });
@@ -616,9 +635,7 @@ export async function logCallNotHeld(callId: string, reasonKey: string, text: st
   if (call.status !== "PENDING") throw new Error("This call has already been logged");
   if (!(reasonKey in NOT_HELD_REASONS)) throw new Error("Say why the call didn't happen");
   const reason = [NOT_HELD_REASONS[reasonKey as keyof typeof NOT_HELD_REASONS], text.trim()].filter(Boolean).join(" — ");
-  const saved = await prisma.amCall.update({ where: { id: callId }, data: { status: "NOT_HELD", notHeldReason: reason, loggedAt: new Date(), submittedBy: user.name } });
-  const update = callTaskUpdate(saved);
-  if (call.clickupTaskId && update) await finishTask(call.clickupTaskId, update.description);
+  await prisma.amCall.update({ where: { id: callId }, data: { status: "NOT_HELD", notHeldReason: reason, loggedAt: new Date(), submittedBy: user.name } });
   const admin = process.env.SLACK_ADMIN_CHANNEL;
   if (admin) {
     await queueSlack({ channel: admin, clientId: call.clientId, kind: "meeting_missed", dedupeKey: `meeting_missed:${callId}`, text: `:warning: *${call.client.name}* — the ${callDateLabel(call.scheduledAt)} call didn't happen: ${reason} (${user.name})` }).catch(() => {});
