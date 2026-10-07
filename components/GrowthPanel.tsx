@@ -27,7 +27,7 @@ function fmt(m: Metric, v: number | null) {
 }
 const shortMonth = (label: string) => label.split(" ")[0].slice(0, 3);
 
-export default function GrowthPanel({ clientId, isCoach }: { clientId: string; isCoach: boolean }) {
+export default function GrowthPanel({ clientId, isCoach, maxFrom }: { clientId: string; isCoach: boolean; maxFrom: string | null }) {
   const [range, setRange] = useReportRange();
   const rangeQuery = reportRangeQuery(range);
   const [data, setData] = useState<GrowthResponse | null>(null);
@@ -60,7 +60,7 @@ export default function GrowthPanel({ clientId, isCoach }: { clientId: string; i
           {error && <span className="text-xs" style={{ color: "var(--danger)" }}>{error}</span>}
           {loading && <span className="material-symbols-outlined text-[18px] animate-spin" style={{ color: "var(--text-muted)" }}>progress_activity</span>}
         </div>
-        <DateRangePicker value={range} onChange={setRange} />
+        <DateRangePicker value={range} onChange={setRange} maxFrom={maxFrom} />
       </div>
 
       {!data ? (

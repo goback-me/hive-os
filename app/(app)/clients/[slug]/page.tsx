@@ -158,6 +158,10 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
   ]);
   // Team: account health (lib/client-health.ts) — the override and the computed one.
   const health = isTeam ? await getClientHealth(client.id) : null;
+  // Where every picker's "Maximum" starts: the start date, else the first lead.
+  const maxFrom = client.startDate
+    ? sydneyDay(client.startDate)
+    : await prisma.lead.findFirst({ where: { clientId: client.id, deletedAt: null }, orderBy: { createdAt: "asc" }, select: { createdAt: true } }).then((l) => (l ? sydneyDay(l.createdAt) : null));
   const cycleOverrides = parseCycleOverrides(client.cycleOverrides);
 
   // Coaches: this client's open data alerts (lib/data-health.ts).
@@ -201,7 +205,7 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
       ) : (
         <>
           <SnapshotPanel key={`snap-${visibilityKey}`} clientId={client.id} initial={snapshot} isCoach={isCoach} onRebuild={isCoach ? rebuildKpiHistory : undefined} />
-          <DashboardStats key={`stats-${visibilityKey}`} clientId={client.id} initial={stats} isCoach={isCoach} />
+          <DashboardStats key={`stats-${visibilityKey}`} clientId={client.id} initial={stats} isCoach={isCoach} maxFrom={maxFrom} />
         </>
       )}
 
@@ -425,7 +429,7 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
     <div className="space-y-6">
       {/* Campaigns + spend load client-side (/api/ads) — Meta's live list once
           connected, else the manually tracked AdCampaign rows. */}
-      {hold ? <HoldNote /> : <AdsPanel clientId={client.id} isCoach={isCoach} onSetReporting={setCampaignReporting} />}
+      {hold ? <HoldNote /> : <AdsPanel clientId={client.id} isCoach={isCoach} onSetReporting={setCampaignReporting} maxFrom={maxFrom} />}
       {/* Hive OS — Meta Marketing API connection for this client, merged in
           alongside the original coaching app's own manually-tracked AdCampaign rows above. */}
       <MetaAdsCard clientId={client.id} connected={Boolean(client.metaAdAccountId)} adAccountId={client.metaAdAccountId} />
@@ -456,6 +460,7 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
       hasSheet={Boolean(clientSheet)}
       clientSlug={client.slug}
       startDate={client.startDate?.toISOString() ?? null}
+      maxFrom={maxFrom}
       reportsHold={hold}
       lastSyncedAt={clientSheet?.lastSyncedAt?.toISOString() ?? null}
       lastSyncError={clientSheet?.lastSyncError ?? null}
@@ -559,7 +564,7 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
           },
           { key: "weekly", label: "Weekly status", content: weeklyContent, badge: statusIsNew ? "New" : undefined, onOpen: statusIsNew ? markWeeklyStatusViewed : undefined },
           ...(clientSheet || isCoach ? [{ key: "leads", label: "Leads", content: leadsContent }] : []),
-          { key: "growth", label: "Growth", content: hold ? <HoldNote /> : <GrowthPanel clientId={client.id} isCoach={isCoach} /> },
+          { key: "growth", label: "Growth", content: hold ? <HoldNote /> : <GrowthPanel clientId={client.id} isCoach={isCoach} maxFrom={maxFrom} /> },
           { key: "gameplan", label: "Gameplan", content: gameplanContent },
           { key: "playbooks", label: "Playbooks", content: playbooksContent },
           { key: "ads", label: "Ads", content: adsContent },

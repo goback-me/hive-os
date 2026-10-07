@@ -3,16 +3,17 @@ import { sydneyDay, sydneyLocalToDate } from "./sheet-parse";
 // ── Report ranges (every date picker) ──────────────────────────────────────
 // One picker per tab, kept in the URL (?range=custom&from=2026-09-01&to=…) so
 // a refresh or a shared link shows the same period. Days are Sydney calendar
-// days; "since_start" resolves to no lower bound, which the server clamps to
-// the client's start date (lib/reporting-scope.ts clampRange).
+// days and every preset is computed from today. "since_start" (Maximum)
+// resolves to no lower bound, which the server clamps to the client's start
+// date (lib/reporting-scope.ts clampRange) — agency views: all data.
 
 export const REPORT_PRESETS = ["this_month", "last_month", "last_3_months", "since_start", "custom"] as const;
 export type ReportPreset = (typeof REPORT_PRESETS)[number];
 export const REPORT_LABELS: Record<ReportPreset, string> = {
-  this_month: "This month",
+  this_month: "Month to date",
   last_month: "Last month",
   last_3_months: "Last 3 months",
-  since_start: "Since start",
+  since_start: "Maximum",
   custom: "Custom",
 };
 
@@ -34,7 +35,7 @@ const monthStart = (day: string, n = 0) => {
   return `${Math.floor(i / 12)}-${String((i % 12) + 1).padStart(2, "0")}-01`;
 };
 
-export const DEFAULT_REPORT_RANGE: ReportRange = { preset: "since_start" };
+export const DEFAULT_REPORT_RANGE: ReportRange = { preset: "this_month" };
 
 export function parseReportRange(sp: { get(k: string): string | null }): ReportRange {
   const preset = sp.get("range") as ReportPreset;
@@ -54,6 +55,20 @@ export function reportRangeLabel(r: ReportRange) {
   if (r.preset !== "custom") return REPORT_LABELS[r.preset];
   const fmt = (d: string) => new Date(`${d}T12:00:00Z`).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
   return `${fmt(r.from!)} – ${fmt(r.to!)}`;
+}
+
+// The actual dates a range covers, e.g. "1 Jul – 6 Oct 2026" (shown under
+// the picker). Maximum starts at `maxFrom` (the client's start date, or the
+// earliest data), "YYYY-MM-DD"; without one it's just "→ <today>".
+export function reportRangeDates(r: ReportRange, maxFrom: string | null | undefined, now = new Date()) {
+  const today = sydneyDay(now);
+  const days = reportDays(r, now);
+  const since = r.preset === "since_start" ? (maxFrom && maxFrom <= today ? maxFrom : undefined) : days.since;
+  const until = days.until ?? today;
+  const fmt = (d: string, year: boolean) => new Date(`${d}T12:00:00Z`).toLocaleDateString("en-AU", { day: "numeric", month: "short", ...(year ? { year: "numeric" } : {}), timeZone: "UTC" });
+  if (!since) return `→ ${fmt(until, true)}`;
+  if (since === until) return fmt(until, true);
+  return `${fmt(since, since.slice(0, 4) !== until.slice(0, 4))} – ${fmt(until, true)}`;
 }
 
 // Inclusive Sydney days → {from, to exclusive}. this_month / last_3_months
@@ -87,7 +102,7 @@ export function resolveReportRange(r: ReportRange, now = new Date()): { from?: D
 // The period a report compares against: month presets shift back a month
 // (this month so far vs the same days of last month; last 3 months vs the 3
 // before), a custom range vs the equally long run of days just before it.
-// "Since start" has nothing before it.
+// "Maximum" has nothing before it.
 export function previousReportRange(r: ReportRange, now = new Date()): { from: Date; to: Date; label: string } | null {
   const today = sydneyDay(now);
   const mon = (day: string) => new Date(`${day}T12:00:00Z`).toLocaleDateString("en-AU", { month: "short", timeZone: "UTC" });
@@ -130,7 +145,7 @@ const ymd = (day: string) => {
 };
 
 // Report APIs read the range from the URL params (lib/date-range.ts presets).
-// allTime = no lower bound was asked for ("Since start").
+// allTime = no lower bound was asked for ("Maximum").
 export function rangeFromParams(sp: { get(k: string): string | null }, now = new Date()) {
   const r = parseReportRange(sp);
   return { range: resolveReportRange(r, now), allTime: r.preset === "since_start", label: reportRangeLabel(r), report: r };

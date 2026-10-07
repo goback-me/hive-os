@@ -6,7 +6,7 @@ import { getAdsReport } from "@/lib/campaign-report";
 import { rangeFromParams } from "@/lib/date-range";
 
 // Ads tab (components/AdsPanel.tsx): top cards + per-campaign table for the
-// tab's date range ("Since start" = start date → today), plus — for coaches —
+// tab's date range ("Maximum" = start date → today), plus — for coaches —
 // every campaign with its include/exclude tick. Spend and cost columns are
 // left out for a CLIENT when cost metrics are hidden.
 export async function GET(req: NextRequest) {

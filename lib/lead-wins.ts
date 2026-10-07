@@ -1,45 +1,38 @@
 import { prisma } from "./prisma";
 import { wonAtSql } from "./milestones";
-import { SHEET_TZ, sydneyLocalToDate } from "./sheet-parse";
+import { SHEET_TZ } from "./sheet-parse";
 
-// Leads tab headline: won-lead revenue over a 60-day window, plus a daily
-// chart of leads coming in and deals closing. "first" = the client's first
-// 60 days (from their first lead), "last" = the 60 days up to today.
-// Days are Sydney calendar days.
+// Leads tab headline: won-lead revenue over the tab's date range, plus a
+// daily chart of leads coming in and deals closing. Days are Sydney calendar
+// days.
 
-export const WIN_WINDOW_DAYS = 60;
-export type WinsWindow = "first" | "last";
 export type WinsDay = { date: string; leads: number; wins: number[] }; // wins = each closed deal's value
-export type LeadWins = { window: WinsWindow; days: WinsDay[]; revenue: number; won: number; leads: number };
+export type LeadWins = { days: WinsDay[]; revenue: number; won: number; leads: number };
 
 const dayKey = (d: Date) => new Intl.DateTimeFormat("en-CA", { timeZone: SHEET_TZ }).format(d); // "2026-09-29"
 const addDays = (key: string, n: number) => {
   const [y, m, d] = key.split("-").map(Number);
   return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
 };
-const startOf = (key: string) => {
-  const [y, m, d] = key.split("-").map(Number);
-  return sydneyLocalToDate(y, m, d)!;
-};
 
-// Scoped to the client's reporting start date: "first 60 days" starts at their
-// first lead on/after it, and earlier leads never count.
-export async function getLeadWins(clientId: string, window: WinsWindow, now = new Date()): Promise<LeadWins | null> {
+// Scoped to the client's reporting start date: earlier leads never count, and
+// Maximum (no range.from) starts at the start date, else the first lead.
+export async function getLeadWins(clientId: string, range: { from?: Date; to?: Date }, now = new Date()): Promise<LeadWins | null> {
   const since = (await prisma.client.findUnique({ where: { id: clientId }, select: { startDate: true } }))?.startDate ?? new Date(0);
-  let start: string;
-  if (window === "first") {
-    const first = await prisma.lead.findFirst({ where: { clientId, deletedAt: null, createdAt: { gte: since } }, orderBy: { createdAt: "asc" }, select: { createdAt: true } });
+  let from = range.from && range.from > since ? range.from : since;
+  if (from.getTime() === 0) {
+    const first = await prisma.lead.findFirst({ where: { clientId, deletedAt: null }, orderBy: { createdAt: "asc" }, select: { createdAt: true } });
     if (!first) return null;
-    start = dayKey(first.createdAt);
-  } else {
-    start = addDays(dayKey(now), -(WIN_WINDOW_DAYS - 1));
+    from = first.createdAt;
   }
-  const keys = Array.from({ length: WIN_WINDOW_DAYS }, (_, i) => addDays(start, i));
-  const from = startOf(keys[0]);
-  const to = startOf(addDays(keys[keys.length - 1], 1));
+  const to = range.to && range.to < now ? range.to : now;
+  if (from >= to) return { days: [], revenue: 0, won: 0, leads: 0 };
+  // ponytail: one bar per day, uncapped — a multi-year Maximum gets thin bars; bucket by week if that bites.
+  const keys: string[] = [];
+  for (let k = dayKey(from), last = dayKey(new Date(to.getTime() - 1)); k <= last; k = addDays(k, 1)) keys.push(k);
 
   const [leads, wins] = await Promise.all([
-    prisma.lead.findMany({ where: { clientId, deletedAt: null, createdAt: { gte: from > since ? from : since, lt: to } }, select: { createdAt: true } }),
+    prisma.lead.findMany({ where: { clientId, deletedAt: null, createdAt: { gte: from, lt: to } }, select: { createdAt: true } }),
     prisma.$queryRaw<{ value: unknown; closed_at: Date }[]>`
       SELECT l.value, ${wonAtSql()} AS closed_at
       FROM "Lead" l
@@ -60,8 +53,7 @@ export async function getLeadWins(clientId: string, window: WinsWindow, now = ne
   const all = Array.from(days.values());
   const closed = all.flatMap((d) => d.wins);
   return {
-    window,
-    days: all.filter((d) => startOf(d.date).getTime() <= now.getTime()), // a new client's first 60 days may still be running
+    days: all,
     revenue: closed.reduce((a, b) => a + b, 0),
     won: closed.length,
     leads: leads.length,

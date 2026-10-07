@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { REPORT_LABELS, REPORT_PRESETS, parseReportRange, reportRangeLabel, reportRangeQuery, type ReportRange } from "@/lib/date-range";
+import { REPORT_LABELS, REPORT_PRESETS, parseReportRange, reportRangeDates, reportRangeLabel, reportRangeQuery, type ReportRange } from "@/lib/date-range";
 
 // The selected report range lives in the URL (?range=…&from=…&to=…), so it
 // survives a refresh and can be shared. history.replaceState keeps it a
@@ -21,8 +21,10 @@ export function useReportRange(): [ReportRange, (r: ReportRange) => void] {
   return [range, set];
 }
 
-// One picker at the top of a tab; every report section below follows it.
-export default function DateRangePicker({ value, onChange }: { value: ReportRange; onChange: (r: ReportRange) => void }) {
+// The app's one date range picker — at the top of a tab, every report section
+// below follows it. The actual dates show under it; maxFrom ("YYYY-MM-DD") is
+// where Maximum starts: the client's start date, or the earliest data.
+export default function DateRangePicker({ value, onChange, maxFrom }: { value: ReportRange; onChange: (r: ReportRange) => void; maxFrom?: string | null }) {
   const [open, setOpen] = useState(false);
   const [showCustom, setShowCustom] = useState(value.preset === "custom");
   const [from, setFrom] = useState(value.from ?? "");
@@ -40,8 +42,9 @@ export default function DateRangePicker({ value, onChange }: { value: ReportRang
   const inputStyle = { background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" };
 
   return (
-    <div className="relative" ref={ref}>
+    <div className="relative flex flex-col items-end" ref={ref}>
       <button
+        aria-label="Date range"
         onClick={() => setOpen((o) => !o)}
         className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold"
         style={{ border: "1px solid var(--border)", color: "var(--text-primary)", background: "var(--surface)" }}
@@ -50,9 +53,10 @@ export default function DateRangePicker({ value, onChange }: { value: ReportRang
         {reportRangeLabel(value)}
         <span className="material-symbols-outlined text-[16px]" style={{ color: "var(--text-muted)" }}>{open ? "expand_less" : "expand_more"}</span>
       </button>
+      <span className="text-[11px] mt-0.5" style={{ color: "var(--text-muted)" }}>{reportRangeDates(value, maxFrom)}</span>
       {open && (
         <div
-          className="absolute right-0 z-20 mt-1 rounded-lg overflow-hidden py-1 min-w-[220px]"
+          className="absolute right-0 top-full z-20 mt-1 rounded-lg overflow-hidden py-1 min-w-[220px]"
           style={{ background: "var(--surface-card)", border: "1px solid var(--border)", boxShadow: "0 20px 40px -16px rgba(0,0,0,0.25)" }}
         >
           {REPORT_PRESETS.map((p) => {
@@ -74,7 +78,7 @@ export default function DateRangePicker({ value, onChange }: { value: ReportRang
                 }}
               >
                 {REPORT_LABELS[p]}
-                {p === "since_start" && <span className="text-[11px] font-normal" style={{ color: "var(--text-muted)" }}> · start date → today</span>}
+                {p === "since_start" && <span className="text-[11px] font-normal" style={{ color: "var(--text-muted)" }}> · {maxFrom ? reportRangeDates({ preset: "since_start" }, maxFrom) : "start → today"}</span>}
               </button>
             );
           })}

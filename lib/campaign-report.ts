@@ -7,7 +7,7 @@ import type { ClientTypeValue } from "./client-terms";
 
 // Ads tab: per-campaign results for a period. Every lead, live transfer,
 // booking, quote and sale is credited to the campaign that generated the
-// lead, and counted when it happened (lib/milestones.ts) — so "Since start"
+// lead, and counted when it happened (lib/milestones.ts) — so "Maximum"
 // gives lifetime campaign totals and a month gives that month's activity.
 // Revenue = won job values, dated by the won date. Only included campaigns
 // get a row (lib/reporting-scope.ts); leads from campaigns that aren't in the

@@ -15,7 +15,7 @@ export type PortfolioRow = {
   name: string;
   slug: string;
   values: Values;
-  previous: Values | null; // null = nothing before to compare ("Since start")
+  previous: Values | null; // null = nothing before to compare ("Maximum")
   health: "green" | "amber" | "red";
   openAlerts: number;
   dangerAlerts: number;

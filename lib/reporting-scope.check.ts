@@ -18,7 +18,7 @@ assert.equal(entry("a", "A", "ACTIVE", null, null, start).included, true);
 assert.equal(entry("a", "A", "ACTIVE", "2020-01-01", true, start).included, true);
 assert.equal(entry("a", "A", "ACTIVE", "2026-10-01", false, start).included, false);
 
-// Ranges never reach before the start date; open "since start" = start → to.
+// Ranges never reach before the start date; open "Maximum" = start → to.
 const to = new Date("2026-10-02T00:00:00Z");
 assert.deepEqual(clampRange({ to }, start), { to, from: start });
 assert.deepEqual(clampRange({ from: new Date("2026-01-01"), to }, start), { from: start, to });

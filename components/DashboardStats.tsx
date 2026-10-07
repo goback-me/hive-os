@@ -1,31 +1,37 @@
 "use client";
 
-import { useRef, useState } from "react";
-import DateRangePicker from "@/components/DateRangePicker";
+import { useEffect, useRef, useState } from "react";
+import DateRangePicker, { useReportRange } from "@/components/DateRangePicker";
 import HiddenBadge from "@/components/HiddenBadge";
-import { reportRangeLabel, reportRangeQuery, type ReportRange } from "@/lib/date-range";
+import { reportRangeLabel, reportRangeQuery } from "@/lib/date-range";
 import type { ViewerStats } from "@/lib/client-stats";
 
 const money = (v: number) => `${v < 0 ? "-" : ""}$${Math.abs(v).toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
 
-// Client Dashboard stat cards with the same date-range picker as the Leads
-// tab. First paint uses the server's "This month" numbers; changing the
-// range refetches just these cards (no page reload, tab stays put).
+// Client Dashboard stat cards with the same date-range picker as the other
+// tabs, sharing the URL's range. First paint uses the server's month-to-date
+// numbers; any other range refetches just these cards.
 // Profit is never on a client's dashboard — it lives in the Leads tab's
 // Profit / ROI section, behind the coach's showProfit setting.
-export default function DashboardStats({ clientId, initial, isCoach }: { clientId: string; initial: ViewerStats; isCoach: boolean }) {
-  const [range, setRange] = useState<ReportRange>({ preset: "this_month" });
+export default function DashboardStats({ clientId, initial, isCoach, maxFrom }: { clientId: string; initial: ViewerStats; isCoach: boolean; maxFrom: string | null }) {
+  const [range, setRange] = useReportRange();
+  const query = reportRangeQuery(range);
   const [stats, setStats] = useState(initial);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const req = useRef(0);
 
-  function change(next: ReportRange) {
-    setRange(next);
+  // The server rendered month to date — no fetch needed on first paint for it.
+  const skipFirst = useRef(range.preset === "this_month");
+  useEffect(() => {
+    if (skipFirst.current) {
+      skipFirst.current = false;
+      return;
+    }
     const id = ++req.current;
     setLoading(true);
     setError(null);
-    fetch(`/api/clients/stats?clientId=${clientId}&${reportRangeQuery(next)}`)
+    fetch(`/api/clients/stats?clientId=${clientId}&${query}`)
       .then((r) => r.json())
       .then((data) => {
         if (id !== req.current) return; // a newer range was picked meanwhile
@@ -34,7 +40,7 @@ export default function DashboardStats({ clientId, initial, isCoach }: { clientI
       })
       .catch((e) => id === req.current && setError(e.message))
       .finally(() => id === req.current && setLoading(false));
-  }
+  }, [clientId, query]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const label = reportRangeLabel(range);
   const v = stats.visibility;
@@ -69,7 +75,7 @@ export default function DashboardStats({ clientId, initial, isCoach }: { clientI
       <div className="flex items-center justify-end gap-3 mb-3">
         {error && <span className="text-xs" style={{ color: "var(--danger)" }}>{error}</span>}
         {loading && <span className="material-symbols-outlined text-[18px] animate-spin" style={{ color: "var(--text-muted)" }}>progress_activity</span>}
-        <DateRangePicker value={range} onChange={change} />
+        <DateRangePicker value={range} onChange={setRange} maxFrom={maxFrom} />
       </div>
       <div className={`grid gap-4 transition-opacity ${cards.length >= 4 ? "grid-cols-2 lg:grid-cols-4" : "grid-cols-2 lg:grid-cols-3"}`} style={{ opacity: loading ? 0.55 : 1 }}>
         {cards}

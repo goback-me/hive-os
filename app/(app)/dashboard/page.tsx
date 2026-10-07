@@ -6,6 +6,7 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import RevenueChart from "@/components/RevenueChart";
 import PortfolioTable from "@/components/PortfolioTable";
+import { sydneyDay } from "@/lib/sheet-parse";
 
 export const dynamic = "force-dynamic";
 
@@ -32,6 +33,8 @@ export default async function DashboardPage() {
   }
 
   const kpis = await getDashboardKpis();
+  // The portfolio picker's "Maximum" starts at the earliest data.
+  const firstLead = await prisma.lead.findFirst({ where: { deletedAt: null, client: { archivedAt: null } }, orderBy: { createdAt: "asc" }, select: { createdAt: true } });
   const trend = await getRevenueTrend(12);
   const allItems = await getNeedsAction();
   // One card per client — their most urgent item (list is already sorted by urgency).
@@ -88,7 +91,7 @@ export default async function DashboardPage() {
       </div>
 
       {/* One row per client, at-risk first — replaces the old client cards. */}
-      <PortfolioTable />
+      <PortfolioTable maxFrom={firstLead ? sydneyDay(firstLead.createdAt) : null} />
     </div>
   );
 }

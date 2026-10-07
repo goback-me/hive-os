@@ -80,7 +80,7 @@ export async function getReportingScope(clientId: string, { cached = true }: Opt
 }
 
 // A report range narrowed to the reporting scope: nothing before startDate.
-// An open-ended start ("Since start") becomes startDate → `to`.
+// An open-ended start ("Maximum") becomes startDate → `to`.
 export function clampRange(range: Range, startDate: Date | null): Range {
   if (!startDate) return range;
   return { ...range, from: range.from && range.from > startDate ? range.from : startDate };

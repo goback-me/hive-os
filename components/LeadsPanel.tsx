@@ -144,6 +144,7 @@ export default function LeadsPanel({
   hasSheet,
   clientSlug,
   startDate,
+  maxFrom,
   reportsHold = false,
   lastSyncedAt: initialLastSyncedAt,
   lastSyncError,
@@ -156,6 +157,7 @@ export default function LeadsPanel({
   hasSheet: boolean;
   clientSlug: string;
   startDate: string | null;
+  maxFrom: string | null; // where the picker's Maximum starts ("YYYY-MM-DD")
   reportsHold?: boolean; // client view while a data problem is fixed — no report numbers
   lastSyncedAt: string | null;
   lastSyncError: string | null;
@@ -449,7 +451,7 @@ export default function LeadsPanel({
           {error && <p className="text-xs mt-0.5" style={{ color: "var(--danger)" }}>{error}</p>}
         </div>
         <div className="flex items-center gap-2">
-          <DateRangePicker value={dateRange} onChange={changeDateRange} />
+          <DateRangePicker value={dateRange} onChange={changeDateRange} maxFrom={maxFrom} />
           {isCoach && (
             <button
               onClick={sync}
@@ -479,7 +481,7 @@ export default function LeadsPanel({
       {activeSubTab === "sales" && <SalesPanel clientId={clientId} rangeQuery={rangeQuery} rangeLabel={rangeLabel} isCoach={isCoach} reloadKey={reloadKey} />}
 
       {/* TODO pending Aizal Loom spec — top of the Leads tab, don't redesign yet. */}
-      {activeSubTab === "leads" && (reportsHold ? <HoldNote /> : <LeadWinsCard clientId={clientId} reloadKey={reloadKey} />)}
+      {activeSubTab === "leads" && (reportsHold ? <HoldNote /> : <LeadWinsCard clientId={clientId} rangeQuery={rangeQuery} reloadKey={reloadKey} />)}
 
       {activeSubTab === "leads" && <ClientUpdatesPanel clientId={clientId} onUpdateStage={onUpdateStage} reloadKey={reloadKey} onSaved={reload} />}
 

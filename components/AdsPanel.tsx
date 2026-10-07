@@ -19,7 +19,7 @@ const sydDate = (iso: string) => new Date(iso).toLocaleDateString("en-AU", { tim
 // outcomes are credited to the campaign that generated the lead and counted
 // when they happened (lib/campaign-report.ts). Spend / cost columns arrive as
 // null for a client who isn't shown cost metrics.
-export default function AdsPanel({ clientId, isCoach, onSetReporting }: { clientId: string; isCoach: boolean; onSetReporting: SetReporting }) {
+export default function AdsPanel({ clientId, isCoach, onSetReporting, maxFrom }: { clientId: string; isCoach: boolean; onSetReporting: SetReporting; maxFrom: string | null }) {
   const [range, setRange] = useReportRange();
   const rangeQuery = reportRangeQuery(range);
   const rangeLabel = reportRangeLabel(range);
@@ -70,7 +70,7 @@ export default function AdsPanel({ clientId, isCoach, onSetReporting }: { client
           {error && <span className="text-xs" style={{ color: "var(--danger)" }}>{error}</span>}
           {loading && <span className="material-symbols-outlined text-[18px] animate-spin" style={{ color: "var(--text-muted)" }}>progress_activity</span>}
         </div>
-        <DateRangePicker value={range} onChange={setRange} />
+        <DateRangePicker value={range} onChange={setRange} maxFrom={maxFrom} />
       </div>
       {isCoach && data && !data.startDate && <StartDateWarning />}
 

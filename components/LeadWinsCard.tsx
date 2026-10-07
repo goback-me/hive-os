@@ -2,15 +2,14 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { WIN_WINDOW_DAYS, type LeadWins, type WinsDay, type WinsWindow } from "@/lib/lead-wins";
+import type { LeadWins, WinsDay } from "@/lib/lead-wins";
 
 const money = (v: number) => `$${Math.round(v).toLocaleString("en-US")}`;
 const shortDate = (key: string) => new Date(`${key}T12:00:00Z`).toLocaleDateString("en-AU", { day: "numeric", month: "short", timeZone: "UTC" });
 
-// Leads tab headline: won-lead revenue over the client's first (or last) 60
-// days, and a daily chart of leads coming in vs deals closing.
-export default function LeadWinsCard({ clientId, reloadKey }: { clientId: string; reloadKey: number }) {
-  const [win, setWin] = useState<WinsWindow>("first");
+// Leads tab headline: won-lead revenue over the tab's date range, and a daily
+// chart of leads coming in vs deals closing.
+export default function LeadWinsCard({ clientId, rangeQuery, reloadKey }: { clientId: string; rangeQuery: string; reloadKey: number }) {
   const [data, setData] = useState<LeadWins | null | undefined>(undefined); // undefined = loading, null = no leads yet
   const [error, setError] = useState<string | null>(null);
   const [hover, setHover] = useState<WinsDay | null>(null);
@@ -19,7 +18,7 @@ export default function LeadWinsCard({ clientId, reloadKey }: { clientId: string
   useEffect(() => {
     const id = ++req.current;
     setError(null);
-    fetch(`/api/leads/wins?clientId=${clientId}&window=${win}`)
+    fetch(`/api/leads/wins?clientId=${clientId}&${rangeQuery}`)
       .then((r) => r.json())
       .then((res) => {
         if (id !== req.current) return;
@@ -27,7 +26,7 @@ export default function LeadWinsCard({ clientId, reloadKey }: { clientId: string
         setData(res.wins);
       })
       .catch((e) => id === req.current && setError(e.message));
-  }, [clientId, win, reloadKey]);
+  }, [clientId, rangeQuery, reloadKey]);
 
   if (error) return <p className="text-xs" style={{ color: "var(--danger)" }}>{error}</p>;
   if (data === null) return null;
@@ -43,30 +42,18 @@ export default function LeadWinsCard({ clientId, reloadKey }: { clientId: string
   const days = data.days;
   const maxWin = Math.max(...days.map((d) => d.wins.reduce((a, b) => a + b, 0)), 1);
   const maxLeads = Math.max(...days.map((d) => d.leads), 1);
-  const running = days.length < WIN_WINDOW_DAYS;
   const range = days.length ? `${shortDate(days[0].date)} – ${shortDate(days[days.length - 1].date)}` : "";
 
   return (
     <div className="space-y-4 fade-in">
       <div className="grid grid-cols-2 gap-4">
         <Card icon="payments" label="Revenue closed" sub={`${data.won} job${data.won === 1 ? "" : "s"} won · ${data.leads} leads`} value={money(data.revenue)} />
-        <Card icon="schedule" label="Time frame" sub={range} value={running ? `${days.length} of ${WIN_WINDOW_DAYS} days` : `${WIN_WINDOW_DAYS} days`} />
+        <Card icon="schedule" label="Date range" sub={range} value={`${days.length} day${days.length === 1 ? "" : "s"}`} />
       </div>
 
       <div className="card rounded-2xl p-5">
         <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
-          <div className="flex items-center gap-1 p-1 rounded-lg" style={{ background: "var(--surface-hover)" }}>
-            {(["first", "last"] as const).map((w) => (
-              <button
-                key={w}
-                onClick={() => setWin(w)}
-                className="px-3 py-1.5 rounded-md text-xs font-bold"
-                style={win === w ? { background: "var(--surface-card)", color: "var(--text-primary)" } : { color: "var(--text-secondary)" }}
-              >
-                {w === "first" ? "First 60 days" : "Last 60 days"}
-              </button>
-            ))}
-          </div>
+          <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Leads in, deals closed</p>
           <p className="text-xs" style={{ color: "var(--text-muted)" }}>
             {hover
               ? `${shortDate(hover.date)} · ${hover.leads} lead${hover.leads === 1 ? "" : "s"} in${hover.wins.length ? ` · closed ${hover.wins.map(money).join(" + ")}` : ""}`
@@ -101,7 +88,7 @@ export default function LeadWinsCard({ clientId, reloadKey }: { clientId: string
           <Legend color="var(--text-muted)" label="Lead came in" />
         </div>
         {data.won === 0 && (
-          <p className="text-xs mt-3" style={{ color: "var(--text-muted)" }}>No deals marked Won in this window yet.</p>
+          <p className="text-xs mt-3" style={{ color: "var(--text-muted)" }}>No deals marked Won in this date range yet.</p>
         )}
       </div>
     </div>

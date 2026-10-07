@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import DateRangePicker, { useReportRange } from "@/components/DateRangePicker";
-import { reportRangeLabel, reportRangeQuery, type ReportRange } from "@/lib/date-range";
+import { reportRangeLabel, reportRangeQuery } from "@/lib/date-range";
 import type { PortfolioMetric, PortfolioRow } from "@/lib/portfolio";
 
 const METRICS: { key: PortfolioMetric; label: string; money?: boolean; lowerBetter?: boolean }[] = [
@@ -20,13 +20,12 @@ const HEALTH_LABEL = { green: "On track", amber: "Needs attention", red: "At ris
 
 const fmt = (v: number | null, money?: boolean) => (v == null ? "—" : money ? `$${v.toLocaleString("en-US", { maximumFractionDigits: v < 100 ? 2 : 0 })}` : v.toLocaleString());
 
-// /dashboard: every active client, at-risk first. Defaults to this month so
-// far vs the same days last month; the picker changes the period.
-export default function PortfolioTable() {
+// /dashboard: every active client, at-risk first. Defaults to month to date
+// vs the same days last month; the picker changes the period. Maximum here =
+// from the earliest data (maxFrom).
+export default function PortfolioTable({ maxFrom }: { maxFrom: string | null }) {
   const router = useRouter();
-  const hasRange = useSearchParams().has("range");
-  const [picked, setRange] = useReportRange();
-  const range: ReportRange = hasRange ? picked : { preset: "this_month" };
+  const [range, setRange] = useReportRange();
   const rangeQuery = reportRangeQuery(range);
   const [data, setData] = useState<{ rows: PortfolioRow[]; previousLabel: string | null } | null>(null);
   const [loading, setLoading] = useState(false);
@@ -72,7 +71,7 @@ export default function PortfolioTable() {
             style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
             aria-label="Filter clients"
           />
-          <DateRangePicker value={range} onChange={setRange} />
+          <DateRangePicker value={range} onChange={setRange} maxFrom={maxFrom} />
         </div>
       </div>
 
