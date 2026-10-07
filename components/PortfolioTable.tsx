@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import DateRangePicker, { useReportRange } from "@/components/DateRangePicker";
+import HealthBadge from "@/components/HealthBadge";
 import { reportRangeLabel, reportRangeQuery } from "@/lib/date-range";
 import type { PortfolioMetric, PortfolioRow } from "@/lib/portfolio";
 
@@ -79,7 +80,7 @@ export default function PortfolioTable({ maxFrom }: { maxFrom: string | null }) 
         <table className="w-full text-left text-sm min-w-[1200px]">
           <thead>
             <tr style={{ borderBottom: "1px solid var(--border)" }}>
-              {["Client", ...METRICS.map((m) => m.label), "Alerts", "Needs action", "Last contact", "Last call"].map((h) => (
+              {["Client", "Health", ...METRICS.map((m) => m.label), "Alerts", "Needs action", "Last contact", "Last AM call"].map((h) => (
                 <th key={h} className="py-3 px-3 text-xs font-bold whitespace-nowrap" style={{ color: "var(--text-secondary)" }}>{h}</th>
               ))}
             </tr>
@@ -87,10 +88,10 @@ export default function PortfolioTable({ maxFrom }: { maxFrom: string | null }) 
           <tbody style={{ opacity: loading ? 0.6 : 1 }}>
             {!data &&
               Array.from({ length: 5 }).map((_, i) => (
-                <tr key={i}><td colSpan={11} className="px-3 py-3"><span className="skeleton h-4 w-full block" /></td></tr>
+                <tr key={i}><td colSpan={12} className="px-3 py-3"><span className="skeleton h-4 w-full block" /></td></tr>
               ))}
             {data && rows.length === 0 && (
-              <tr><td colSpan={11} className="px-3 py-8 text-center" style={{ color: "var(--text-muted)" }}>No clients match.</td></tr>
+              <tr><td colSpan={12} className="px-3 py-8 text-center" style={{ color: "var(--text-muted)" }}>No clients match.</td></tr>
             )}
             {rows.map((r) => (
               <tr key={r.clientId} onClick={() => router.push(`/clients/${r.slug}`)} className="cursor-pointer" style={{ borderBottom: "1px solid var(--border)" }}>
@@ -98,6 +99,7 @@ export default function PortfolioTable({ maxFrom }: { maxFrom: string | null }) 
                   <span className="inline-block w-2.5 h-2.5 rounded-full mr-2 align-middle" style={{ background: HEALTH[r.health] }} title={HEALTH_LABEL[r.health]} aria-label={HEALTH_LABEL[r.health]} />
                   {r.name}
                 </td>
+                <td className="py-2.5 px-3"><HealthBadge health={r.amHealth} /></td>
                 {METRICS.map((m) => {
                   const v = r.values[m.key];
                   const p = r.previous?.[m.key] ?? null;

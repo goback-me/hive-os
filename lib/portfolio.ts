@@ -1,5 +1,6 @@
 import { prisma } from "./prisma";
 import { getRangeKpis, type KpiValues } from "./kpi";
+import { getClientsHealth, kpisRed, type Health } from "./client-health";
 import { getNeedsAction } from "./needs-action";
 import { previousReportRange, resolveReportRange, type ReportRange } from "./date-range";
 
@@ -16,12 +17,13 @@ export type PortfolioRow = {
   slug: string;
   values: Values;
   previous: Values | null; // null = nothing before to compare ("Maximum")
-  health: "green" | "amber" | "red";
+  health: "green" | "amber" | "red"; // data / needs-action health (the dot)
+  amHealth: Health; // account health (lib/client-health.ts)
   openAlerts: number;
   dangerAlerts: number;
   needsAction: number;
   lastContact: string | null; // ContactLog — a held weekly call adds one too
-  lastMeeting: { at: string; mood: "GOOD" | "NEUTRAL" | "AT_RISK" | null } | null; // latest HELD weekly call
+  lastMeeting: { at: string; mood: "GOOD" | "NEUTRAL" | "AT_RISK" | null } | null; // "Last AM call": the latest HELD call
 };
 
 const pick = (v: KpiValues): Values => ({
@@ -48,9 +50,13 @@ export async function getPortfolio(report: ReportRange, now = new Date()): Promi
     prisma.amCall.findMany({ where: { clientId: { in: ids }, status: "HELD" }, orderBy: { scheduledAt: "desc" }, distinct: ["clientId"], select: { clientId: true, scheduledAt: true, outcome: true } }),
   ]);
 
+  // Month to date vs the same days last month is exactly health's KPI sign,
+  // so that range's numbers are reused for it.
+  const redFor = new Map<string, boolean>();
   const rows = await Promise.all(
-    clients.map(async (c): Promise<PortfolioRow> => {
+    clients.map(async (c): Promise<Omit<PortfolioRow, "amHealth">> => {
       const [cur, before] = await Promise.all([getRangeKpis(c.id, range, now), prev ? getRangeKpis(c.id, prev, now) : Promise.resolve(null)]);
+      if (report.preset === "this_month" && before) redFor.set(c.id, kpisRed(cur, before));
       const open = alerts.filter((a) => a.clientId === c.id);
       const dangerAlerts = open.filter((a) => a.severity === "DANGER").reduce((s, a) => s + a._count, 0);
       const openAlerts = open.reduce((s, a) => s + a._count, 0);
@@ -72,6 +78,8 @@ export async function getPortfolio(report: ReportRange, now = new Date()): Promi
       };
     })
   );
-  rows.sort((a, b) => HEALTH_ORDER[a.health] - HEALTH_ORDER[b.health] || b.needsAction - a.needsAction || a.name.localeCompare(b.name));
-  return { rows, previousLabel: prev?.label ?? null };
+  const amHealth = await getClientsHealth(ids, { now, kpisRedFor: report.preset === "this_month" ? redFor : undefined });
+  const withHealth: PortfolioRow[] = rows.map((r) => ({ ...r, amHealth: amHealth.get(r.clientId)! }));
+  withHealth.sort((a, b) => HEALTH_ORDER[a.health] - HEALTH_ORDER[b.health] || b.needsAction - a.needsAction || a.name.localeCompare(b.name));
+  return { rows: withHealth, previousLabel: prev?.label ?? null };
 }
