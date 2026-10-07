@@ -100,23 +100,20 @@ export async function computeNeedsAction(now = new Date()): Promise<NeedsActionI
 // Dashboard read path — recomputed at most every 5 minutes.
 export const getNeedsAction = unstable_cache(() => computeNeedsAction(), ["needs-action-v2"], { revalidate: 300 });
 
-// Main dashboard page.tsx (unchanged UI) destructures revenueThisMonth/
-// activeClients/totalClients/sessionsThisMonth from this — those four keep
-// their exact original meaning from the pre-merge coaching app. totalAdSpend/avgRoas are Hive OS additions,
+// Main dashboard page.tsx reads revenueThisMonth/activeClients/totalClients
+// from this — they keep their exact original meaning from the pre-merge
+// coaching app. totalAdSpend/avgRoas are Hive OS additions,
 // available once the page's KPI cards are extended to show them.
 export async function getDashboardKpis() {
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
 
-  const [activeClients, totalClients, revenue, sessionsThisMonth, spendAgg] = await Promise.all([
+  const [activeClients, totalClients, revenue, spendAgg] = await Promise.all([
     prisma.client.count({ where: { isActive: true, archivedAt: null } }),
     prisma.client.count({ where: { archivedAt: null } }),
     // Same source as the client pages (lib/revenue.ts) — keeps this KPI equal
     // to the sum of every client's "Revenue this month" card.
     getRevenueByMonth(),
-    prisma.session.count({
-      where: { status: "COMPLETED", scheduledAt: { gte: monthStart } },
-    }),
     prisma.adSpendDaily.aggregate({
       _sum: { spend: true },
       where: { date: { gte: monthStart } },
@@ -130,7 +127,6 @@ export async function getDashboardKpis() {
     activeClients,
     totalClients,
     revenueThisMonth,
-    sessionsThisMonth,
     totalAdSpend,
     avgRoas: totalAdSpend > 0 ? revenueThisMonth / totalAdSpend : 0,
   };

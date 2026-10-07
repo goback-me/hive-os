@@ -12,6 +12,8 @@ import type { ReportVisibility } from "./report-visibility";
 // liveTransfers   distinct leads whose live handover happened in the window
 // consultsBooked  distinct leads whose consult was booked in the window
 // quotes          distinct leads whose quote went out in the window
+// quotesOrBookings distinct leads whose first booking or quote (whichever came
+//                 first — any kind of booking counts once) was in the window
 // sales / revenue leads won in the window (won date) and their job values
 //
 // "Happened" = the step's milestone date (lib/milestones.ts): the team's
@@ -31,6 +33,7 @@ export type KpiValues = {
   liveTransfers: number;
   consultsBooked: number;
   quotes: number;
+  quotesOrBookings?: number; // live windows only — frozen months don't store it
   sales: number;
   revenue: number;
   spend: number | null;
@@ -93,7 +96,7 @@ export function isFreezable(k: MonthKey, now = new Date()) {
 
 async function countKpis(clientId: string, w: Window, startDate: Date | null) {
   const since = startDate ?? new Date(0);
-  const [row] = await prisma.$queryRaw<{ leads: bigint; contacted: bigint; live: bigint; booked: bigint; quotes: bigint; sales: bigint; revenue: unknown }[]>`
+  const [row] = await prisma.$queryRaw<{ leads: bigint; contacted: bigint; live: bigint; booked: bigint; quotes: bigint; booked_or_quoted: bigint; sales: bigint; revenue: unknown }[]>`
     WITH l AS (
       SELECT id, "createdAt", stage, value FROM "Lead" WHERE "clientId" = ${clientId} AND "deletedAt" IS NULL AND "createdAt" >= ${since}
     ), m AS (
@@ -102,6 +105,7 @@ async function countKpis(clientId: string, w: Window, startDate: Date | null) {
         ${milestoneSql("HANDOVER_LIVE")} AS live,
         ${milestoneSql("CONSULT_BOOKED")} AS booked,
         ${milestoneSql("QUOTE_SENT")} AS quote,
+        ${milestoneSql(["CONSULT_BOOKED", "QUOTE_SENT"])} AS booked_or_quote,
         CASE WHEN l.stage = 'WON' THEN ${wonAtSql()} END AS won
       FROM l
     )
@@ -111,6 +115,7 @@ async function countKpis(clientId: string, w: Window, startDate: Date | null) {
       COUNT(*) FILTER (WHERE live >= ${w.from} AND live < ${w.to}) AS live,
       COUNT(*) FILTER (WHERE booked >= ${w.from} AND booked < ${w.to}) AS booked,
       COUNT(*) FILTER (WHERE quote >= ${w.from} AND quote < ${w.to}) AS quotes,
+      COUNT(*) FILTER (WHERE booked_or_quote >= ${w.from} AND booked_or_quote < ${w.to}) AS booked_or_quoted,
       COUNT(*) FILTER (WHERE won >= ${w.from} AND won < ${w.to}) AS sales,
       COALESCE(SUM(value) FILTER (WHERE won >= ${w.from} AND won < ${w.to}), 0) AS revenue
     FROM m
@@ -121,6 +126,7 @@ async function countKpis(clientId: string, w: Window, startDate: Date | null) {
     liveTransfers: Number(row.live),
     consultsBooked: Number(row.booked),
     quotes: Number(row.quotes),
+    quotesOrBookings: Number(row.booked_or_quoted),
     sales: Number(row.sales),
     revenue: Number(row.revenue ?? 0),
   };

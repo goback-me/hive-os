@@ -8,7 +8,7 @@ import { previousReportRange, resolveReportRange, type ReportRange } from "./dat
 // period vs the one before it, with a health dot, open data alerts, Needs
 // Action count and the last account-manager contact. At-risk first.
 
-export type PortfolioMetric = "leads" | "liveTransfers" | "quotes" | "sales" | "revenue" | "costPerQuote" | "costPerSale";
+export type PortfolioMetric = "leads" | "liveTransfers" | "quotesOrBookings" | "sales" | "revenue" | "costPerQuoteOrBooking" | "costPerSale";
 type Values = Record<PortfolioMetric, number | null>;
 
 export type PortfolioRow = {
@@ -26,15 +26,19 @@ export type PortfolioRow = {
   lastMeeting: { at: string; mood: "GOOD" | "NEUTRAL" | "AT_RISK" | null } | null; // "Last AM call": the latest HELD call
 };
 
-const pick = (v: KpiValues): Values => ({
-  leads: v.leads,
-  liveTransfers: v.liveTransfers,
-  quotes: v.quotes,
-  sales: v.sales,
-  revenue: v.revenue,
-  costPerQuote: v.costPerQuote,
-  costPerSale: v.costPerSale,
-});
+// Quote / booking: any kind of booking (consult or quote), each lead once.
+const pick = (v: KpiValues): Values => {
+  const qb = v.quotesOrBookings ?? v.quotes;
+  return {
+    leads: v.leads,
+    liveTransfers: v.liveTransfers,
+    quotesOrBookings: qb,
+    sales: v.sales,
+    revenue: v.revenue,
+    costPerQuoteOrBooking: v.spend != null && qb > 0 ? v.spend / qb : null,
+    costPerSale: v.costPerSale,
+  };
+};
 
 const HEALTH_ORDER = { red: 0, amber: 1, green: 2 } as const;
 

@@ -53,10 +53,9 @@ export default async function DashboardPage() {
         <p className="text-base mt-1" style={{ color: "var(--text-secondary)" }}>Here's how the agency is doing.</p>
       </div>
 
-      <div className="grid grid-cols-4 gap-4">
+      <div className="grid grid-cols-3 gap-4">
         <KpiCard icon="payments" label="Revenue this month" value={`$${kpis.revenueThisMonth.toLocaleString()}`} delta={delta === null ? undefined : `${delta >= 0 ? "+" : ""}${delta}%`} />
         <KpiCard icon="diversity_3" label="Active clients" value={String(kpis.activeClients)} sub={`${kpis.totalClients} total`} />
-        <KpiCard icon="event_available" label="Sessions this month" value={String(kpis.sessionsThisMonth)} />
         <KpiCard icon="trending_up" label="Avg. retention" value={kpis.totalClients > 0 ? `${Math.round((kpis.activeClients / kpis.totalClients) * 100)}%` : "0%"} />
       </div>
 

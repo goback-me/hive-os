@@ -10,10 +10,10 @@ import type { PortfolioMetric, PortfolioRow } from "@/lib/portfolio";
 const METRICS: { key: PortfolioMetric; label: string; money?: boolean; lowerBetter?: boolean }[] = [
   { key: "leads", label: "Leads" },
   { key: "liveTransfers", label: "Live transfers" },
-  { key: "quotes", label: "Quotes" },
+  { key: "quotesOrBookings", label: "Quote / booking" },
   { key: "sales", label: "Sales" },
   { key: "revenue", label: "Revenue", money: true },
-  { key: "costPerQuote", label: "Cost/quote", money: true, lowerBetter: true },
+  { key: "costPerQuoteOrBooking", label: "Cost/quote or booking", money: true, lowerBetter: true },
   { key: "costPerSale", label: "Cost/sale", money: true, lowerBetter: true },
 ];
 const HEALTH = { green: "var(--tag-green-fg)", amber: "var(--tag-amber-fg)", red: "var(--danger)" } as const;
