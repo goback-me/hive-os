@@ -170,6 +170,19 @@ export const TARGET_OPTIONS: { value: string; label: string }[] = [
   ...DQ_REASONS.map((r) => ({ value: `DISQUALIFIED:${r}`, label: `DQ · ${DQ_REASON_LABELS[r]}` })),
 ];
 
+// The prospect-side stages a CLIENT login may set (their side of the deal,
+// as on the "Update your leads" panel). Enforced in updateLeadStage.
+export const CLIENT_STAGES: LeadStageValue[] = ["CLIENT_CONTACTED", "CONSULT_BOOKED", "CONSULT_CANCELLED", "CONSULT_NO_SHOW", "CONSULT_ATTENDED", "QUOTE_SENT", "WON", "LOST", "DISQUALIFIED"];
+export const targetOptionsFor = (role: "COACH" | "CLIENT") =>
+  role === "COACH" ? TARGET_OPTIONS : TARGET_OPTIONS.filter((o) => CLIENT_STAGES.includes(o.value.split(":")[0] as LeadStageValue));
+
+// "DQ · Budget (after handover)", "Lost · Ghosted", else the stage's label.
+export function stageText(lead: { stage: LeadStageValue; dqReason?: DqReasonValue | null; dqPhase?: DqPhaseValue | null; lostReason?: LostReasonValue | null }) {
+  if (lead.stage === "DISQUALIFIED") return `DQ · ${DQ_REASON_LABELS[lead.dqReason ?? "UNKNOWN"]}${lead.dqPhase ? ` (${DQ_PHASE_LABELS[lead.dqPhase].toLowerCase()})` : ""}`;
+  if (lead.stage === "LOST") return `Lost · ${LOST_REASON_LABELS[lead.lostReason ?? "UNKNOWN"]}`;
+  return STAGE_LABELS[lead.stage];
+}
+
 // Hive column + Prospect column → one stage. The higher-ranked wins; on a tie
 // (both terminal) the Prospect/result column wins — it's the client's word
 // on how the deal ended. `prior` is the furthest non-terminal stage either

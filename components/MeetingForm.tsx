@@ -3,6 +3,7 @@
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { MeetingInput } from "@/lib/actions";
+import LeadLink from "@/components/LeadLink";
 
 type LeadOption = { id: string; label: string; stage: string; returnable: boolean };
 
@@ -176,7 +177,7 @@ function LeadPicker({ label, leads, value, onChange, style }: { label: string; l
       <div className="flex flex-wrap gap-1.5 mt-1">
         {value.map((id) => (
           <span key={id} className="px-2 py-1 rounded-full text-xs font-semibold flex items-center gap-1" style={{ background: "var(--primary-tint)", color: "var(--primary)" }}>
-            {byId.get(id)?.label ?? "Lead"}
+            <LeadLink id={id}>{byId.get(id)?.label ?? "Lead"}</LeadLink>
             <button onClick={() => onChange(value.filter((x) => x !== id))} aria-label="Remove" className="font-bold">×</button>
           </span>
         ))}

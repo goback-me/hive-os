@@ -12,6 +12,7 @@ import { MOOD_LABELS, callDateLabel, splitSteps } from "@/lib/weekly-meetings";
 import { submitWeeklyMeeting } from "@/lib/actions";
 import MeetingForm from "@/components/MeetingForm";
 import Forbidden from "@/components/Forbidden";
+import LeadLink from "@/components/LeadLink";
 
 export const dynamic = "force-dynamic";
 
@@ -31,7 +32,7 @@ export default async function CallPage({ params, searchParams }: { params: { slu
   const [month, waitingCount, waiting, alerts, leads] = await Promise.all([
     getMonthToDateVsLast(call.clientId),
     prisma.lead.count({ where: updatePanelWhere(call.clientId) }),
-    prisma.lead.findMany({ where: updatePanelWhere(call.clientId), select: { name: true, stage: true }, orderBy: { handoverAt: "asc" }, take: 8 }),
+    prisma.lead.findMany({ where: updatePanelWhere(call.clientId), select: { id: true, name: true, stage: true }, orderBy: { handoverAt: "asc" }, take: 8 }),
     prisma.dataAlert.findMany({ where: { clientId: call.clientId, status: "OPEN" }, select: { title: true, severity: true }, orderBy: { severity: "asc" } }),
     prisma.lead.findMany({ where: { clientId: call.clientId, deletedAt: null }, select: { id: true, name: true, phone: true, stage: true }, orderBy: { createdAt: "desc" }, take: 2000 }),
   ]);
@@ -76,7 +77,7 @@ export default async function CallPage({ params, searchParams }: { params: { slu
         <div className={card}>
           <p className={label} style={{ color: "var(--text-secondary)" }}>WAITING ON THE CLIENT ({waitingCount})</p>
           {waiting.length ? (
-            waiting.map((l, i) => <p key={i} className="text-xs" style={{ color: "var(--text-primary)" }}>{l.name || "Unnamed lead"} · {STAGE_LABELS[l.stage]}</p>)
+            waiting.map((l) => <p key={l.id} className="text-xs" style={{ color: "var(--text-primary)" }}><LeadLink id={l.id}>{l.name || "Unnamed lead"}</LeadLink> · {STAGE_LABELS[l.stage]}</p>)
           ) : (
             <p className="text-xs" style={{ color: "var(--text-muted)" }}>Nothing waiting.</p>
           )}

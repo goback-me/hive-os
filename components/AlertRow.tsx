@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import LeadLink from "@/components/LeadLink";
 
 export type AlertItem = {
   id: string;
@@ -14,6 +15,8 @@ export type AlertItem = {
   status?: string;
   lastSeenAt: string;
   dismissNote?: string | null;
+  leads?: { id: string; name: string }[]; // the first few affected leads (lib/data-health.ts alertLeads)
+  leadCount?: number;
 };
 
 // One data alert: what's wrong, how to fix it, a Fix link, and "Mark
@@ -55,6 +58,18 @@ export default function AlertRow({ alert, showClient, onHandled }: { alert: Aler
           {alert.title}
         </p>
         {alert.detail && <p className="text-xs mt-0.5 whitespace-pre-line" style={{ color: "var(--text-secondary)" }}>{alert.detail}</p>}
+        {alert.leads && alert.leads.length > 0 && (
+          <p className="text-xs mt-0.5" style={{ color: "var(--text-secondary)" }}>
+            Leads:{" "}
+            {alert.leads.map((l, i) => (
+              <span key={l.id}>
+                {i > 0 && ", "}
+                <LeadLink id={l.id} style={{ color: "var(--primary)" }}>{l.name}</LeadLink>
+              </span>
+            ))}
+            {(alert.leadCount ?? 0) > alert.leads.length && <span style={{ color: "var(--text-muted)" }}> +{alert.leadCount! - alert.leads.length} more</span>}
+          </p>
+        )}
         <p className="text-[11px] mt-0.5" style={{ color: "var(--text-muted)" }}>Fix: {alert.fixHint}</p>
         {alert.dismissNote && <p className="text-[11px] mt-0.5 italic" style={{ color: "var(--text-muted)" }}>Handled: {alert.dismissNote}</p>}
         {(!alert.status || alert.status === "OPEN") && (

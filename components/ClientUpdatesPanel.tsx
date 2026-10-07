@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { DQ_REASONS, DQ_REASON_LABELS, LOST_REASONS, LOST_REASON_LABELS, STAGE_LABELS, STAGE_STYLE, type LeadStageValue } from "@/lib/lead-status";
+import LeadLink from "@/components/LeadLink";
 
 type Row = {
   id: string;
@@ -186,7 +187,7 @@ function UpdateRow({ row, onSave, pinned = false, saved = false }: { row: Row; o
     >
       <div className="min-w-0">
         <p className="text-sm font-medium flex items-center gap-2 truncate" style={{ color: "var(--text-primary)" }}>
-          {row.name || "Unnamed lead"}
+          <LeadLink id={row.id} className="truncate hover:underline">{row.name || "Unnamed lead"}</LeadLink>
           {pinned && !saved && <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold shrink-0" style={{ background: "var(--primary)", color: "#fff" }}>From this email</span>}
         </p>
         <p className="text-[11px] truncate" style={{ color: "var(--text-muted)" }}>{[row.phone, row.email].filter(Boolean).join(" · ") || "No contact details"}</p>

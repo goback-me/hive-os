@@ -1,0 +1,41 @@
+"use client";
+
+import type { ReactNode } from "react";
+import { usePathname, useSearchParams } from "next/navigation";
+
+// Opening a lead = adding ?lead=<id> to the current URL; LeadDrawerHost
+// (components/LeadDetailDrawer.tsx) shows the drawer for it. The URL can be
+// shared, and Back closes the drawer. Everything else in the URL (tab, date
+// range) stays as it is.
+export function setLeadParam(id: string | null) {
+  const p = new URLSearchParams(window.location.search);
+  if (id) p.set("lead", id);
+  else p.delete("lead");
+  const qs = p.toString();
+  window.history[id ? "pushState" : "replaceState"](null, "", `${window.location.pathname}${qs ? `?${qs}` : ""}`);
+}
+
+export const useOpenLead = () => setLeadParam;
+
+// A lead's name (or any content) that opens its drawer. A real link, so
+// ctrl/cmd-click opens it in a new tab.
+export default function LeadLink({ id, children, className, style }: { id: string; children: ReactNode; className?: string; style?: React.CSSProperties }) {
+  const pathname = usePathname();
+  const sp = new URLSearchParams(useSearchParams().toString());
+  sp.set("lead", id);
+  return (
+    <a
+      href={`${pathname}?${sp.toString()}`}
+      className={className ?? "hover:underline"}
+      style={style}
+      onClick={(e) => {
+        e.stopPropagation();
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+        e.preventDefault();
+        setLeadParam(id);
+      }}
+    >
+      {children}
+    </a>
+  );
+}

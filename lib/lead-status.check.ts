@@ -1,6 +1,6 @@
 // Run: npx tsx lib/lead-status.check.ts — throws on the first failure.
 import assert from "node:assert/strict";
-import { combineTargets, parseTarget, planStageEvents, type StageTarget } from "./lead-status";
+import { CLIENT_STAGES, combineTargets, parseTarget, planStageEvents, stageText, targetOptionsFor, TARGET_OPTIONS, type StageTarget } from "./lead-status";
 import { classifyHive, classifyProspect } from "./status-classifier";
 
 // Same resolution the sync uses: null ("no outcome") → { stage: null }.
@@ -58,5 +58,14 @@ assert.deepEqual(plan.events.map((e) => `${e.kind}:${e.stage}`), ["change:DISQUA
 
 // No change → no events
 assert.equal(planStageEvents({ oldStage: "CONTACTED", newStage: "CONTACTED", prior: "CONTACTED", eventStages: new Set(["CONTACTED"]) }).events.length, 0);
+
+// ── Lead drawer quick edit: a client only gets the prospect-side stages ──
+const clientOpts = targetOptionsFor("CLIENT").map((o) => o.value.split(":")[0]);
+for (const s of ["CHASE_UP", "CONTACTED", "NURTURE", "HANDOVER_LIVE", "HANDOVER_ATTEMPTED", "HANDOVER_TEXT"]) assert.ok(!clientOpts.includes(s), `client can't pick ${s}`);
+for (const s of ["CONSULT_BOOKED", "QUOTE_SENT", "WON", "LOST", "DISQUALIFIED"]) assert.ok(clientOpts.includes(s), `client can pick ${s}`);
+assert.ok(clientOpts.every((s) => CLIENT_STAGES.includes(s as never)));
+assert.equal(targetOptionsFor("COACH"), TARGET_OPTIONS);
+assert.equal(stageText({ stage: "DISQUALIFIED", dqReason: "BUDGET", dqPhase: "POST_HANDOVER" }), "DQ · Budget (after handover)");
+assert.equal(stageText({ stage: "LOST" }), "Lost · Reason missing");
 
 console.log("lead-status: all checks passed");

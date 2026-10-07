@@ -43,6 +43,28 @@ export function getMilestoneDate(lead: MilestoneLead, stages: LeadStageValue | L
   );
 }
 
+// A lead's journey for the lead drawer: opt-in → contacted → handover →
+// booked → quoted → its outcome, each with its date (null = not reached /
+// unknown) and the days since the previous dated step.
+export type TimelineStep = { key: string; label: string; at: Date | null; days: number | null };
+export function leadTimeline(lead: MilestoneLead & { createdAt: Date; stage: LeadStageValue }): TimelineStep[] {
+  const steps: { key: string; label: string; at: Date | null }[] = [
+    { key: "optin", label: "Opted in", at: lead.createdAt },
+    { key: "contacted", label: "Contacted", at: getMilestoneDate(lead, "CONTACTED") },
+    { key: "handover", label: "Handed over", at: getMilestoneDate(lead, ["HANDOVER_LIVE", "HANDOVER_ATTEMPTED", "HANDOVER_TEXT"]) },
+    { key: "booked", label: "Consult booked", at: getMilestoneDate(lead, "CONSULT_BOOKED") },
+    { key: "quoted", label: "Quoted", at: getMilestoneDate(lead, "QUOTE_SENT") },
+  ];
+  const outcome = ({ WON: "Won", LOST: "Lost", DISQUALIFIED: "Disqualified" } as Partial<Record<LeadStageValue, string>>)[lead.stage];
+  if (outcome) steps.push({ key: "outcome", label: outcome, at: getMilestoneDate(lead, lead.stage) });
+  let prev: Date | null = null;
+  return steps.map((s) => {
+    const days = s.at && prev ? Math.round((s.at.getTime() - prev.getTime()) / 86_400_000) : null;
+    if (s.at) prev = s.at;
+    return { ...s, days };
+  });
+}
+
 // The same rule as a SQL expression, for the lead aliased `l`. A function,
 // not a constant: some of these modules load in the browser, where building
 // Prisma.sql at import time throws.

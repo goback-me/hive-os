@@ -8,7 +8,7 @@ import { headers } from "next/headers";
 import { requireAdmin, requireCoach, requireClientAccess, requireUser } from "@/lib/auth";
 import { getClerkAdminClient } from "@/lib/clerk-admin";
 import { syncLeadsFromSheet, type SyncSummary } from "@/lib/lead-sync";
-import { HANDOVER_STAGES, isReturn, parseTarget, planStageEvents } from "@/lib/lead-status";
+import { CLIENT_STAGES, HANDOVER_STAGES, isReturn, parseTarget, planStageEvents } from "@/lib/lead-status";
 import { refreshHandoverAt } from "@/lib/reminders";
 import { parseCycleOverrides, recalculateCycle, type CycleStep } from "@/lib/buying-cycle";
 import { parseVisibility, type ReportVisibility } from "@/lib/report-visibility";
@@ -227,6 +227,8 @@ export async function updateLeadStage(leadId: string, target: string, value?: nu
   const lead = await prisma.lead.findUnique({ where: { id: leadId } });
   if (!lead || lead.deletedAt) throw new Error("Lead not found");
   const user = await requireClientAccess(lead.clientId);
+  // A client sets only their side of the deal (lib/lead-status.ts CLIENT_STAGES).
+  if (user.role === "CLIENT" && !CLIENT_STAGES.includes(stage)) throw new Error("Only the Hive team can set that stage");
 
   const eventStages = new Set(
     (await prisma.leadStageEvent.findMany({ where: { leadId }, select: { stage: true } })).map((e) => e.stage)

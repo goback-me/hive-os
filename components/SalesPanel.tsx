@@ -6,6 +6,7 @@ import type { Tone } from "@/lib/kpi";
 import { TONE_STYLE } from "@/components/SnapshotPanel";
 import HiddenBadge from "@/components/HiddenBadge";
 import { terms } from "@/lib/client-terms";
+import LeadLink from "@/components/LeadLink";
 
 const money = (v: number | null) => (v == null ? "—" : `$${v.toLocaleString("en-US", { maximumFractionDigits: v < 100 ? 2 : 0 })}`);
 const sydDate = (iso: string) => new Date(iso).toLocaleDateString("en-AU", { timeZone: "Australia/Sydney", day: "numeric", month: "short", year: "numeric" });
@@ -99,7 +100,7 @@ export default function SalesPanel({ clientId, rangeQuery, rangeLabel, isCoach, 
                 {visible.map((r: SaleRow) => (
                   <tr key={r.id} style={{ borderBottom: "1px solid var(--border)" }}>
                     <td className="py-2 pr-4 whitespace-nowrap" style={{ color: "var(--text-secondary)" }}>{sydDate(r.wonAt)}</td>
-                    <td className="py-2 pr-4 font-medium whitespace-nowrap" style={{ color: "var(--text-primary)" }}>{r.name || "—"}</td>
+                    <td className="py-2 pr-4 font-medium whitespace-nowrap" style={{ color: "var(--text-primary)" }}><LeadLink id={r.id}>{r.name || "Unnamed lead"}</LeadLink></td>
                     <td className="py-2 pr-4 whitespace-nowrap max-w-[240px] truncate" style={{ color: "var(--text-secondary)" }} title={r.campaign ?? undefined}>{displayCampaignName(r.campaign)}</td>
                     <td className="py-2 pr-4 whitespace-nowrap font-semibold" style={{ color: "var(--text-primary)" }}>{money(r.value)}</td>
                     <td className="py-2 pr-4 whitespace-nowrap text-xs" style={{ color: "var(--text-muted)" }}>

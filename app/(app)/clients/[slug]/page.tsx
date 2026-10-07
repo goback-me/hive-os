@@ -11,7 +11,6 @@ import {
   createProgressNote,
   syncClientLeads,
   updateLeadStage,
-  addLeadNote,
   getOrCreateClientReferralLink,
   saveReportVisibility,
   saveClientStartDate,
@@ -35,6 +34,7 @@ import {
 } from "@/lib/actions";
 import WeeklyStatusPanel from "@/components/WeeklyStatusPanel";
 import { HEALTH_LABELS, getClientHealth } from "@/lib/client-health";
+import { alertLeads } from "@/lib/data-health";
 import SetupChecklist, { type SetupItem } from "@/components/SetupChecklist";
 import { slackConfigured } from "@/lib/slack";
 import { emailConfigured } from "@/lib/email";
@@ -168,6 +168,7 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
   const openAlerts = isCoach
     ? await prisma.dataAlert.findMany({ where: { clientId: client.id, status: "OPEN" }, orderBy: [{ severity: "asc" }, { lastSeenAt: "desc" }] })
     : [];
+  const openAlertLeads = await alertLeads(openAlerts);
 
   // Weekly status tab: logged calls (internal fields only for the team —
   // getStatusCalls), the old weekly updates as history, and who's seen it.
@@ -466,7 +467,6 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
       lastSyncError={clientSheet?.lastSyncError ?? null}
       onSync={syncClientLeads}
       onUpdateStage={updateLeadStage}
-      onAddNote={addLeadNote}
     />
   );
 
@@ -548,6 +548,7 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
             fixHint: a.fixHint,
             fixUrl: a.fixUrl,
             lastSeenAt: a.lastSeenAt.toISOString(),
+            ...openAlertLeads.get(a.id),
           }))}
         />
       )}

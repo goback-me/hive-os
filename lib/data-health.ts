@@ -205,3 +205,13 @@ async function saveFindings(clientId: string, findings: Finding[], now: Date) {
   const gone = existing.filter((a) => a.status !== "RESOLVED" && !seen.has(key(a.type, a.fingerprint)));
   if (gone.length) await prisma.dataAlert.updateMany({ where: { id: { in: gone.map((a) => a.id) } }, data: { status: "RESOLVED", resolvedAt: now } });
 }
+
+// The first few affected leads of each alert, named, for clickable chips
+// (components/AlertRow.tsx) — keyed by alert id.
+export async function alertLeads(alerts: { id: string; affectedLeadIds: string[] }[], per = 5) {
+  const ids = Array.from(new Set(alerts.flatMap((a) => a.affectedLeadIds.slice(0, per))));
+  const names = new Map((await prisma.lead.findMany({ where: { id: { in: ids }, deletedAt: null }, select: { id: true, name: true } })).map((l) => [l.id, l.name || "Unnamed lead"]));
+  return new Map(
+    alerts.map((a) => [a.id, { leads: a.affectedLeadIds.slice(0, per).filter((id) => names.has(id)).map((id) => ({ id, name: names.get(id)! })), leadCount: a.affectedLeadIds.length }])
+  );
+}

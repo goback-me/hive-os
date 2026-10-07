@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { requireCoach } from "@/lib/auth";
 import AlertRow from "@/components/AlertRow";
+import { alertLeads } from "@/lib/data-health";
 import type { AlertStatus, DataAlertType } from "@prisma/client";
 
 export const dynamic = "force-dynamic";
@@ -28,6 +29,7 @@ export default async function AlertsPage({ searchParams }: { searchParams: { cli
     include: { client: { select: { name: true, slug: true } } },
     take: 500,
   });
+  const leadsOf = await alertLeads(alerts);
   const selectStyle = { background: "var(--surface-card)", border: "1px solid var(--border)", color: "var(--text-primary)" };
   const when = (d: Date) => d.toLocaleString("en-AU", { timeZone: "Australia/Sydney", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
 
@@ -57,7 +59,7 @@ export default async function AlertsPage({ searchParams }: { searchParams: { cli
           <div key={a.id}>
             <AlertRow
               showClient
-              alert={{ id: a.id, clientName: a.client.name, clientSlug: a.client.slug, severity: a.severity, title: a.title, detail: a.detail, fixHint: a.fixHint, fixUrl: a.fixUrl, status: a.status, lastSeenAt: a.lastSeenAt.toISOString(), dismissNote: a.dismissNote }}
+              alert={{ id: a.id, clientName: a.client.name, clientSlug: a.client.slug, severity: a.severity, title: a.title, detail: a.detail, fixHint: a.fixHint, fixUrl: a.fixUrl, status: a.status, lastSeenAt: a.lastSeenAt.toISOString(), dismissNote: a.dismissNote, ...leadsOf.get(a.id) }}
             />
             <p className="text-[10px] -mt-1 mb-2 pl-7" style={{ color: "var(--text-muted)" }}>
               {TYPE_LABEL(a.status)} · first seen {when(a.firstSeenAt)} · last seen {when(a.lastSeenAt)}
