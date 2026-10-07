@@ -9,6 +9,7 @@ import { SignOutButton } from "@clerk/nextjs";
 const COACH_NAV_ITEMS = [
   { href: "/dashboard", label: "Dashboard", icon: "space_dashboard" },
   { href: "/clients", label: "Clients", icon: "diversity_3" },
+  { href: "/accounts", label: "Accounts", icon: "manage_accounts" },
   { href: "/leads", label: "Leads", icon: "person_search" },
   { href: "/referrals", label: "Referrals", icon: "share" },
   { href: "/alerts", label: "Data alerts", icon: "notifications" },
