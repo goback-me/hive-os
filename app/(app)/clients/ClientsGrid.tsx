@@ -116,6 +116,7 @@ export default function ClientsGrid({
               <option value="ACTIVE">Set to Active</option>
               <option value="ONBOARDING">Set to Onboarding</option>
               <option value="CHURNED">Set to Not Active</option>
+              <option value="ARCHIVE">Archive (hide everywhere)</option>
             </select>
             <button
               onClick={apply}

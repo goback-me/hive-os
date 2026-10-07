@@ -9,7 +9,7 @@ import { runHealthChecks } from "@/lib/data-health";
 import { runDailyJobs } from "@/lib/daily-jobs";
 import { deliverSlackPosts } from "@/lib/slack";
 import { recalcDueCycles } from "@/lib/buying-cycle";
-import { runCallJobs } from "@/lib/am-calls";
+import { ACTIVE_CLIENT, runCallJobs } from "@/lib/am-calls";
 
 // Called by the VPS crontab every 5 min (see DEPLOYMENT.md). Public in middleware.ts —
 // the x-cron-secret header is the only auth. Clients sync one at a time
@@ -31,7 +31,8 @@ export async function GET(req: NextRequest) {
   if (!authorized(req)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const sheets = await prisma.clientSheet.findMany({
-    where: { client: { archivedAt: null } },
+    // Not Active / archived clients aren't synced (they're back on reactivating).
+    where: { client: ACTIVE_CLIENT },
     select: { clientId: true, client: { select: { slug: true } } },
   });
 
@@ -66,7 +67,7 @@ export async function GET(req: NextRequest) {
   const writeBack = await processWriteBacks({ maxMs: 120_000 }).catch((err) => ({ error: err instanceof Error ? err.message : String(err) }));
 
   // Data health for clients with no sheet (a sync already checked the rest).
-  const sheetless = await prisma.client.findMany({ where: { archivedAt: null, clientSheet: null }, select: { id: true } });
+  const sheetless = await prisma.client.findMany({ where: { ...ACTIVE_CLIENT, clientSheet: null }, select: { id: true } });
   for (const c of sheetless) await runHealthChecks(c.id).catch((err) => console.error("Health checks failed:", err));
 
   // Each client's buying cycle, relearned on the 1st of the month — before

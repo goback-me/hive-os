@@ -8,17 +8,16 @@ import { SignOutButton } from "@clerk/nextjs";
 
 const COACH_NAV_ITEMS = [
   { href: "/dashboard", label: "Dashboard", icon: "space_dashboard" },
-  { href: "/my-calls", label: "My Calls", icon: "call" },
   { href: "/clients", label: "Clients", icon: "diversity_3" },
-  { href: "/account-management", label: "Account Management", icon: "manage_accounts" },
   { href: "/leads", label: "Leads", icon: "person_search" },
   { href: "/referrals", label: "Referrals", icon: "share" },
   { href: "/alerts", label: "Data alerts", icon: "notifications" },
+  { href: "/account-management", label: "Account Management", icon: "manage_accounts" },
   { href: "/settings", label: "Settings", icon: "settings" },
 ];
 
 // callsToUpdate = the viewer's calls past their time and not logged yet
-// (lib/am-calls.ts) — the red badge on My Calls.
+// (lib/am-calls.ts) — the red badge on Account Management.
 // A client's own portal, one item per tab of their client page.
 const clientNav = (slug: string) => [
   { href: `/clients/${slug}?tab=dashboard`, label: "Dashboard", icon: "space_dashboard", tab: "dashboard" },
@@ -34,7 +33,7 @@ export default function Sidebar({ user, callsToUpdate = 0 }: { user: { name: str
   // An agent gets their calls, their client list, Account Management (their
   // clients) and Leads only.
   const navItems: { href: string; label: string; icon: string; tab?: string }[] =
-    user.role !== "COACH" ? (user.clientSlug ? clientNav(user.clientSlug) : []) : user.isAgent ? COACH_NAV_ITEMS.filter((i) => ["/my-calls", "/clients", "/account-management", "/leads"].includes(i.href)) : COACH_NAV_ITEMS;
+    user.role !== "COACH" ? (user.clientSlug ? clientNav(user.clientSlug) : []) : user.isAgent ? COACH_NAV_ITEMS.filter((i) => ["/clients", "/leads", "/account-management"].includes(i.href)) : COACH_NAV_ITEMS;
 
   return (
     <aside
@@ -76,7 +75,7 @@ export default function Sidebar({ user, callsToUpdate = 0 }: { user: { name: str
             >
               <span className="material-symbols-outlined">{item.icon}</span>
               {item.label}
-              {item.href === "/my-calls" && callsToUpdate > 0 && (
+              {item.href === "/account-management" && callsToUpdate > 0 && (
                 <span className="ml-auto min-w-[20px] h-5 px-1.5 rounded-full text-[11px] font-bold flex items-center justify-center" style={{ background: "var(--danger)", color: "#fff" }} aria-label={`${callsToUpdate} calls need an update`}>
                   {callsToUpdate}
                 </span>

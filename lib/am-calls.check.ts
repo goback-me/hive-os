@@ -118,9 +118,9 @@ assert.deepEqual(splitSteps("• a\n\n * b \n"), ["a", "b"]);
 // ── Deep link → the update panel; signed-out → back to it after sign-in ──
 process.env.APP_URL = "https://hq.example";
 const link = actionLink({ type: "call_day_after", clientId: "c1", refIds: ["m1"], path: callUpdatePath("m1") }, { now, secret });
-assert.ok(link.href.startsWith("https://hq.example/my-calls?update=m1&a="), link.href);
+assert.ok(link.href.startsWith("https://hq.example/account-management?update=m1&a="), link.href);
 assert.deepEqual(verifyActionToken(new URL(link.href).searchParams.get("a"), { now, secret })?.refIds, ["m1"]);
-assert.equal(signInReturnUrl("http://localhost:3000/my-calls?update=m1&a=tok", "http://localhost:3011"), "http://localhost:3011/my-calls?update=m1&a=tok");
+assert.equal(signInReturnUrl("http://localhost:3000/account-management?update=m1&a=tok", "http://localhost:3011"), "http://localhost:3011/account-management?update=m1&a=tok");
 
 // ── Calendar invite: one UID through reschedules, UTC times, escaped text ──
 const ics = callInvite({ uid: "root1", sequence: 3, start: new Date("2026-10-13T23:00:00Z"), minutes: 30, title: "AM call: Jake, Co", description: "Line1\nLine2", url: "https://hq.example/my-calls?update=m2", attendee: "sam@x.com" });

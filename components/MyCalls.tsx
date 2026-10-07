@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Fragment, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { Health } from "@/lib/client-health";
 import { openCallPanel } from "@/lib/url-param";
@@ -28,9 +28,8 @@ type ClientRow = {
   slot: Slot;
   slotLabel: string;
   next: { id: string; at: string } | null;
-  last: { at: string; status: string } | null;
+  last: { id: string; at: string; status: string; review: string | null; outcome: string | null } | null; // review = summary, or why it didn't happen
   health: Health;
-  awaiting: number;
 };
 export type MyCallsData = { now: string; needsUpdate: CallItem[]; today: CallItem[]; week: { start: string; days: string[]; calls: CallItem[] }; clients: ClientRow[] };
 
@@ -58,23 +57,26 @@ function startsIn(now: number, iso: string) {
   return m < 60 ? `Starts in ${m} min` : `Starts in ${Math.floor(m / 60)}h ${m % 60 ? `${m % 60}m` : ""}`.trim();
 }
 
-// My Calls (app/(app)/my-calls): needs update → today → the week (drag a call
-// to another day to reschedule) → all my clients (slot and next call editable
-// inline, ▼ = the shared call history). Every call opens the update panel.
+// Account Management (app/(app)/account-management): needs update → today →
+// the week (drag a call to another day to reschedule) → each client's last
+// call (how it went), next call and ▼ history + regular slot. Every call
+// opens the update panel.
 export default function MyCalls({
   data,
   filter,
+  showAm,
   canEditSlot,
+  team,
   onSaveSlot,
-  onMove,
   onReschedule,
   onSchedule,
 }: {
   data: MyCallsData;
-  filter: { value: string; team: { id: string; name: string }[] } | null; // admins: whose calls
+  filter: { value: string; team: { id: string; name: string }[] } | null; // whose calls (not for agents)
+  showAm: boolean; // viewing everyone's — show each client's AM
   canEditSlot: boolean;
+  team: { id: string; name: string }[] | null; // the AM picker in a client's ▼
   onSaveSlot: (clientId: string, slot: Slot) => Promise<void>;
-  onMove: (callId: string, when: string) => Promise<void>;
   onReschedule: (callId: string, when: string, reason: string) => Promise<string>;
   onSchedule: (clientId: string, when: string) => Promise<string>;
 }) {
@@ -103,7 +105,7 @@ export default function MyCalls({
         needsUpdate: p.needsUpdate.filter((c) => c.id !== ch.id),
         today: patch(p.today),
         week: { ...p.week, calls: patch(p.week.calls) },
-        clients: p.clients.map((c) => (c.next?.id === ch.id && ch.status !== "PENDING" ? { ...c, next: null, last: { at: c.next.at, status: ch.status } } : c)),
+        clients: p.clients.map((c) => (c.next?.id === ch.id && ch.status !== "PENDING" ? { ...c, next: null, last: { id: ch.id, at: c.next.at, status: ch.status, review: null, outcome: null } } : c)),
       };
     });
   }
@@ -126,7 +128,7 @@ export default function MyCalls({
 
   const query = (o: Record<string, string>) => {
     const p = new URLSearchParams({ ...(filter && filter.value ? { am: filter.value } : {}), week: d.week.start, ...o });
-    return `/my-calls?${p.toString()}`;
+    return `/account-management?${p.toString()}`;
   };
   const card = "card rounded-2xl p-5";
   const h2 = "text-sm font-semibold mb-3 flex items-center gap-2";
@@ -141,8 +143,8 @@ export default function MyCalls({
     <div className="p-4 md:p-10 max-w-[1200px] mx-auto space-y-5">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="page-title font-heading" style={{ color: "var(--text-primary)" }}>My Calls</h1>
-          <p className="text-base mt-1" style={{ color: "var(--text-secondary)" }}>Your client calls — update each one the day it happens.</p>
+          <h1 className="page-title font-heading" style={{ color: "var(--text-primary)" }}>Account Management</h1>
+          <p className="text-base mt-1" style={{ color: "var(--text-secondary)" }}>Client calls — update each one the day it happens.</p>
         </div>
         {filter && (
           <select value={filter.value} onChange={(e) => router.push(query({ am: e.target.value }))} className="px-3 py-2 rounded-lg text-sm" style={input} aria-label="Account manager">
@@ -265,80 +267,73 @@ export default function MyCalls({
         </div>
       </section>
 
-      {/* D — All my clients */}
+      {/* D — Clients: how the last call went, the next one, ▼ everything */}
       <section className={card}>
-        <p className={h2} style={{ color: "var(--text-primary)" }}>All {filter?.value === "all" ? "" : "my "}clients ({d.clients.length})</p>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm min-w-[860px]">
-            <thead>
-              <tr className="text-left text-xs" style={{ color: "var(--text-muted)" }}>
-                <th className="font-medium py-1.5">Client</th>
-                <th className="font-medium py-1.5">Regular call</th>
-                <th className="font-medium py-1.5">Next call</th>
-                <th className="font-medium py-1.5">Last call</th>
-                <th className="font-medium py-1.5">Health</th>
-                <th className="font-medium py-1.5">Waiting on client</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {d.clients.map((c) => (
-                <Fragment key={c.id}>
-                  <tr style={{ borderTop: "1px solid var(--border)", background: c.next ? undefined : "var(--tag-amber-bg)" }}>
-                    <td className="py-2 pr-2">
-                      <span className="font-medium" style={{ color: "var(--text-primary)" }}>{c.name}</span>
-                      <Link href={`/clients/${c.slug}?tab=weekly`} className="ml-1.5 material-symbols-outlined text-[14px] align-middle" style={{ color: "var(--text-muted)" }} aria-label={`Open ${c.name}`} title="Open client">open_in_new</Link>
-                      {filter?.value === "all" && c.am && <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>{c.am}</p>}
-                    </td>
-                    <td className="py-2 pr-2">
-                      {canEditSlot ? <CallSlotEditor clientId={c.id} initial={c.slot} team={null} onSave={onSaveSlot} compact /> : <span style={{ color: "var(--text-secondary)" }}>{c.slotLabel}</span>}
-                    </td>
-                    <td className="py-2 pr-2">
-                      {c.next ? (
-                        <input
-                          key={c.next.at}
-                          type="datetime-local"
-                          step={900}
-                          defaultValue={localOf(c.next.at)}
-                          onBlur={(e) => e.target.value && e.target.value !== localOf(c.next!.at) && run(() => onMove(c.next!.id, e.target.value))}
-                          className="px-2 py-1 rounded-lg text-xs outline-none"
-                          style={input}
-                          aria-label={`Next call with ${c.name}`}
-                        />
-                      ) : (
-                        <ScheduleInline onSchedule={(when) => run(() => onSchedule(c.id, when))} />
-                      )}
-                    </td>
-                    <td className="py-2 pr-2">
-                      {c.last ? (
-                        <span className="flex items-center gap-1.5 text-xs" style={{ color: "var(--text-secondary)" }}>
-                          {dateLabel(c.last.at)} <StatusChip status={c.last.status} scheduledAt={c.last.at} />
-                        </span>
-                      ) : (
-                        <span className="text-xs" style={{ color: "var(--text-muted)" }}>—</span>
-                      )}
-                    </td>
-                    <td className="py-2 pr-2"><HealthBadge health={c.health} /></td>
-                    <td className="py-2 pr-2" style={{ color: c.awaiting ? "var(--text-primary)" : "var(--text-muted)" }}>{c.awaiting || "—"}</td>
-                    <td className="py-2 text-right">
-                      <button type="button" onClick={() => setOpenClient(openClient === c.id ? null : c.id)} className="material-symbols-outlined" style={{ color: "var(--text-muted)" }} aria-expanded={openClient === c.id} aria-label={`${c.name}'s calls`}>
-                        {openClient === c.id ? "expand_less" : "expand_more"}
-                      </button>
-                    </td>
-                  </tr>
-                  {openClient === c.id && (
-                    <tr>
-                      <td colSpan={7} className="pb-3">
-                        <ClientCallsDropdown clientId={c.id} />
-                      </td>
-                    </tr>
+        <p className={h2} style={{ color: "var(--text-primary)" }}>Clients ({d.clients.length})</p>
+        <div className="space-y-2">
+          {d.clients.map((c) => (
+            <div key={c.id} className="rounded-xl" style={{ border: "1px solid var(--border)", background: c.next ? undefined : "var(--tag-amber-bg)" }}>
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-2 p-3">
+                <button type="button" onClick={() => setOpenClient(openClient === c.id ? null : c.id)} className="flex-1 min-w-[260px] text-left" aria-expanded={openClient === c.id}>
+                  <span className="flex items-center gap-2">
+                    <span className="font-semibold" style={{ color: "var(--text-primary)" }}>{c.name}</span>
+                    <HealthBadge health={c.health} />
+                    {showAm && <span className="text-xs" style={{ color: "var(--text-muted)" }}>{c.am ?? "No account manager"}</span>}
+                  </span>
+                  {c.last ? (
+                    <span className="flex items-center gap-1.5 mt-1 text-xs" style={{ color: "var(--text-secondary)" }}>
+                      <span style={{ color: "var(--text-muted)" }}>Last call {dateLabel(c.last.at)}</span>
+                      <StatusChip status={c.last.status} scheduledAt={c.last.at} />
+                      {c.last.outcome && <span style={{ color: c.last.outcome === "At risk" ? "var(--danger)" : "var(--text-muted)" }}>{c.last.outcome}</span>}
+                      {c.last.review && <span className="truncate max-w-[420px]">— {c.last.review}</span>}
+                    </span>
+                  ) : (
+                    <span className="block mt-1 text-xs" style={{ color: "var(--text-muted)" }}>No calls yet</span>
                   )}
-                </Fragment>
-              ))}
-            </tbody>
-          </table>
+                </button>
+                <span className="text-sm" style={{ color: c.next ? "var(--text-primary)" : "var(--tag-amber-fg)" }}>
+                  {c.next ? (
+                    <>
+                      Next: <b>{whenLabel(c.next.at)}</b>
+                    </>
+                  ) : c.slot.accountManagerId ? (
+                    "No call booked"
+                  ) : (
+                    "No account manager"
+                  )}
+                </span>
+                {c.next ? (
+                  <span className="flex gap-1.5">
+                    <button type="button" onClick={() => openCallPanel(c.next!.id, "reschedule")} className={btn} style={{ border: "1px solid var(--border)", color: "var(--text-secondary)" }}>
+                      Reschedule
+                    </button>
+                    <button type="button" onClick={() => openCallPanel(c.next!.id)} className={`${btn} btn-gradient`}>
+                      Log
+                    </button>
+                  </span>
+                ) : (
+                  <ScheduleInline onSchedule={(when) => run(() => onSchedule(c.id, when))} />
+                )}
+                <Link href={`/clients/${c.slug}?tab=weekly`} className="material-symbols-outlined text-[18px]" style={{ color: "var(--text-muted)" }} aria-label={`Open ${c.name}`} title="Open client">
+                  open_in_new
+                </Link>
+                <button type="button" onClick={() => setOpenClient(openClient === c.id ? null : c.id)} className="material-symbols-outlined" style={{ color: "var(--text-muted)" }} aria-label={`${c.name}'s calls`}>
+                  {openClient === c.id ? "expand_less" : "expand_more"}
+                </button>
+              </div>
+              {openClient === c.id && (
+                <div style={{ borderTop: "1px solid var(--border)" }}>
+                  <div className="flex flex-wrap items-center gap-2 px-4 pt-3 text-xs" style={{ color: "var(--text-muted)" }}>
+                    Regular call:
+                    {canEditSlot ? <CallSlotEditor clientId={c.id} initial={c.slot} team={team} onSave={onSaveSlot} compact /> : <span style={{ color: "var(--text-secondary)" }}>{c.slotLabel}</span>}
+                  </div>
+                  <ClientCallsDropdown clientId={c.id} />
+                </div>
+              )}
+            </div>
+          ))}
         </div>
-        {d.clients.length === 0 && <p className="text-sm mt-2" style={{ color: "var(--text-muted)" }}>No clients yet — a coach sets the account manager on each client.</p>}
+        {d.clients.length === 0 && <p className="text-sm mt-2" style={{ color: "var(--text-muted)" }}>No active clients here — a coach sets the account manager on each client.</p>}
       </section>
 
       {drop && (

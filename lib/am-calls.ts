@@ -21,6 +21,10 @@ import { terms, type ClientTypeValue } from "./client-terms";
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 
+// Only active clients have calls booked, reminded or listed: Not Active
+// (CHURNED) and archived clients show only on the Clients page's tabs.
+export const ACTIVE_CLIENT = { archivedAt: null, status: { not: "CHURNED" as const } } satisfies Prisma.ClientWhereInput;
+
 export const WEEKDAYS: Weekday[] = ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"];
 export const WEEKDAY_LABELS: Record<Weekday, string> = {
   MONDAY: "Monday",
@@ -193,7 +197,7 @@ export async function sendCallInvite(callId: string) {
   if (!emailConfigured()) return false;
   const c = await prisma.amCall.findUnique({ where: { id: callId }, include: { client: { select: { name: true } }, callPerson: { select: { email: true } } } });
   if (!c || c.status !== "PENDING" || !c.callPerson?.email) return false;
-  const path = `/my-calls?update=${c.id}`;
+  const path = callUpdatePath(c.id);
   const ics = callInvite({
     uid: await chainRoot(c.id),
     // ponytail: seconds since 2023 — always larger than the last one sent, no counter column needed.
@@ -229,8 +233,8 @@ export async function sendCallInvite(callId: string) {
 // when the client has no account manager.
 export async function ensureNextCall(clientId: string, opts: { now?: Date; preferred?: Date | null } = {}) {
   const now = opts.now ?? new Date();
-  const client = await prisma.client.findUnique({ where: { id: clientId }, select: { archivedAt: true, accountManagerId: true, callDay: true, callTime: true, callFrequency: true } });
-  if (!client?.accountManagerId || client.archivedAt) return null;
+  const client = await prisma.client.findUnique({ where: { id: clientId }, select: { archivedAt: true, status: true, accountManagerId: true, callDay: true, callTime: true, callFrequency: true } });
+  if (!client?.accountManagerId || client.archivedAt || client.status === "CHURNED") return null;
   const preferred = opts.preferred && opts.preferred > now ? opts.preferred : null;
   const future = await prisma.amCall.findFirst({ where: { clientId, status: "PENDING", scheduledAt: { gt: now } }, orderBy: { scheduledAt: "asc" } });
   if (future) return preferred && preferred.getTime() !== future.scheduledAt.getTime() ? moveCall(future.id, preferred) : future;
@@ -295,19 +299,25 @@ export function reminderDue(scheduledAt: Date, sent: Partial<Record<CallReminder
   return null;
 }
 
-export const callUpdatePath = (callId: string) => `/my-calls?update=${callId}`;
+export const callUpdatePath = (callId: string) => `/account-management?update=${callId}`;
+
+// A client went Not Active / archived: their booked calls that haven't
+// happened are dropped (no invites or reminders for them).
+export async function dropFutureCalls(clientIds: string[], now = new Date()) {
+  return prisma.amCall.deleteMany({ where: { clientId: { in: clientIds }, status: "PENDING", scheduledAt: { gt: now } } });
+}
 
 // Hourly-or-more: book everyone's next call, then send what's due.
 export async function runCallJobs(now = new Date()) {
   const out = { booked: 0, dayAfter: 0, second: 0, tasks: 0 };
-  const clients = await prisma.client.findMany({ where: { archivedAt: null, accountManagerId: { not: null } }, select: { id: true } });
+  const clients = await prisma.client.findMany({ where: { ...ACTIVE_CLIENT, accountManagerId: { not: null } }, select: { id: true } });
   for (const c of clients) {
     const had = await prisma.amCall.count({ where: { clientId: c.id, status: "PENDING", scheduledAt: { gt: now } } });
     if (!had && (await ensureNextCall(c.id, { now }))) out.booked++;
   }
 
   const due = await prisma.amCall.findMany({
-    where: { status: "PENDING", scheduledAt: { lte: new Date(now.getTime() - DAY), gte: new Date(now.getTime() - 30 * DAY) } },
+    where: { status: "PENDING", client: ACTIVE_CLIENT, scheduledAt: { lte: new Date(now.getTime() - DAY), gte: new Date(now.getTime() - 30 * DAY) } },
     include: { client: { select: { name: true } }, callPerson: { select: { email: true, name: true, clickupUserId: true } }, reminders: true },
   });
   for (const c of due) {

@@ -178,7 +178,7 @@ export async function raiseReminders(now = new Date()) {
       (SELECT MAX(r."createdAt") FROM "LeadReminder" r WHERE r."leadId" = l.id
         AND r.reason = CASE WHEN l."awaitingClientUpdate" THEN 'awaiting' ELSE l.stage::text END) AS "lastSent"
     FROM "Lead" l JOIN "Client" c ON c.id = l."clientId"
-    WHERE l."deletedAt" IS NULL AND c."archivedAt" IS NULL
+    WHERE l."deletedAt" IS NULL AND c."archivedAt" IS NULL AND c.status <> 'CHURNED'
       AND (l."awaitingClientUpdate" OR l.stage::text IN (${Prisma.join(STAGE_STEPS)}))
       AND (c."startDate" IS NULL OR l."createdAt" >= c."startDate")
   `;

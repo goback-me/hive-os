@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { requireCoach } from "@/lib/auth";
+import { ACTIVE_CLIENT } from "@/lib/am-calls";
 import AlertRow from "@/components/AlertRow";
 import { alertLeads } from "@/lib/data-health";
 import type { AlertStatus, DataAlertType } from "@prisma/client";
@@ -15,12 +16,12 @@ export default async function AlertsPage({ searchParams }: { searchParams: { cli
   await requireCoach();
   const status = (STATUSES as readonly string[]).includes(searchParams.status ?? "") ? searchParams.status! : "OPEN";
   const [clients, types] = await Promise.all([
-    prisma.client.findMany({ where: { archivedAt: null }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
+    prisma.client.findMany({ where: ACTIVE_CLIENT, select: { id: true, name: true }, orderBy: { name: "asc" } }),
     prisma.dataAlert.findMany({ distinct: ["type"], select: { type: true } }),
   ]);
   const alerts = await prisma.dataAlert.findMany({
     where: {
-      client: { archivedAt: null },
+      client: ACTIVE_CLIENT,
       ...(searchParams.client ? { clientId: searchParams.client } : {}),
       ...(searchParams.type ? { type: searchParams.type as DataAlertType } : {}),
       ...(status !== "ALL" ? { status: status as AlertStatus } : {}),

@@ -22,8 +22,7 @@ export type PortfolioRow = {
   openAlerts: number;
   dangerAlerts: number;
   needsAction: number;
-  lastContact: string | null; // ContactLog — a held weekly call adds one too
-  lastMeeting: { at: string; mood: "GOOD" | "NEUTRAL" | "AT_RISK" | null } | null; // "Last AM call": the latest HELD call
+  lastMeeting: { at: string; mood: "GOOD" | "NEUTRAL" | "AT_RISK" | null } | null; // "Last call": the latest call that happened (HELD)
 };
 
 // Quote / booking: any kind of booking (consult or quote), each lead once.
@@ -47,9 +46,8 @@ export async function getPortfolio(report: ReportRange, now = new Date()): Promi
   const prev = previousReportRange(report, now);
   const clients = await prisma.client.findMany({ where: { archivedAt: null, status: { not: "CHURNED" } }, select: { id: true, name: true, slug: true }, orderBy: { name: "asc" } });
   const ids = clients.map((c) => c.id);
-  const [alerts, contacts, needs, meetings] = await Promise.all([
+  const [alerts, needs, meetings] = await Promise.all([
     prisma.dataAlert.groupBy({ by: ["clientId", "severity"], where: { clientId: { in: ids }, status: "OPEN" }, _count: true }),
-    prisma.contactLog.groupBy({ by: ["clientId"], where: { clientId: { in: ids } }, _max: { contactedAt: true } }),
     getNeedsAction(),
     prisma.amCall.findMany({ where: { clientId: { in: ids }, status: "HELD" }, orderBy: { scheduledAt: "desc" }, distinct: ["clientId"], select: { clientId: true, scheduledAt: true, outcome: true } }),
   ]);
@@ -66,7 +64,6 @@ export async function getPortfolio(report: ReportRange, now = new Date()): Promi
       const openAlerts = open.reduce((s, a) => s + a._count, 0);
       const mine = needs.filter((n) => n.clientId === c.id);
       const health = dangerAlerts || mine.some((n) => n.severity === "danger") ? "red" : openAlerts || mine.some((n) => n.severity === "muted") ? "amber" : "green";
-      const last = contacts.find((x) => x.clientId === c.id)?._max.contactedAt ?? null;
       return {
         clientId: c.id,
         name: c.name,
@@ -77,7 +74,6 @@ export async function getPortfolio(report: ReportRange, now = new Date()): Promi
         openAlerts,
         dangerAlerts,
         needsAction: mine.filter((n) => n.severity !== "success").length,
-        lastContact: last ? new Date(last).toISOString() : null,
         lastMeeting: ((m) => (m ? { at: m.scheduledAt.toISOString(), mood: m.outcome } : null))(meetings.find((x) => x.clientId === c.id)),
       };
     })

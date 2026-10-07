@@ -1,3 +1,4 @@
+import { ACTIVE_CLIENT } from "@/lib/am-calls";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
@@ -9,7 +10,7 @@ export async function GET(req: NextRequest) {
   if (user?.role !== "COACH" || user.isAgent) return NextResponse.json({ error: "Not authorized" }, { status: 403 });
   const clientId = req.nextUrl.searchParams.get("clientId");
   const alerts = await prisma.dataAlert.findMany({
-    where: { status: "OPEN", client: { archivedAt: null }, ...(clientId ? { clientId } : {}) },
+    where: { status: "OPEN", client: ACTIVE_CLIENT, ...(clientId ? { clientId } : {}) },
     orderBy: [{ severity: "asc" }, { lastSeenAt: "desc" }],
     include: { client: { select: { name: true, slug: true } } },
     take: 200,

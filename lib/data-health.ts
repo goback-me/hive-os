@@ -161,10 +161,10 @@ export async function runHealthChecks(clientId: string, now = new Date()) {
     prisma.amCall.findFirst({ where: { clientId, status: { in: ["HELD", "NOT_HELD"] } }, orderBy: { scheduledAt: "desc" }, select: { scheduledAt: true, status: true, notHeldReason: true } }),
   ]);
   if (overdueCalls.length) {
-    f.push({ type: "AM_CALL_NOT_LOGGED", severity: "WARNING", title: `${plural(overdueCalls.length, "account manager call")} not logged`, detail: `${overdueCalls.map((m) => callDateLabel(m.scheduledAt)).join(", ")} — 3+ days on, nobody has said how the call went.`, fixHint: "Ask the account manager to update it in My Calls.", fixUrl: "/my-calls", count: overdueCalls.length });
+    f.push({ type: "AM_CALL_NOT_LOGGED", severity: "WARNING", title: `${plural(overdueCalls.length, "account manager call")} not logged`, detail: `${overdueCalls.map((m) => callDateLabel(m.scheduledAt)).join(", ")} — 3+ days on, nobody has said how the call went.`, fixHint: "Ask the account manager to update it in Account Management.", fixUrl: "/account-management", count: overdueCalls.length });
   }
   if (lastLogged?.status === "NOT_HELD") {
-    f.push({ type: "AM_CALL_MISSED", severity: "WARNING", title: "Last account manager call didn't happen", detail: `${callDateLabel(lastLogged.scheduledAt)}: ${lastLogged.notHeldReason ?? "no reason given"}.`, fixHint: "Rebook the call with the client — this clears once the next call is logged as held.", fixUrl: "/my-calls" });
+    f.push({ type: "AM_CALL_MISSED", severity: "WARNING", title: "Last account manager call didn't happen", detail: `${callDateLabel(lastLogged.scheduledAt)}: ${lastLogged.notHeldReason ?? "no reason given"}.`, fixHint: "Rebook the call with the client — this clears once the next call is logged as held.", fixUrl: "/account-management" });
   }
 
   if (clickupFails.length) {

@@ -80,7 +80,7 @@ export default function PortfolioTable({ maxFrom }: { maxFrom: string | null }) 
         <table className="w-full text-left text-sm min-w-[1200px]">
           <thead>
             <tr style={{ borderBottom: "1px solid var(--border)" }}>
-              {["Client", "Health", ...METRICS.map((m) => m.label), "Alerts", "Needs action", "Last contact", "Last AM call"].map((h) => (
+              {["Client", "Health", ...METRICS.map((m) => m.label), "Alerts", "Needs action", "Last call"].map((h) => (
                 <th key={h} className="py-3 px-3 text-xs font-bold whitespace-nowrap" style={{ color: "var(--text-secondary)" }}>{h}</th>
               ))}
             </tr>
@@ -88,10 +88,10 @@ export default function PortfolioTable({ maxFrom }: { maxFrom: string | null }) 
           <tbody style={{ opacity: loading ? 0.6 : 1 }}>
             {!data &&
               Array.from({ length: 5 }).map((_, i) => (
-                <tr key={i}><td colSpan={12} className="px-3 py-3"><span className="skeleton h-4 w-full block" /></td></tr>
+                <tr key={i}><td colSpan={11} className="px-3 py-3"><span className="skeleton h-4 w-full block" /></td></tr>
               ))}
             {data && rows.length === 0 && (
-              <tr><td colSpan={12} className="px-3 py-8 text-center" style={{ color: "var(--text-muted)" }}>No clients match.</td></tr>
+              <tr><td colSpan={11} className="px-3 py-8 text-center" style={{ color: "var(--text-muted)" }}>No clients match.</td></tr>
             )}
             {rows.map((r) => (
               <tr key={r.clientId} onClick={() => router.push(`/clients/${r.slug}`)} className="cursor-pointer" style={{ borderBottom: "1px solid var(--border)" }}>
@@ -126,7 +126,6 @@ export default function PortfolioTable({ maxFrom }: { maxFrom: string | null }) 
                   )}
                 </td>
                 <td className="py-2.5 px-3 whitespace-nowrap" style={{ color: r.needsAction ? "var(--text-primary)" : "var(--text-muted)" }}>{r.needsAction || "—"}</td>
-                <td className="py-2.5 px-3 whitespace-nowrap" style={{ color: "var(--text-secondary)" }}>{r.lastContact ? sydDate(r.lastContact) : "Never"}</td>
                 <td className="py-2.5 px-3 whitespace-nowrap" style={{ color: r.lastMeeting?.mood === "AT_RISK" ? "var(--danger)" : "var(--text-secondary)" }}>
                   {r.lastMeeting ? `${sydDate(r.lastMeeting.at)}${r.lastMeeting.mood ? ` · ${{ GOOD: "Good", NEUTRAL: "Neutral", AT_RISK: "At risk" }[r.lastMeeting.mood]}` : ""}` : "—"}
                 </td>

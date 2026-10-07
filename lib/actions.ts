@@ -18,7 +18,7 @@ import { reportsOnHold } from "@/lib/report-hold";
 import { sendActionEmail } from "@/lib/email";
 import { runHealthChecks } from "@/lib/data-health";
 import { kickSlack, parseSlackEvents, queueLeadEvent, queueSlack, queueTestMessage } from "@/lib/slack";
-import { NOT_HELD_REASONS, WEEKDAYS, applySlotChange, callDateLabel, callTaskUpdate, clientCallEmail, ensureNextCall, isCallTime, moveCall, parseCallWhen, rescheduleCall, sendCallInvite, splitSteps } from "@/lib/am-calls";
+import { NOT_HELD_REASONS, WEEKDAYS, applySlotChange, dropFutureCalls, callDateLabel, callTaskUpdate, clientCallEmail, ensureNextCall, isCallTime, moveCall, parseCallWhen, rescheduleCall, sendCallInvite, splitSteps } from "@/lib/am-calls";
 import { createClientFolder, ensureTask, finishTask } from "@/lib/clickup";
 import { sydneyLocalToDate } from "@/lib/sheet-parse";
 
@@ -954,14 +954,23 @@ export async function createClient(_prev: CreateClientState, formData: FormData)
 
 // Coach-only, applies the same status to every selected client in one go —
 // the "Bulk Edit" action on the /clients grid.
+// "ARCHIVE" archives them instead. Not Active / archived clients lose their
+// booked calls; set back to Active, they're booked again by the next cron.
 export async function bulkUpdateClientStatus(clientIds: string[], status: string) {
   await requireCoach();
   if (clientIds.length === 0) return;
-  await prisma.client.updateMany({
-    where: { id: { in: clientIds } },
-    data: { status: status as never, isActive: status !== "CHURNED" },
-  });
-  revalidatePath("/clients");
+  if (!["ACTIVE", "ONBOARDING", "CHURNED", "ARCHIVE"].includes(status)) throw new Error("Invalid status");
+  if (status === "ARCHIVE") {
+    await prisma.client.updateMany({ where: { id: { in: clientIds } }, data: { archivedAt: new Date() } });
+  } else {
+    await prisma.client.updateMany({
+      where: { id: { in: clientIds } },
+      data: { status: status as never, isActive: status !== "CHURNED" },
+    });
+  }
+  if (status === "ARCHIVE" || status === "CHURNED") await dropFutureCalls(clientIds);
+  else for (const id of clientIds) await ensureNextCall(id).catch(() => null);
+  revalidatePath("/", "layout");
 }
 
 // Archiving is independent of status — hides the client from every default
@@ -970,15 +979,15 @@ export async function bulkUpdateClientStatus(clientIds: string[], status: string
 export async function archiveClient(clientId: string) {
   await requireCoach();
   await prisma.client.update({ where: { id: clientId }, data: { archivedAt: new Date() } });
-  revalidatePath("/clients");
-  revalidatePath("/leads");
+  await dropFutureCalls([clientId]);
+  revalidatePath("/", "layout");
 }
 
 export async function unarchiveClient(clientId: string) {
   await requireCoach();
   await prisma.client.update({ where: { id: clientId }, data: { archivedAt: null } });
-  revalidatePath("/clients");
-  revalidatePath("/leads");
+  await ensureNextCall(clientId).catch(() => null);
+  revalidatePath("/", "layout");
 }
 
 // Irreversible — only ever offered from the archived view (also enforced
