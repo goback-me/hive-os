@@ -23,8 +23,11 @@ const isCoachOnlyRoute = createRouteMatcher([
   "/settings(.*)",
   "/referrals(.*)",
   "/alerts(.*)",
-  "/accounts(.*)",
 ]);
+
+// The Hive team's pages, agents included (scoped to their clients on the
+// page) — never a client's.
+const isTeamRoute = createRouteMatcher(["/my-calls(.*)", "/account-management(.*)", "/accounts(.*)"]);
 
 export default clerkMiddleware(async (auth, req) => {
   if (isPublicRoute(req)) return NextResponse.next();
@@ -68,7 +71,7 @@ export default clerkMiddleware(async (auth, req) => {
   if (metadata.role === "CLIENT") {
     const home = metadata.clientSlug ? `/clients/${metadata.clientSlug}` : "/login?error=no-client";
 
-    if (isCoachOnlyRoute(req)) {
+    if (isCoachOnlyRoute(req) || isTeamRoute(req)) {
       return NextResponse.redirect(new URL(home, req.url));
     }
 

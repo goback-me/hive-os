@@ -8,20 +8,24 @@ import { SignOutButton } from "@clerk/nextjs";
 
 const COACH_NAV_ITEMS = [
   { href: "/dashboard", label: "Dashboard", icon: "space_dashboard" },
+  { href: "/my-calls", label: "My Calls", icon: "call" },
   { href: "/clients", label: "Clients", icon: "diversity_3" },
-  { href: "/accounts", label: "Accounts", icon: "manage_accounts" },
+  { href: "/account-management", label: "Account Management", icon: "manage_accounts" },
   { href: "/leads", label: "Leads", icon: "person_search" },
   { href: "/referrals", label: "Referrals", icon: "share" },
   { href: "/alerts", label: "Data alerts", icon: "notifications" },
   { href: "/settings", label: "Settings", icon: "settings" },
 ];
 
-export default function Sidebar({ user }: { user: { name: string; role: "COACH" | "CLIENT"; isAgent?: boolean } }) {
+// callsToUpdate = the viewer's calls past their time and not logged yet
+// (lib/am-calls.ts) — the red badge on My Calls.
+export default function Sidebar({ user, callsToUpdate = 0 }: { user: { name: string; role: "COACH" | "CLIENT"; isAgent?: boolean }; callsToUpdate?: number }) {
   const pathname = usePathname();
   // A client login only ever has their own client page — no cross-client
   // nav items are rendered for them at all, not just hidden via CSS.
-  // An agent gets their client list and Leads only.
-  const navItems = user.role !== "COACH" ? [] : user.isAgent ? COACH_NAV_ITEMS.filter((i) => i.href === "/clients" || i.href === "/leads") : COACH_NAV_ITEMS;
+  // An agent gets their calls, their client list, Account Management (their
+  // clients) and Leads only.
+  const navItems = user.role !== "COACH" ? [] : user.isAgent ? COACH_NAV_ITEMS.filter((i) => ["/my-calls", "/clients", "/account-management", "/leads"].includes(i.href)) : COACH_NAV_ITEMS;
 
   return (
     <aside
@@ -33,7 +37,7 @@ export default function Sidebar({ user }: { user: { name: string; role: "COACH" 
         <h1 className="font-heading font-bold text-xl tracking-tight flex-1" style={{ color: "var(--text-primary)" }}>
           Hive HQ
         </h1>
-        {user.role === "COACH" && !user.isAgent && <AlertBell />}
+        {user.role === "COACH" && <AlertBell showAlerts={!user.isAgent} />}
       </div>
 
       <nav className="flex-1 space-y-1">
@@ -63,6 +67,11 @@ export default function Sidebar({ user }: { user: { name: string; role: "COACH" 
             >
               <span className="material-symbols-outlined">{item.icon}</span>
               {item.label}
+              {item.href === "/my-calls" && callsToUpdate > 0 && (
+                <span className="ml-auto min-w-[20px] h-5 px-1.5 rounded-full text-[11px] font-bold flex items-center justify-center" style={{ background: "var(--danger)", color: "#fff" }} aria-label={`${callsToUpdate} calls need an update`}>
+                  {callsToUpdate}
+                </span>
+              )}
             </Link>
           );
         })}

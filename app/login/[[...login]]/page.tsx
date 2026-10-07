@@ -47,7 +47,7 @@ export default function LoginPage({ searchParams }: { searchParams: { error?: st
           <SignIn
             path="/login"
             routing="path"
-            fallbackRedirectUrl="/dashboard"
+            fallbackRedirectUrl="/"
             // No self-serve accounts in this app — a coach creates every login
             // from Settings. This just hides the "Sign up" link/footer; the real
             // lock is disabling sign-up in the Clerk dashboard (see README/setup notes).
