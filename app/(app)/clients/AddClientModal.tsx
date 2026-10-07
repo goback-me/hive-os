@@ -196,18 +196,25 @@ export default function AddClientModal({
                   )}
                 </Section>
 
-                <Section title="Weekly call">
+                <Section title="Account management">
                   <div className="grid grid-cols-2 gap-3">
-                    <Field label="Who runs it" hint="They get a “log the call” email + ClickUp task each Monday.">
-                      <select name="weeklyCallAgentId" defaultValue="" style={inputStyle} className="px-3 py-2 rounded-lg outline-none">
+                    <Field label="Account manager" hint="Their calls are booked from the slot below; they get an invite and a “how did it go?” email the day after.">
+                      <select name="accountManagerId" defaultValue="" style={inputStyle} className="px-3 py-2 rounded-lg outline-none">
                         <option value="">Nobody yet</option>
                         {team.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
                       </select>
                     </Field>
-                    <Field label="Call day">
-                      <select name="weeklyCallDay" defaultValue="FRIDAY" style={inputStyle} className="px-3 py-2 rounded-lg outline-none">
-                        {DAYS.map((d) => <option key={d} value={d}>{d.charAt(0) + d.slice(1).toLowerCase()}</option>)}
-                      </select>
+                    <Field label="Regular call">
+                      <div className="flex gap-1.5">
+                        <select name="callFrequency" defaultValue="WEEKLY" style={inputStyle} className="px-2 py-2 rounded-lg outline-none" aria-label="How often">
+                          <option value="WEEKLY">Every</option>
+                          <option value="FORTNIGHTLY">Every 2nd</option>
+                        </select>
+                        <select name="callDay" defaultValue="FRIDAY" style={inputStyle} className="px-2 py-2 rounded-lg outline-none" aria-label="Call day">
+                          {DAYS.map((d) => <option key={d} value={d}>{d.charAt(0) + d.slice(1, 3).toLowerCase()}</option>)}
+                        </select>
+                        <input type="time" name="callTime" defaultValue="10:00" step={900} style={inputStyle} className="px-2 py-2 rounded-lg outline-none" aria-label="Call time" />
+                      </div>
                     </Field>
                   </div>
                 </Section>

@@ -1,6 +1,6 @@
 "use server";
 
-import { Prisma, type ClientHealth, type ClientMood, type Weekday } from "@prisma/client";
+import { Prisma, type CallFrequency, type ClientHealth, type ClientMood, type Weekday } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
@@ -18,7 +18,7 @@ import { reportsOnHold } from "@/lib/report-hold";
 import { sendActionEmail } from "@/lib/email";
 import { runHealthChecks } from "@/lib/data-health";
 import { kickSlack, parseSlackEvents, queueLeadEvent, queueSlack, queueTestMessage } from "@/lib/slack";
-import { NOT_HELD_REASONS, WEEKDAYS, callDateLabel, clientCallEmail, currentCallDate, meetingPath, meetingTaskUpdate, splitSteps } from "@/lib/weekly-meetings";
+import { NOT_HELD_REASONS, WEEKDAYS, applySlotChange, callDateLabel, callTaskUpdate, clientCallEmail, ensureNextCall, isCallTime, moveCall, parseCallWhen, rescheduleCall, sendCallInvite, splitSteps } from "@/lib/am-calls";
 import { createClientFolder, ensureTask, finishTask } from "@/lib/clickup";
 import { sydneyLocalToDate } from "@/lib/sheet-parse";
 
@@ -411,7 +411,7 @@ export async function recheckClientHealth(clientId: string) {
 
 // Log a call / meeting / message with the client. The latest one is the
 // portfolio's "Last contact" and drives the "no call in 10+ days" action.
-// ── Weekly call (lib/weekly-meetings.ts) ─────────────────────────────────
+// ── Weekly call (lib/am-calls.ts) ─────────────────────────────────
 // Coach-only: the client email the "update your leads" emails go to (when
 // the client has no login of their own).
 export async function saveClientEmail(clientId: string, email: string) {
@@ -422,48 +422,248 @@ export async function saveClientEmail(clientId: string, email: string) {
   revalidatePath(`/clients`);
 }
 
-// Coach-only: the account manager (who runs the weekly call), the call day,
-// and the manual health override (null = use the computed one).
-export async function saveWeeklyCall(clientId: string, agentId: string | null, day: string, health: string | null = null) {
-  await requireCoach();
-  if (!WEEKDAYS.includes(day as Weekday)) throw new Error("Invalid day");
-  if (health && !["ON_TRACK", "AT_RISK", "CRITICAL"].includes(health)) throw new Error("Invalid health");
-  if (agentId) {
-    const agent = await prisma.user.findUnique({ where: { id: agentId }, select: { role: true } });
-    if (!agent || agent.role === "CLIENT") throw new Error("Pick a team member");
-  }
-  await prisma.client.update({ where: { id: clientId }, data: { weeklyCallAgentId: agentId || null, weeklyCallDay: day as Weekday, health: (health as ClientHealth) || null } });
-  revalidatePath(`/clients`);
+// ── Account-manager calls (lib/am-calls.ts) ──────────────────────────────
+
+// The team member who may act on a client's calls: a coach/admin, or the
+// agent who account-manages them. Clients never.
+async function requireCallAccess(clientId: string) {
+  const user = await requireClientAccess(clientId);
+  if (user.role !== "COACH") throw new Error("Only the Hive team manages calls");
+  return user;
+}
+const myUserId = async (clerkId: string) => (await prisma.user.findUnique({ where: { clerkId }, select: { id: true } }))?.id ?? null;
+const callOf = async (callId: string) => {
+  const call = await prisma.amCall.findUnique({ where: { id: callId } });
+  if (!call) throw new Error("Call not found");
+  return call;
+};
+function whenOrThrow(s: string, defaultTime = "10:00") {
+  const at = parseCallWhen(s, defaultTime);
+  if (!at) throw new Error("Pick a date and time");
+  return at;
 }
 
-// Team: "Log a call" — this week's call for the client (made if it isn't
-// there yet, so Monday's job won't create a second one), then its log form.
-export async function startCall(clientId: string) {
-  const user = await requireClientAccess(clientId);
-  if (user.role !== "COACH") throw new Error("Only the team logs calls");
-  const client = await prisma.client.findUniqueOrThrow({ where: { id: clientId }, select: { slug: true, weeklyCallDay: true, weeklyCallAgentId: true } });
-  const me = await prisma.user.findUnique({ where: { clerkId: user.clerkId }, select: { id: true } });
-  const weekOf = currentCallDate(new Date(), client.weeklyCallDay);
-  const call = await prisma.weeklyMeeting.upsert({
-    where: { clientId_weekOf: { clientId, weekOf } },
-    create: { clientId, weekOf, scheduledAt: new Date(), agentId: client.weeklyCallAgentId ?? me?.id ?? null },
-    update: {},
+// Coach-only: the account manager and their regular call slot. The client's
+// next call follows a slot change (if it hasn't happened yet).
+export async function saveCallSlot(clientId: string, slot: { accountManagerId: string | null; callDay: string; callTime: string; callFrequency: string }) {
+  await requireCoach();
+  if (!WEEKDAYS.includes(slot.callDay as Weekday)) throw new Error("Invalid day");
+  if (!isCallTime(slot.callTime)) throw new Error("Time is HH:MM, e.g. 10:00");
+  if (!["WEEKLY", "FORTNIGHTLY"].includes(slot.callFrequency)) throw new Error("Invalid frequency");
+  if (slot.accountManagerId) {
+    const am = await prisma.user.findUnique({ where: { id: slot.accountManagerId }, select: { role: true } });
+    if (!am || am.role === "CLIENT") throw new Error("Pick a team member");
+  }
+  await prisma.client.update({
+    where: { id: clientId },
+    data: { accountManagerId: slot.accountManagerId || null, callDay: slot.callDay as Weekday, callTime: slot.callTime, callFrequency: slot.callFrequency as CallFrequency },
   });
-  redirect(meetingPath(client.slug, call.id));
+  await applySlotChange(clientId);
+  revalidatePath("/", "layout");
+}
+
+// Coach-only: the manual health override (null = use the computed one).
+export async function saveHealthOverride(clientId: string, health: string | null) {
+  await requireCoach();
+  if (health && !["ON_TRACK", "AT_RISK", "CRITICAL"].includes(health)) throw new Error("Invalid health");
+  await prisma.client.update({ where: { id: clientId }, data: { healthOverride: (health as ClientHealth) || null } });
+  revalidatePath("/", "layout");
+}
+
+// Book a call at `when` ("YYYY-MM-DDTHH:MM", Sydney) — [Schedule] for a
+// client with no next call. Goes to the account manager (else whoever books it).
+export async function scheduleCall(clientId: string, when: string) {
+  const user = await requireCallAccess(clientId);
+  const client = await prisma.client.findUniqueOrThrow({ where: { id: clientId }, select: { accountManagerId: true, callTime: true } });
+  const call = await prisma.amCall.create({ data: { clientId, scheduledAt: whenOrThrow(when, client.callTime), callPersonId: client.accountManagerId ?? (await myUserId(user.clerkId)) } });
+  await sendCallInvite(call.id);
+  revalidatePath("/", "layout");
+  return call.id;
+}
+
+// "Log a call" / "Log now": the client's call to update — the oldest one
+// still waiting, else the next booked one, else a new call right now.
+export async function callToLog(clientId: string) {
+  const user = await requireCallAccess(clientId);
+  const now = new Date();
+  const open =
+    (await prisma.amCall.findFirst({ where: { clientId, status: "PENDING", scheduledAt: { lte: now } }, orderBy: { scheduledAt: "asc" }, select: { id: true } })) ??
+    (await prisma.amCall.findFirst({ where: { clientId, status: "PENDING" }, orderBy: { scheduledAt: "asc" }, select: { id: true } }));
+  if (open) return open.id;
+  const client = await prisma.client.findUniqueOrThrow({ where: { id: clientId }, select: { accountManagerId: true } });
+  const call = await prisma.amCall.create({ data: { clientId, scheduledAt: now, callPersonId: client.accountManagerId ?? (await myUserId(user.clerkId)) } });
+  return call.id;
+}
+
+// Move a call that hasn't happened yet (inline "next call" edit) — a
+// planning change, not a reschedule.
+export async function moveCallTime(callId: string, when: string) {
+  const call = await callOf(callId);
+  await requireCallAccess(call.clientId);
+  if (call.status !== "PENDING") throw new Error("Only an upcoming call can be moved");
+  const at = whenOrThrow(when);
+  if (at <= new Date()) throw new Error("Pick a time in the future (or reschedule it)");
+  await moveCall(callId, at);
+  revalidatePath("/", "layout");
+}
+
+// 🔁 Rescheduled: the call → RESCHEDULED (+ reason), a new PENDING call at
+// the new time (lib/am-calls.ts rescheduleCall). Returns the new call's id.
+export async function rescheduleCallTo(callId: string, when: string, reason: string) {
+  const call = await callOf(callId);
+  const user = await requireCallAccess(call.clientId);
+  const next = await rescheduleCall(callId, whenOrThrow(when), reason.trim(), user.name);
+  revalidatePath("/", "layout");
+  return next.id;
+}
+
+export type CallLogInput = {
+  summary: string;
+  nextSteps: string; // one per line
+  internalNotes: string; // team only — never shown or sent to the client
+  outcome: ClientMood | "";
+  nextCallAt: string; // "YYYY-MM-DDTHH:MM" or "YYYY-MM-DD" (the regular time), Sydney
+  leadsDiscussed: string[];
+  leadsReturned: string[];
+  durationMins: string;
+  skipEmail: boolean; // "Don't email client"
+};
+
+// ✅ Call happened. Returned leads go back to Chase Up (RETURNED_BY_CLIENT +
+// write-back), a ContactLog entry, the client's "Weekly status update" email
+// (unless skipped), the summary to their Slack channel, the ClickUp task gets
+// the summary and is closed, and the next call is booked. Slack / ClickUp /
+// email failures never block the save.
+export async function logCallHeld(callId: string, input: CallLogInput) {
+  const call = await prisma.amCall.findUnique({
+    where: { id: callId },
+    include: { client: { select: { name: true, slug: true, slackChannelId: true, slackEvents: true, clientType: true, email: true, callTime: true, users: { where: { role: "CLIENT" }, select: { email: true } } } }, callPerson: { select: { name: true } } },
+  });
+  if (!call) throw new Error("Call not found");
+  const user = await requireCallAccess(call.clientId);
+  if (call.status !== "PENDING") throw new Error("This call has already been logged");
+  if (!input.summary.trim()) throw new Error("Add a short summary of the call");
+  const mins = input.durationMins.trim() ? Number(input.durationMins) : null;
+  if (mins != null && !(Number.isInteger(mins) && mins > 0 && mins <= 600)) throw new Error("Duration is whole minutes (1–600)");
+  const nextCallAt = input.nextCallAt.trim() ? parseCallWhen(input.nextCallAt, call.client.callTime) : null;
+  if (input.nextCallAt.trim() && !nextCallAt) throw new Error("The next call date doesn't look right");
+
+  const leads = async (ids: string[]) => prisma.lead.findMany({ where: { id: { in: ids }, clientId: call.clientId, deletedAt: null }, select: { id: true, stage: true } });
+  const discussed = (await leads(input.leadsDiscussed)).map((l) => l.id);
+  const returnable = (await leads(input.leadsReturned)).filter((l) => isReturn(l.stage, "CHASE_UP")).map((l) => l.id);
+  const steps = splitSteps(input.nextSteps);
+  const saved = await prisma.amCall.update({
+    where: { id: callId },
+    data: {
+      status: "HELD",
+      summary: input.summary.trim(),
+      nextSteps: steps,
+      internalNotes: input.internalNotes.trim() || null,
+      outcome: input.outcome || null,
+      nextCallAt,
+      leadsDiscussed: discussed,
+      leadsReturned: returnable,
+      durationMins: mins,
+      loggedAt: new Date(),
+      submittedBy: user.name,
+    },
+  });
+  for (const id of returnable) await updateLeadStage(id, "CHASE_UP");
+  await prisma.contactLog.create({ data: { clientId: call.clientId, contactedAt: call.scheduledAt, method: "meeting", loggedBy: user.name, notes: saved.summary, nextStep: steps.join("\n") || null, nextStepDue: nextCallAt } });
+
+  if (!input.skipEmail) {
+    // Numbers are left out while the client's reports are on hold.
+    const kpis = (await reportsOnHold(call.clientId)) ? null : (await getMonthToDateVsLast(call.clientId)).current;
+    const e = clientCallEmail({ clientName: call.client.name, clientType: call.client.clientType, amName: call.callPerson?.name ?? user.name, scheduledAt: call.scheduledAt, summary: saved.summary!, nextSteps: steps, kpis });
+    const sent = await sendActionEmail({
+      to: call.client.users.length ? call.client.users.map((u) => u.email) : call.client.email ? [call.client.email] : [],
+      type: "call_update",
+      clientId: call.clientId,
+      refIds: [callId],
+      path: `/clients/${call.client.slug}?tab=weekly`,
+      ...e,
+      button: "View in portal",
+      footnote: "You're getting this because Hive Social runs a regular call with you.",
+    }).catch((err) => (console.error(`Call update email for ${callId} failed:`, err), false));
+    if (sent) await prisma.amCall.update({ where: { id: callId }, data: { emailedToClientAt: new Date() } });
+  }
+  if (call.client.slackChannelId && parseSlackEvents(call.client.slackEvents).weeklyUpdates) {
+    const t = [
+      `:telephone_receiver: *Call — ${callDateLabel(call.scheduledAt)}* (${user.name})`,
+      saved.summary,
+      steps.length ? `*Next steps*\n${steps.map((s) => `• ${s}`).join("\n")}` : null,
+      returnable.length ? `${returnable.length} lead${returnable.length === 1 ? "" : "s"} returned to chase up` : null,
+    ].filter(Boolean).join("\n\n");
+    await queueSlack({ clientId: call.clientId, channel: call.client.slackChannelId, kind: "weekly_call", dedupeKey: `weekly_call:${callId}`, text: t }).catch(() => {});
+    kickSlack();
+  }
+  const update = callTaskUpdate(saved);
+  if (call.clickupTaskId && update) await finishTask(call.clickupTaskId, update.description);
+  await ensureNextCall(call.clientId, { preferred: nextCallAt });
+  await runHealthChecks(call.clientId).catch((e) => console.error("Health checks failed:", e)); // clears AM_CALL_NOT_LOGGED / AM_CALL_MISSED
+  revalidatePath("/", "layout");
+}
+
+// ❌ Didn't happen: the ClickUp task says why and is closed, AM_CALL_MISSED
+// is raised (data health), the admin channel hears about it, no client
+// email; the next call is booked.
+export async function logCallNotHeld(callId: string, reasonKey: string, text: string) {
+  const call = await prisma.amCall.findUnique({ where: { id: callId }, include: { client: { select: { name: true } } } });
+  if (!call) throw new Error("Call not found");
+  const user = await requireCallAccess(call.clientId);
+  if (call.status !== "PENDING") throw new Error("This call has already been logged");
+  if (!(reasonKey in NOT_HELD_REASONS)) throw new Error("Say why the call didn't happen");
+  const reason = [NOT_HELD_REASONS[reasonKey as keyof typeof NOT_HELD_REASONS], text.trim()].filter(Boolean).join(" — ");
+  const saved = await prisma.amCall.update({ where: { id: callId }, data: { status: "NOT_HELD", notHeldReason: reason, loggedAt: new Date(), submittedBy: user.name } });
+  const update = callTaskUpdate(saved);
+  if (call.clickupTaskId && update) await finishTask(call.clickupTaskId, update.description);
+  const admin = process.env.SLACK_ADMIN_CHANNEL;
+  if (admin) {
+    await queueSlack({ channel: admin, clientId: call.clientId, kind: "meeting_missed", dedupeKey: `meeting_missed:${callId}`, text: `:warning: *${call.client.name}* — the ${callDateLabel(call.scheduledAt)} call didn't happen: ${reason} (${user.name})` }).catch(() => {});
+    kickSlack();
+  }
+  await ensureNextCall(call.clientId);
+  await runHealthChecks(call.clientId).catch((e) => console.error("Health checks failed:", e));
+  revalidatePath("/", "layout");
+}
+
+// Fix a held call's log (the panel's Edit). Nothing is re-sent — no email,
+// ClickUp or Slack. The client's ticks stay on the steps whose text is kept.
+export async function editCallLog(callId: string, input: Pick<CallLogInput, "summary" | "nextSteps" | "internalNotes" | "outcome" | "durationMins">) {
+  const call = await callOf(callId);
+  await requireCallAccess(call.clientId);
+  if (call.status !== "HELD") throw new Error("Only a held call's log can be edited");
+  if (!input.summary.trim()) throw new Error("Add a short summary of the call");
+  const mins = input.durationMins.trim() ? Number(input.durationMins) : null;
+  if (mins != null && !(Number.isInteger(mins) && mins > 0 && mins <= 600)) throw new Error("Duration is whole minutes (1–600)");
+  const steps = splitSteps(input.nextSteps);
+  const ticked = new Set(call.stepsDone.map((i) => call.nextSteps[i]));
+  await prisma.amCall.update({
+    where: { id: callId },
+    data: {
+      summary: input.summary.trim(),
+      nextSteps: steps,
+      stepsDone: steps.flatMap((s, i) => (ticked.has(s) ? [i] : [])),
+      internalNotes: input.internalNotes.trim() || null,
+      outcome: input.outcome || null,
+      durationMins: mins,
+    },
+  });
+  revalidatePath("/", "layout");
 }
 
 // The client ticks off a next step from a held call (Weekly status tab).
 // Only the client's own logins tick; the team sees the ticks.
-export async function toggleCallStep(meetingId: string, index: number, done: boolean) {
-  const call = await prisma.weeklyMeeting.findUnique({ where: { id: meetingId }, select: { clientId: true, status: true, nextSteps: true, stepsDone: true } });
+export async function toggleCallStep(callId: string, index: number, done: boolean) {
+  const call = await prisma.amCall.findUnique({ where: { id: callId }, select: { clientId: true, status: true, nextSteps: true, stepsDone: true } });
   if (!call || call.status !== "HELD") throw new Error("Call not found");
   const user = await requireClientAccess(call.clientId);
   if (user.role !== "CLIENT") throw new Error("Only the client ticks off next steps");
-  if (!Number.isInteger(index) || index < 0 || index >= splitSteps(call.nextSteps).length) throw new Error("Invalid step");
+  if (!Number.isInteger(index) || index < 0 || index >= call.nextSteps.length) throw new Error("Invalid step");
   const set = new Set(call.stepsDone);
   if (done) set.add(index);
   else set.delete(index);
-  await prisma.weeklyMeeting.update({ where: { id: meetingId }, data: { stepsDone: Array.from(set).sort((x, y) => x - y) } });
+  await prisma.amCall.update({ where: { id: callId }, data: { stepsDone: Array.from(set).sort((x, y) => x - y) } });
   revalidatePath(`/clients`);
 }
 
@@ -471,108 +671,6 @@ export async function toggleCallStep(meetingId: string, index: number, done: boo
 export async function markWeeklyStatusViewed() {
   const user = await requireUser();
   await prisma.user.updateMany({ where: { clerkId: user.clerkId }, data: { weeklyStatusViewedAt: new Date() } });
-}
-
-export type MeetingInput = {
-  held: boolean;
-  summary: string;
-  internalNotes: string; // team only — never shown or sent to the client
-  nextSteps: string;
-  clientMood: ClientMood | "";
-  nextMeetingAt: string; // yyyy-mm-dd
-  leadsDiscussed: string[];
-  leadsReturned: string[];
-  durationMins: string;
-  skipEmail: boolean; // "Don't email client this time"
-  notHeldReason: keyof typeof NOT_HELD_REASONS | "";
-  notHeldText: string;
-};
-
-// The agent logs a weekly call. HELD: saved, returned leads go back to Chase
-// Up (RETURNED_BY_CLIENT + write-back), a ContactLog entry, the client gets a
-// "Weekly status update" email (unless skipEmail), the summary goes to the
-// client's Slack channel, and the ClickUp task gets the summary and is
-// closed. NOT_HELD: saved, the task says why and is closed, AM_CALL_MISSED
-// is raised, and the admin channel hears about it. Slack / ClickUp failures
-// never block the save.
-export async function submitWeeklyMeeting(meetingId: string, input: MeetingInput) {
-  const meeting = await prisma.weeklyMeeting.findUnique({ where: { id: meetingId }, include: { client: { select: { id: true, name: true, slug: true, slackChannelId: true, slackEvents: true, clientType: true, email: true, users: { where: { role: "CLIENT" }, select: { email: true } } } }, agent: { select: { name: true } } } });
-  if (!meeting) throw new Error("Meeting not found");
-  const user = await requireClientAccess(meeting.clientId);
-  if (user.role !== "COACH") throw new Error("Only the team logs weekly calls");
-  if (meeting.status !== "PENDING") throw new Error("This call has already been logged");
-
-  const text = (s: string) => s.trim() || null;
-  const due = input.nextMeetingAt.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  const nextMeetingAt = due ? sydneyLocalToDate(Number(due[1]), Number(due[2]), Number(due[3])) : null;
-  const leadIds = async (ids: string[]) =>
-    (await prisma.lead.findMany({ where: { id: { in: ids }, clientId: meeting.clientId, deletedAt: null }, select: { id: true, stage: true } }));
-
-  if (input.held) {
-    if (!input.summary.trim()) throw new Error("Add a short summary of the call");
-    const mins = input.durationMins.trim() ? Number(input.durationMins) : null;
-    if (mins != null && !(Number.isInteger(mins) && mins > 0 && mins <= 600)) throw new Error("Duration is whole minutes (1–600)");
-    const discussed = (await leadIds(input.leadsDiscussed)).map((l) => l.id);
-    const returnable = (await leadIds(input.leadsReturned)).filter((l) => isReturn(l.stage, "CHASE_UP")).map((l) => l.id);
-    const saved = await prisma.weeklyMeeting.update({
-      where: { id: meetingId },
-      data: {
-        status: "HELD",
-        summary: text(input.summary),
-        internalNotes: text(input.internalNotes),
-        nextSteps: text(input.nextSteps),
-        clientMood: input.clientMood || null,
-        nextMeetingAt,
-        leadsDiscussed: discussed,
-        leadsReturned: returnable,
-        durationMins: mins,
-        submittedAt: new Date(),
-        submittedBy: user.name,
-      },
-    });
-    for (const id of returnable) await updateLeadStage(id, "CHASE_UP");
-    if (!input.skipEmail) {
-      // Numbers are left out while the client's reports are on hold.
-      const kpis = (await reportsOnHold(meeting.clientId)) ? null : (await getMonthToDateVsLast(meeting.clientId)).current;
-      const e = clientCallEmail({ clientName: meeting.client.name, clientType: meeting.client.clientType, amName: meeting.agent?.name ?? user.name, weekOf: meeting.weekOf, summary: saved.summary!, nextSteps: saved.nextSteps, kpis });
-      const sent = await sendActionEmail({
-        to: meeting.client.users.length ? meeting.client.users.map((u) => u.email) : meeting.client.email ? [meeting.client.email] : [],
-        type: "call_update",
-        clientId: meeting.clientId,
-        refIds: [meetingId],
-        path: `/clients/${meeting.client.slug}?tab=weekly`,
-        ...e,
-        button: "View in portal",
-        footnote: "You're getting this because Hive Social runs a weekly call with you.",
-      }).catch((err) => (console.error(`Call update email for ${meetingId} failed:`, err), false));
-      if (sent) await prisma.weeklyMeeting.update({ where: { id: meetingId }, data: { emailedToClientAt: new Date() } });
-    }
-    await prisma.contactLog.create({
-      data: { clientId: meeting.clientId, contactedAt: meeting.weekOf, method: "meeting", loggedBy: user.name, notes: text(input.summary), nextStep: text(input.nextSteps), nextStepDue: nextMeetingAt },
-    });
-    if (meeting.client.slackChannelId && parseSlackEvents(meeting.client.slackEvents).weeklyUpdates) {
-      const t = [
-        `:telephone_receiver: *Weekly call — ${callDateLabel(meeting.weekOf)}* (${user.name})`,
-        input.summary.trim(),
-        input.nextSteps.trim() && `*Next steps*\n${input.nextSteps.trim()}`,
-        returnable.length ? `${returnable.length} lead${returnable.length === 1 ? "" : "s"} returned to chase up` : null,
-      ].filter(Boolean).join("\n\n");
-      await queueSlack({ clientId: meeting.clientId, channel: meeting.client.slackChannelId, kind: "weekly_call", dedupeKey: `weekly_call:${meetingId}`, text: t }).catch(() => {});
-    }
-    const update = meetingTaskUpdate(saved);
-    if (meeting.clickupTaskId && update) await finishTask(meeting.clickupTaskId, update.description);
-  } else {
-    if (!input.notHeldReason) throw new Error("Say why the call didn't happen");
-    const reason = [NOT_HELD_REASONS[input.notHeldReason], input.notHeldText.trim()].filter(Boolean).join(" — ");
-    const saved = await prisma.weeklyMeeting.update({ where: { id: meetingId }, data: { status: "NOT_HELD", notHeldReason: reason, submittedAt: new Date(), submittedBy: user.name } });
-    const update = meetingTaskUpdate(saved);
-    if (meeting.clickupTaskId && update) await finishTask(meeting.clickupTaskId, update.description);
-    const admin = process.env.SLACK_ADMIN_CHANNEL;
-    if (admin) await queueSlack({ channel: admin, clientId: meeting.clientId, kind: "meeting_missed", dedupeKey: `meeting_missed:${meetingId}`, text: `:warning: *${meeting.client.name}* — ${callDateLabel(meeting.weekOf)}'s weekly call didn't happen: ${reason} (${user.name})` }).catch(() => {});
-  }
-  kickSlack();
-  await runHealthChecks(meeting.clientId).catch((e) => console.error("Health checks failed:", e)); // AM_CALL_MISSED / clears AM_CALL_NOT_LOGGED
-  revalidatePath(`/clients`);
 }
 
 export async function logContact(clientId: string, formData: FormData) {
@@ -773,8 +871,10 @@ export async function createClient(_prev: CreateClientState, formData: FormData)
   const startDate = day ? sydneyLocalToDate(Number(day[1]), Number(day[2]), Number(day[3])) : null;
   const email = text("email").toLowerCase();
   const slackChannelId = text("slackChannelId").toUpperCase();
-  const weeklyCallAgentId = text("weeklyCallAgentId") || null;
-  const weeklyCallDay = (WEEKDAYS.includes(text("weeklyCallDay") as Weekday) ? text("weeklyCallDay") : "FRIDAY") as Weekday;
+  const accountManagerId = text("accountManagerId") || null;
+  const callDay = (WEEKDAYS.includes(text("callDay") as Weekday) ? text("callDay") : "FRIDAY") as Weekday;
+  const callTime = isCallTime(text("callTime")) ? text("callTime") : "10:00";
+  const callFrequency = (text("callFrequency") === "FORTNIGHTLY" ? "FORTNIGHTLY" : "WEEKLY") as CallFrequency;
   const clickupMode = text("clickupMode");
   const clickupAssigneeIds = formData.getAll("clickupAssigneeIds").map(String).filter((id) => /^\d+$/.test(id));
 
@@ -786,9 +886,9 @@ export async function createClient(_prev: CreateClientState, formData: FormData)
   if (slackChannelId && !/^[CG][A-Z0-9]{6,}$/.test(slackChannelId)) {
     return { error: "A Slack channel ID looks like C0123ABCD (channel name → About → bottom) — not the channel's name." };
   }
-  if (weeklyCallAgentId) {
-    const agent = await prisma.user.findUnique({ where: { id: weeklyCallAgentId }, select: { role: true } });
-    if (!agent || agent.role === "CLIENT") return { error: "Pick a team member to run the weekly call" };
+  if (accountManagerId) {
+    const am = await prisma.user.findUnique({ where: { id: accountManagerId }, select: { role: true } });
+    if (!am || am.role === "CLIENT") return { error: "Pick a team member as the account manager" };
   }
 
   try {
@@ -818,13 +918,17 @@ export async function createClient(_prev: CreateClientState, formData: FormData)
         startDate,
         email: email || null,
         slackChannelId: slackChannelId || null,
-        weeklyCallAgentId,
-        weeklyCallDay,
+        accountManagerId,
+        callDay,
+        callTime,
+        callFrequency,
         clickupAssigneeIds,
         clickupListId: clickupMode === "existing" ? text("clickupListId") || null : null,
       },
     });
     await getOrCreateClientReferralLink(client.id, client.name);
+    // Their first account-manager call (lib/am-calls.ts).
+    await ensureNextCall(client.id).catch((e) => console.error("First call booking failed:", e));
 
     // Their own ClickUp lists (Account / Client / Other). A ClickUp problem
     // never stops the client being created — the setup checklist shows it.
@@ -923,7 +1027,7 @@ export async function deleteClientPermanently(clientId: string) {
     prisma.syncReconciliation.deleteMany({ where: { clientId } }),
     prisma.leadReminder.deleteMany({ where: { clientId } }),
     prisma.clientCycle.deleteMany({ where: { clientId } }),
-    prisma.weeklyMeeting.deleteMany({ where: { clientId } }),
+    prisma.amCall.deleteMany({ where: { clientId } }),
     prisma.emailLog.deleteMany({ where: { clientId } }),
     prisma.contract.deleteMany({ where: { clientId } }),
     prisma.contactLog.deleteMany({ where: { clientId } }),

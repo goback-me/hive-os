@@ -26,9 +26,10 @@ import {
   saveCycleOverrides,
   recalculateClientCycle,
   saveNoteAliases,
-  saveWeeklyCall,
+  saveCallSlot,
+  saveHealthOverride,
   saveClientEmail,
-  startCall,
+  callToLog,
   toggleCallStep,
   markWeeklyStatusViewed,
 } from "@/lib/actions";
@@ -39,7 +40,8 @@ import SetupChecklist, { type SetupItem } from "@/components/SetupChecklist";
 import { slackConfigured } from "@/lib/slack";
 import { emailConfigured } from "@/lib/email";
 import WeeklyCallCard from "@/components/WeeklyCallCard";
-import { MOOD_LABELS, getStatusCalls, nextCallLabel } from "@/lib/weekly-meetings";
+import LogCallButton from "@/components/LogCallButton";
+import { OUTCOME_LABELS, getStatusCalls, nextCallLabel } from "@/lib/am-calls";
 import NoteAliasesCard from "@/components/NoteAliasesCard";
 import { parseAliases } from "@/lib/notes-parser";
 import { CYCLE_SAMPLE_NOUN, CYCLE_STEPS, CYCLE_STEP_LABELS, getClientCycle, parseCycleOverrides } from "@/lib/buying-cycle";
@@ -152,9 +154,9 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
     prisma.lead.count({ where: updatePanelWhere(client.id) }),
     // Coaches: the buying cycle card (lib/buying-cycle.ts).
     isCoach ? getClientCycle(client.id) : null,
-    // Coaches: who can run the weekly call. Team: the recent calls.
+    // Coaches: who can be the account manager. Team: the recent calls.
     isCoach ? prisma.user.findMany({ where: { role: { in: ["ADMIN", "COACH", "AGENT"] } }, select: { id: true, name: true }, orderBy: { name: "asc" } }) : null,
-    isTeam ? prisma.weeklyMeeting.findMany({ where: { clientId: client.id }, orderBy: { weekOf: "desc" }, take: 5, select: { id: true, weekOf: true, status: true, clientMood: true } }) : [],
+    isTeam ? prisma.amCall.findMany({ where: { clientId: client.id }, orderBy: { scheduledAt: "desc" }, take: 6, select: { id: true, scheduledAt: true, status: true, outcome: true } }) : [],
   ]);
   // Team: account health (lib/client-health.ts) — the override and the computed one.
   const health = isTeam ? await getClientHealth(client.id) : null;
@@ -172,18 +174,17 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
 
   // Weekly status tab: logged calls (internal fields only for the team —
   // getStatusCalls), the old weekly updates as history, and who's seen it.
-  const [contacts, weeklyUpdates, statusCalls, me, clientViews, amName] = await Promise.all([
+  const [contacts, weeklyUpdates, statusCalls, me, clientViews, nextCall] = await Promise.all([
     isCoach ? prisma.contactLog.findMany({ where: { clientId: client.id }, orderBy: { contactedAt: "desc" }, take: 10 }) : Promise.resolve([]),
     prisma.weeklyUpdate.findMany({ where: { clientId: client.id }, orderBy: { weekOf: "desc" }, take: 12 }),
     getStatusCalls(client.id, viewer.role),
     prisma.user.findUnique({ where: { clerkId: viewer.clerkId }, select: { weeklyStatusViewedAt: true } }),
     isTeam ? prisma.user.findMany({ where: { clientId: client.id, role: "CLIENT" }, select: { weeklyStatusViewedAt: true } }) : Promise.resolve([]),
-    client.weeklyCallAgentId ? prisma.user.findUnique({ where: { id: client.weeklyCallAgentId }, select: { name: true } }).then((u) => u?.name ?? null) : Promise.resolve(null),
+    nextCallLabel(client.id),
   ]);
-  const latestLogged = statusCalls.reduce<string | null>((max, c) => (c.submittedAt && (!max || c.submittedAt > max) ? c.submittedAt : max), null);
+  const latestLogged = statusCalls.reduce<string | null>((max, c) => (c.loggedAt && (!max || c.loggedAt > max) ? c.loggedAt : max), null);
   const seen = (at: Date | null | undefined) => !!latestLogged && !!at && at.toISOString() >= latestLogged;
   const statusIsNew = viewer.role === "CLIENT" && !!latestLogged && !seen(me?.weeklyStatusViewedAt);
-  const lastHeld = statusCalls.find((c) => c.status === "HELD");
 
   const referrals = await prisma.referral.findMany({ where: { referralLinkId: referralLink.id }, orderBy: { createdAt: "desc" } });
 
@@ -337,11 +338,11 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
       <div className={isTeam ? "col-span-2" : "col-span-3"}>
         <WeeklyStatusPanel
           calls={statusCalls}
-          nextCall={nextCallLabel(new Date(), client.weeklyCallDay, lastHeld?.nextMeetingAt ? new Date(lastHeld.nextMeetingAt) : null, amName)}
+          nextCall={nextCall}
           canTick={viewer.role === "CLIENT"}
           seenByClient={isTeam && clientViews.length ? clientViews.some((u) => seen(u.weeklyStatusViewedAt)) : null}
           onToggle={viewer.role === "CLIENT" ? toggleCallStep : undefined}
-          onLogCall={isTeam ? startCall.bind(null, client.id) : undefined}
+          logCall={isTeam ? <LogCallButton clientId={client.id} onFind={callToLog} label="Log call" /> : undefined}
           earlier={weeklyUpdates.map((u) => ({ id: u.id, weekOf: u.weekOf.toISOString(), wins: u.wins, issues: u.issues, nextSteps: u.nextSteps, createdBy: u.createdBy }))}
         />
       </div>
@@ -350,13 +351,12 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
             {isTeam && (
               <WeeklyCallCard
                 clientId={client.id}
-                clientSlug={client.slug}
-                agentId={client.weeklyCallAgentId}
-                day={client.weeklyCallDay}
-                health={client.health}
+                slot={{ accountManagerId: client.accountManagerId, callDay: client.callDay, callTime: client.callTime, callFrequency: client.callFrequency }}
+                health={client.healthOverride}
                 team={team}
-                meetings={meetings.map((m) => ({ id: m.id, weekOf: m.weekOf.toISOString(), status: m.status, mood: m.clientMood ? MOOD_LABELS[m.clientMood] : null }))}
-                onSave={saveWeeklyCall}
+                calls={meetings.map((m) => ({ id: m.id, scheduledAt: m.scheduledAt.toISOString(), status: m.status, outcome: m.outcome ? OUTCOME_LABELS[m.outcome] : null }))}
+                onSaveSlot={saveCallSlot}
+                onSaveHealth={saveHealthOverride}
               />
             )}
 
@@ -394,7 +394,7 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
       { key: "slack", label: "Slack channel", ok: !!client.slackChannelId && slackOn, paused: "sale, live transfer, weekly update and digest posts", fix: slackOn ? "Add the channel ID in Integrations" : "Connect Slack in Settings → Integrations", href: slackOn ? undefined : "/settings" },
       { key: "clickup", label: "ClickUp list", ok: !!client.clickupListId && !!settings?.clickupApiKey, paused: "automatic ClickUp tasks", fix: settings?.clickupApiKey ? "Pick or create their list in Integrations" : "Add the ClickUp key in Settings → Integrations", href: settings?.clickupApiKey ? undefined : "/settings" },
       { key: "assignees", label: "ClickUp assignees", ok: !client.clickupListId || client.clickupAssigneeIds.length > 0, paused: "nobody is assigned the tasks", fix: "Pick them under “Assign HQ's tasks to” in Integrations" },
-      { key: "call", label: "Weekly call agent", ok: !!client.weeklyCallAgentId, paused: "weekly call logging, its emails and tasks", fix: "Pick who runs it on the Weekly call card" }
+      { key: "call", label: "Account manager", ok: !!client.accountManagerId, paused: "booking and logging their calls, the reminders and tasks", fix: "Pick one on the Weekly status tab" }
     );
   }
 
@@ -525,11 +525,9 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
       </div>
 
       {isTeam && (
-        <form action={startCall.bind(null, client.id)} className="-mt-4 mb-6">
-          <button className="btn-gradient px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-1.5">
-            <span className="material-symbols-outlined text-[16px]">call</span> Log a call
-          </button>
-        </form>
+        <div className="-mt-4 mb-6">
+          <LogCallButton clientId={client.id} onFind={callToLog} />
+        </div>
       )}
 
       {isCoach && <SetupChecklist clientId={client.id} items={setup} onSaveEmail={saveClientEmail} />}

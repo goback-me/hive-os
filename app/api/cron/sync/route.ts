@@ -9,7 +9,7 @@ import { runHealthChecks } from "@/lib/data-health";
 import { runDailyJobs } from "@/lib/daily-jobs";
 import { deliverSlackPosts } from "@/lib/slack";
 import { recalcDueCycles } from "@/lib/buying-cycle";
-import { runMeetingJobs } from "@/lib/weekly-meetings";
+import { runCallJobs } from "@/lib/am-calls";
 
 // Called by the VPS crontab every 5 min (see DEPLOYMENT.md). Public in middleware.ts —
 // the x-cron-secret header is the only auth. Clients sync one at a time
@@ -79,8 +79,9 @@ export async function GET(req: NextRequest) {
 
   // From 8am Sydney, once a day: Slack digests + weekly ClickUp tasks. Then
   // send whatever Slack posts are queued (events from the syncs above, too).
-  // Weekly client calls: Monday's meetings/tasks/emails, Wednesday's reminders.
-  const meetings = await runMeetingJobs().catch((err) => ({ error: err instanceof Error ? err.message : String(err) }));
+  // Account-manager calls: book everyone's next call, then the +24h / +72h
+  // "how did it go?" reminders (each sent once — lib/am-calls.ts).
+  const meetings = await runCallJobs().catch((err) => ({ error: err instanceof Error ? err.message : String(err) }));
 
   const daily = await runDailyJobs().catch((err) => ({ error: err instanceof Error ? err.message : String(err) }));
   const slack = await deliverSlackPosts().catch((err) => ({ error: err instanceof Error ? err.message : String(err) }));

@@ -2,18 +2,13 @@
 
 import type { ReactNode } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
+import { setUrlParam } from "@/lib/url-param";
 
 // Opening a lead = adding ?lead=<id> to the current URL; LeadDrawerHost
 // (components/LeadDetailDrawer.tsx) shows the drawer for it. The URL can be
 // shared, and Back closes the drawer. Everything else in the URL (tab, date
 // range) stays as it is.
-export function setLeadParam(id: string | null) {
-  const p = new URLSearchParams(window.location.search);
-  if (id) p.set("lead", id);
-  else p.delete("lead");
-  const qs = p.toString();
-  window.history[id ? "pushState" : "replaceState"](null, "", `${window.location.pathname}${qs ? `?${qs}` : ""}`);
-}
+export const setLeadParam = (id: string | null) => setUrlParam("lead", id);
 
 export const useOpenLead = () => setLeadParam;
 

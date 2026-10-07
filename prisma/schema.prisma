@@ -13,7 +13,7 @@ enum UserRole {
   ADMIN
   COACH
   CLIENT
-  AGENT // a team member who sees only the clients assigned to them (Client.weeklyCallAgentId)
+  AGENT // a team member who sees only the clients they account-manage (Client.accountManagerId)
 }
 
 enum Weekday {
@@ -29,6 +29,7 @@ enum Weekday {
 enum MeetingStatus {
   PENDING
   HELD
+  RESCHEDULED
   NOT_HELD
 }
 
@@ -38,7 +39,7 @@ enum ClientMood {
   AT_RISK
 }
 
-// A client's account health (lib/client-health.ts). Client.health is the
+// A client's account health (lib/client-health.ts). Client.healthOverride is the
 // coach's manual override; the computed one is shown next to it.
 enum ClientHealth {
   ON_TRACK
@@ -526,38 +527,65 @@ model ClientCycle {
   @@id([clientId, step])
 }
 
-// One account-manager call (lib/weekly-meetings.ts) — the "AmCall": created
-// PENDING the Monday after the call day (or ad hoc from "Log a call"), logged
-// by the account manager as HELD / NOT_HELD.
-// Client-facing: summary, nextSteps (one per line), nextMeetingAt. Team only —
-// never sent to a CLIENT: internalNotes (see CLIENT_CALL_SELECT).
-model WeeklyMeeting {
-  id                String        @id @default(cuid())
+// One account-manager call (lib/am-calls.ts). scheduledAt is the source of
+// truth — any day, any time. Each client with an account manager always has
+// one future PENDING call (from callDay / callTime / callFrequency); the call
+// person logs it HELD / NOT_HELD, or RESCHEDULED → a new PENDING call
+// (rescheduledFromId) at the new time.
+// Client-facing: summary, nextSteps, nextCallAt. Team only — never sent to a
+// CLIENT: internalNotes, outcome (CLIENT_CALL_SELECT).
+model AmCall {
+  id                String         @id @default(cuid())
   clientId          String
-  client            Client        @relation(fields: [clientId], references: [id])
-  weekOf            DateTime // the call day (Sydney midnight)
-  scheduledAt       DateTime?
-  agentId           String? // the account manager
-  agent             User?         @relation(fields: [agentId], references: [id])
-  status            MeetingStatus @default(PENDING)
-  summary           String?
-  internalNotes     String?
-  nextSteps         String?
-  clientMood        ClientMood? // the call's outcome
-  nextMeetingAt     DateTime?
+  client            Client         @relation(fields: [clientId], references: [id])
+  callPersonId      String?
+  callPerson        User?          @relation(fields: [callPersonId], references: [id])
+  scheduledAt       DateTime
+  status            MeetingStatus  @default(PENDING)
+  rescheduledFromId String? // the call this one replaced
+  rescheduleReason  String? // on the RESCHEDULED call: why it moved
   notHeldReason     String?
-  leadsDiscussed    String[]      @default([])
-  leadsReturned     String[]      @default([])
-  stepsDone         Int[]         @default([]) // indexes of nextSteps lines the client has ticked
+  summary           String?
+  nextSteps         String[]       @default([])
+  stepsDone         Int[]          @default([]) // indexes of nextSteps the client has ticked
+  internalNotes     String?
+  outcome           ClientMood?
+  nextCallAt        DateTime?
+  leadsDiscussed    String[]       @default([])
+  leadsReturned     String[]       @default([])
   durationMins      Int?
   clickupTaskId     String?
   emailedToClientAt DateTime?
-  submittedAt       DateTime?
+  loggedAt          DateTime?
   submittedBy       String?
-  createdAt         DateTime      @default(now())
+  createdAt         DateTime       @default(now())
+  reminders         CallReminder[]
 
-  @@unique([clientId, weekOf])
-  @@index([status, weekOf])
+  @@index([status, scheduledAt])
+  @@index([clientId, scheduledAt])
+}
+
+// What's been sent for a call, once each: the calendar invite, the day-after
+// "How did it go?" and the second reminder (lib/am-calls.ts).
+enum CallReminderKind {
+  INVITE
+  DAY_AFTER
+  SECOND
+}
+
+model CallReminder {
+  id     String           @id @default(cuid())
+  callId String
+  call   AmCall           @relation(fields: [callId], references: [id], onDelete: Cascade)
+  kind   CallReminderKind
+  sentAt DateTime         @default(now())
+
+  @@unique([callId, kind])
+}
+
+enum CallFrequency {
+  WEEKLY
+  FORTNIGHTLY
 }
 
 // Every action email sent (lib/email.tsx). actionToken is the signed link's
@@ -901,8 +929,8 @@ model User {
   // When this user last opened a client's Weekly status tab — a CLIENT login
   // sees "New" on the tab until they've seen the latest call.
   weeklyStatusViewedAt DateTime?
-  callClients   Client[]        @relation("WeeklyCallAgent")
-  meetings      WeeklyMeeting[]
+  callClients   Client[]        @relation("AccountManager")
+  calls         AmCall[]
 
   @@index([clientId])
 }
@@ -1008,13 +1036,15 @@ model Client {
   // TRADE clients' reports say "Onsite quote" / "Job won" instead of
   // "Quote" / "Sale" (lib/client-terms.ts).
   clientType       ClientType @default(OTHER)
-  // The account manager — who runs the weekly call with this client (AGENT /
-  // COACH / ADMIN) — and on which day (lib/weekly-meetings.ts). An AGENT sees
-  // only these clients.
-  weeklyCallAgentId String?
-  weeklyCallAgent   User?   @relation("WeeklyCallAgent", fields: [weeklyCallAgentId], references: [id])
-  weeklyCallDay     Weekday @default(FRIDAY)
-  health            ClientHealth? // manual override; null = computed (lib/client-health.ts)
+  // The account manager (AGENT / COACH / ADMIN) and their regular call slot
+  // (lib/am-calls.ts) — callTime is "HH:MM" Sydney. An AGENT sees only these
+  // clients.
+  accountManagerId String?
+  accountManager   User?         @relation("AccountManager", fields: [accountManagerId], references: [id])
+  callDay          Weekday       @default(FRIDAY)
+  callTime         String        @default("10:00")
+  callFrequency    CallFrequency @default(WEEKLY)
+  healthOverride   ClientHealth? // null = computed (lib/client-health.ts)
   // Coach overrides of the buying cycle, in days, e.g. { "quoteToClose": 45 }
   // (lib/buying-cycle.ts). Missing keys = learned, else the default.
   cycleOverrides   Json?
@@ -1030,7 +1060,7 @@ model Client {
   leads          Lead[]
   leadReminders  LeadReminder[]
   cycles         ClientCycle[]
-  meetings       WeeklyMeeting[]
+  calls          AmCall[]
   emailLogs      EmailLog[]
   dataAlerts     DataAlert[]
   weeklyUpdates  WeeklyUpdate[]

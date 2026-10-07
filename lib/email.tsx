@@ -31,6 +31,7 @@ type ActionEmail = {
   rows?: EmailRow[];
   button: string;
   footnote?: string; // why they're getting it
+  attachments?: { filename: string; content: string; contentType?: string }[]; // content = base64
 };
 
 // The app's palette (app/globals.css, light theme).
@@ -113,7 +114,14 @@ export async function sendActionEmail(e: ActionEmail): Promise<boolean> {
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ from: process.env.EMAIL_FROM, to, subject: e.subject, html, text }),
+    body: JSON.stringify({
+      from: process.env.EMAIL_FROM,
+      to,
+      subject: e.subject,
+      html,
+      text,
+      ...(e.attachments ? { attachments: e.attachments.map((a) => ({ filename: a.filename, content: a.content, content_type: a.contentType })) } : {}),
+    }),
   });
   if (!res.ok) throw new Error(`Resend ${res.status}: ${await res.text()}`);
   await prisma.emailLog.create({ data: { to, type: e.type, clientId: e.clientId, refIds: e.refIds, actionToken } });

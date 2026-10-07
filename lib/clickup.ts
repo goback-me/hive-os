@@ -184,6 +184,19 @@ export async function finishTask(taskId: string, description: string) {
   }
 }
 
+// Move a task's due date (a rescheduled call). Never throws.
+export async function setTaskDue(taskId: string, due: Date) {
+  const c = await config();
+  if (!c) return false;
+  try {
+    await call(c.key, `/task/${taskId}`, { method: "PUT", body: JSON.stringify({ due_date: due.getTime(), due_date_time: true }) });
+    return true;
+  } catch (e) {
+    await prisma.clickUpTaskLog.updateMany({ where: { taskId }, data: { status: "FAILED", error: `Due date failed: ${e instanceof Error ? e.message : e}`.slice(0, 300) } });
+    return false;
+  }
+}
+
 export async function commentOnTask(taskId: string, text: string) {
   const c = await config();
   if (!c) return false;

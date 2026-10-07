@@ -1,4 +1,5 @@
 import type { ClientHealth } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import { getMonthToDateVsLast, toneFor, type KpiValues } from "./kpi";
 
@@ -8,7 +9,7 @@ import { getMonthToDateVsLast, toneFor, type KpiValues } from "./kpi";
 //   kpis       most of this month's numbers are red vs the same days last month
 //   updates    a lead has waited 14+ days on the client's update
 //   alerts     an open DANGER data alert
-// Any one → AT_RISK, 3+ → CRITICAL. Client.health (a coach's override) wins,
+// Any one → AT_RISK, 3+ → CRITICAL. Client.healthOverride (a coach's) wins,
 // but both are shown.
 
 export type HealthSigns = { calls: boolean; outcome: boolean; kpis: boolean; updates: boolean; alerts: boolean };
@@ -33,31 +34,50 @@ export function kpisRed(current: KpiValues, previous: KpiValues) {
   return tones.length > 0 && tones.filter((t) => t === "red").length > tones.length / 2;
 }
 
-export async function getClientHealth(clientId: string, now = new Date()) {
+export type Health = { level: ClientHealth; reasons: string[]; override: ClientHealth | null; effective: ClientHealth };
+
+// "The last 2 calls weren't held": the two latest calls that were due (a
+// reschedule isn't one — its replacement is), both not HELD.
+export const lastTwoMissed = (statuses: string[]) => statuses.length >= 2 && statuses.slice(0, 2).every((s) => s !== "HELD");
+
+// Health for many clients in a few queries (My Calls, Account Management, the
+// portfolio). `kpisRedFor` skips the per-client KPI fetch when the caller
+// already has the numbers.
+export async function getClientsHealth(ids: string[], opts: { now?: Date; kpisRedFor?: Map<string, boolean> } = {}): Promise<Map<string, Health>> {
+  const now = opts.now ?? new Date();
+  if (!ids.length) return new Map();
   const cutoff = new Date(now.getTime() - 14 * 86_400_000);
-  const client = await prisma.client.findUniqueOrThrow({ where: { id: clientId }, select: { health: true, startDate: true } });
-  const [lastCalls, lastHeld, month, overdue, danger] = await Promise.all([
-    prisma.weeklyMeeting.findMany({ where: { clientId, weekOf: { lte: now } }, orderBy: { weekOf: "desc" }, take: 2, select: { status: true } }),
-    prisma.weeklyMeeting.findFirst({ where: { clientId, status: "HELD" }, orderBy: { weekOf: "desc" }, select: { clientMood: true } }),
-    getMonthToDateVsLast(clientId, now),
-    prisma.lead.count({
-      where: {
-        clientId,
-        deletedAt: null,
-        awaitingClientUpdate: true,
-        // Leads before the reporting start date don't count (lib/reporting-scope.ts).
-        ...(client.startDate ? { createdAt: { gte: client.startDate } } : {}),
-        OR: [{ handoverAt: { lte: cutoff } }, { handoverAt: null, createdAt: { lte: cutoff } }],
-      },
+  const [clients, calls, overdue, danger, kpis] = await Promise.all([
+    prisma.client.findMany({ where: { id: { in: ids } }, select: { id: true, healthOverride: true } }),
+    prisma.amCall.findMany({
+      where: { clientId: { in: ids }, scheduledAt: { lte: now, gte: new Date(now.getTime() - 120 * 86_400_000) }, status: { not: "RESCHEDULED" } },
+      orderBy: { scheduledAt: "desc" },
+      select: { clientId: true, status: true, outcome: true },
     }),
-    prisma.dataAlert.count({ where: { clientId, status: "OPEN", severity: "DANGER" } }),
+    // Leads before a client's reporting start date don't count (lib/reporting-scope.ts).
+    prisma.$queryRaw<{ clientId: string; n: bigint }[]>`
+      SELECT l."clientId", COUNT(*) AS n FROM "Lead" l JOIN "Client" c ON c.id = l."clientId"
+      WHERE l."clientId" IN (${Prisma.join(ids)}) AND l."deletedAt" IS NULL AND l."awaitingClientUpdate"
+        AND (c."startDate" IS NULL OR l."createdAt" >= c."startDate") AND COALESCE(l."handoverAt", l."createdAt") <= ${cutoff}
+      GROUP BY l."clientId"`,
+    prisma.dataAlert.groupBy({ by: ["clientId"], where: { clientId: { in: ids }, status: "OPEN", severity: "DANGER" }, _count: true }),
+    opts.kpisRedFor ?? Promise.all(ids.map(async (id) => [id, await getMonthToDateVsLast(id, now).then((m) => kpisRed(m.current, m.previous))] as const)).then((e) => new Map(e)),
   ]);
-  const computed = computeHealth({
-    calls: lastCalls.length === 2 && lastCalls.every((c) => c.status !== "HELD"),
-    outcome: lastHeld?.clientMood === "AT_RISK",
-    kpis: kpisRed(month.current, month.previous),
-    updates: overdue > 0,
-    alerts: danger > 0,
-  });
-  return { ...computed, override: client.health, effective: client.health ?? computed.level };
+  const overdueSet = new Set(overdue.map((o) => o.clientId));
+  const dangerSet = new Set(danger.map((d) => d.clientId));
+  return new Map(
+    clients.map((c) => {
+      const mine = calls.filter((x) => x.clientId === c.id);
+      const computed = computeHealth({
+        calls: lastTwoMissed(mine.map((x) => x.status)),
+        outcome: mine.find((x) => x.status === "HELD")?.outcome === "AT_RISK",
+        kpis: kpis.get(c.id) ?? false,
+        updates: overdueSet.has(c.id),
+        alerts: dangerSet.has(c.id),
+      });
+      return [c.id, { ...computed, override: c.healthOverride, effective: c.healthOverride ?? computed.level }];
+    })
+  );
 }
+
+export const getClientHealth = async (clientId: string, now = new Date()) => (await getClientsHealth([clientId], { now })).get(clientId)!;

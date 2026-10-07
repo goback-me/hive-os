@@ -3,11 +3,12 @@
 import { useState } from "react";
 // `internal` is only ever built for the team (getStatusCalls) — a CLIENT's
 // props never contain it.
-import type { StatusCall } from "@/lib/weekly-meetings";
+import type { StatusCall } from "@/lib/am-calls";
 
 export type EarlierUpdate = { id: string; weekOf: string; wins: string; issues: string; nextSteps: string; createdBy: string };
 
 const sydDate = (iso: string) => new Date(iso).toLocaleDateString("en-AU", { timeZone: "Australia/Sydney", weekday: "short", day: "numeric", month: "short" });
+const sydWhen = (iso: string) => new Date(iso).toLocaleString("en-AU", { timeZone: "Australia/Sydney", weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
 
 // The client's Weekly status tab: the account manager's held calls, newest
 // first — summary, next steps the client ticks off, next call. A call that
@@ -19,7 +20,7 @@ export default function WeeklyStatusPanel({
   canTick,
   seenByClient,
   onToggle,
-  onLogCall,
+  logCall,
   earlier,
 }: {
   calls: StatusCall[];
@@ -27,7 +28,7 @@ export default function WeeklyStatusPanel({
   canTick: boolean;
   seenByClient: boolean | null; // team only: has a client login opened the tab since the latest call
   onToggle?: (meetingId: string, index: number, done: boolean) => Promise<void>;
-  onLogCall?: () => Promise<void>;
+  logCall?: React.ReactNode; // team: the "Log call" button
   earlier: EarlierUpdate[];
 }) {
   const [done, setDone] = useState<Record<string, number[]>>(() => Object.fromEntries(calls.map((c) => [c.id, c.stepsDone])));
@@ -55,11 +56,7 @@ export default function WeeklyStatusPanel({
           </span>
           <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{nextCall ? `Next call: ${nextCall}` : "No call scheduled yet"}</p>
         </div>
-        {onLogCall && (
-          <form action={onLogCall}>
-            <button className="btn-gradient px-4 py-2 rounded-lg text-sm font-bold">Log call</button>
-          </form>
-        )}
+        {logCall}
       </div>
       {error && <p className="text-xs" style={{ color: "var(--danger)" }}>{error}</p>}
 
@@ -73,7 +70,7 @@ export default function WeeklyStatusPanel({
           <div key={c.id} className="card rounded-2xl p-5 space-y-3" style={latest ? { border: "2px solid var(--primary)" } : undefined}>
             <div className="flex items-center justify-between">
               <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
-                {sydDate(c.weekOf)}
+                {sydDate(c.scheduledAt)}
                 {c.amName && <span className="font-normal" style={{ color: "var(--text-muted)" }}> · {c.amName}</span>}
               </p>
               <div className="flex items-center gap-2">
@@ -88,6 +85,11 @@ export default function WeeklyStatusPanel({
 
             {c.status === "NOT_HELD" ? (
               <p className="text-sm" style={{ color: "var(--text-secondary)" }}>No call this week{c.internal?.reason ? ` — ${c.internal.reason}` : ""}</p>
+            ) : c.status === "RESCHEDULED" ? (
+              <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
+                Call moved{c.movedTo ? ` to ${sydWhen(c.movedTo)}` : ""}
+                {c.internal?.reason ? ` — ${c.internal.reason}` : ""}
+              </p>
             ) : (
               <>
                 {c.summary && <p className="text-sm whitespace-pre-wrap" style={{ color: "var(--text-secondary)" }}>{c.summary}</p>}
@@ -105,7 +107,7 @@ export default function WeeklyStatusPanel({
                     })}
                   </div>
                 )}
-                {c.nextMeetingAt && <p className="text-xs" style={{ color: "var(--text-muted)" }}>Next call: {sydDate(c.nextMeetingAt)}</p>}
+                {c.nextCallAt && <p className="text-xs" style={{ color: "var(--text-muted)" }}>Next call: {sydWhen(c.nextCallAt)}</p>}
               </>
             )}
 

@@ -45,7 +45,7 @@ export async function getPortfolio(report: ReportRange, now = new Date()): Promi
     prisma.dataAlert.groupBy({ by: ["clientId", "severity"], where: { clientId: { in: ids }, status: "OPEN" }, _count: true }),
     prisma.contactLog.groupBy({ by: ["clientId"], where: { clientId: { in: ids } }, _max: { contactedAt: true } }),
     getNeedsAction(),
-    prisma.weeklyMeeting.findMany({ where: { clientId: { in: ids }, status: "HELD" }, orderBy: { weekOf: "desc" }, distinct: ["clientId"], select: { clientId: true, weekOf: true, clientMood: true } }),
+    prisma.amCall.findMany({ where: { clientId: { in: ids }, status: "HELD" }, orderBy: { scheduledAt: "desc" }, distinct: ["clientId"], select: { clientId: true, scheduledAt: true, outcome: true } }),
   ]);
 
   const rows = await Promise.all(
@@ -68,7 +68,7 @@ export async function getPortfolio(report: ReportRange, now = new Date()): Promi
         dangerAlerts,
         needsAction: mine.filter((n) => n.severity !== "success").length,
         lastContact: last ? new Date(last).toISOString() : null,
-        lastMeeting: ((m) => (m ? { at: m.weekOf.toISOString(), mood: m.clientMood } : null))(meetings.find((x) => x.clientId === c.id)),
+        lastMeeting: ((m) => (m ? { at: m.scheduledAt.toISOString(), mood: m.outcome } : null))(meetings.find((x) => x.clientId === c.id)),
       };
     })
   );
