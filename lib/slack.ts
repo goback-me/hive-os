@@ -99,25 +99,6 @@ export async function queueLeadEvent(leadId: string, event: "sale" | "live_trans
   await queueSlack({ clientId: lead.clientId, channel: c.slackChannelId!, kind: event, dedupeKey: `${event}:${leadId}`, text });
 }
 
-export async function queueWeeklyUpdatePost(updateId: string) {
-  const u = await prisma.weeklyUpdate.findUnique({ where: { id: updateId } });
-  if (!u) return;
-  const c = await clientChannel(u.clientId, "weeklyUpdates");
-  if (!c) return;
-  const week = u.weekOf.toLocaleDateString("en-AU", { timeZone: "Australia/Sydney", day: "numeric", month: "short" });
-  const section = (label: string, body: string) => (body.trim() ? `*${label}*\n${body.trim()}` : null);
-  const text = [
-    `:memo: *Here's this week's update for ${c.name}* (week of ${week}, from ${u.createdBy})`,
-    section("What went well", u.wins),
-    section("What's getting in the way", u.issues),
-    section("What happens next", u.nextSteps),
-    `<${appUrl()}/clients/${c.slug}?tab=dashboard|See it in Hive HQ>`,
-  ]
-    .filter(Boolean)
-    .join("\n\n");
-  await queueSlack({ clientId: u.clientId, channel: c.slackChannelId!, kind: "weekly_update", dedupeKey: `weekly_update:${u.id}`, text });
-}
-
 export async function queueTestMessage(clientId: string) {
   const c = await prisma.client.findUnique({ where: { id: clientId }, select: { name: true, slackChannelId: true } });
   if (!c?.slackChannelId) throw new Error("Set a Slack channel ID first");

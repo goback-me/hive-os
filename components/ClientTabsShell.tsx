@@ -1,13 +1,22 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
 
 // The open tab is kept in the URL (?tab=leads) alongside the report range, so
-// a refresh or a shared link lands on the same tab and period.
-export default function ClientTabsShell({ tabs }: { tabs: { key: string; label: string; content: ReactNode; badge?: string }[] }) {
+// a refresh or a shared link lands on the same tab and period. A tab with
+// onOpen runs it when opened, and its badge (e.g. "New") clears.
+type Tab = { key: string; label: string; content: ReactNode; badge?: string; onOpen?: () => Promise<void> };
+export default function ClientTabsShell({ tabs }: { tabs: Tab[] }) {
   const fromUrl = useSearchParams().get("tab");
   const [active, setActiveState] = useState(tabs.some((t) => t.key === fromUrl) ? fromUrl! : tabs[0]?.key);
+  const [opened, setOpened] = useState<string[]>([]);
+  useEffect(() => {
+    const tab = tabs.find((t) => t.key === active);
+    if (!tab?.onOpen || opened.includes(tab.key)) return;
+    setOpened((o) => [...o, tab.key]);
+    tab.onOpen().catch(() => {});
+  }, [active]); // eslint-disable-line react-hooks/exhaustive-deps
   function setActive(key: string) {
     setActiveState(key);
     const params = new URLSearchParams(window.location.search);
@@ -35,7 +44,7 @@ export default function ClientTabsShell({ tabs }: { tabs: { key: string; label: 
             }}
           >
             {t.label}
-            {t.badge && (
+            {t.badge && !(t.onOpen && opened.includes(t.key)) && (
               <span className="ml-2 px-2 py-0.5 rounded-full text-[10px] font-bold align-middle" style={{ background: "var(--tag-amber-bg)", color: "var(--tag-amber-fg)" }}>
                 {t.badge}
               </span>

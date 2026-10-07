@@ -20,8 +20,6 @@ import {
   saveClientType,
   recheckClientHealth,
   logContact,
-  saveWeeklyUpdate,
-  getWeeklyDraft,
   saveClientIntegrations,
   sendSlackTest,
   createManualClickUpTask,
@@ -32,13 +30,16 @@ import {
   saveWeeklyCall,
   saveClientEmail,
   startCall,
+  toggleCallStep,
+  markWeeklyStatusViewed,
 } from "@/lib/actions";
+import WeeklyStatusPanel from "@/components/WeeklyStatusPanel";
 import { HEALTH_LABELS, getClientHealth } from "@/lib/client-health";
 import SetupChecklist, { type SetupItem } from "@/components/SetupChecklist";
 import { slackConfigured } from "@/lib/slack";
 import { emailConfigured } from "@/lib/email";
 import WeeklyCallCard from "@/components/WeeklyCallCard";
-import { MOOD_LABELS } from "@/lib/weekly-meetings";
+import { MOOD_LABELS, getStatusCalls, nextCallLabel } from "@/lib/weekly-meetings";
 import NoteAliasesCard from "@/components/NoteAliasesCard";
 import { parseAliases } from "@/lib/notes-parser";
 import { CYCLE_SAMPLE_NOUN, CYCLE_STEPS, CYCLE_STEP_LABELS, getClientCycle, parseCycleOverrides } from "@/lib/buying-cycle";
@@ -72,11 +73,9 @@ import GrowthPanel from "@/components/GrowthPanel";
 import HoldNote from "@/components/HoldNote";
 import ClientAlertsBanner from "@/components/ClientAlertsBanner";
 import ContactLogPanel from "@/components/ContactLogPanel";
-import WeeklyUpdatesPanel from "@/components/WeeklyUpdatesPanel";
 import { updatePanelWhere } from "@/lib/reminders";
 import IntegrationsCard from "@/components/IntegrationsCard";
 import { parseSlackEvents } from "@/lib/slack";
-import { weekStart } from "@/lib/weekly";
 import { reportsOnHold } from "@/lib/report-hold";
 
 // Forces this page to render fresh on every single request — no static
@@ -166,10 +165,20 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
     ? await prisma.dataAlert.findMany({ where: { clientId: client.id, status: "OPEN" }, orderBy: [{ severity: "asc" }, { lastSeenAt: "desc" }] })
     : [];
 
-  const [contacts, weeklyUpdates] = await Promise.all([
+  // Weekly status tab: logged calls (internal fields only for the team —
+  // getStatusCalls), the old weekly updates as history, and who's seen it.
+  const [contacts, weeklyUpdates, statusCalls, me, clientViews, amName] = await Promise.all([
     isCoach ? prisma.contactLog.findMany({ where: { clientId: client.id }, orderBy: { contactedAt: "desc" }, take: 10 }) : Promise.resolve([]),
     prisma.weeklyUpdate.findMany({ where: { clientId: client.id }, orderBy: { weekOf: "desc" }, take: 12 }),
+    getStatusCalls(client.id, viewer.role),
+    prisma.user.findUnique({ where: { clerkId: viewer.clerkId }, select: { weeklyStatusViewedAt: true } }),
+    isTeam ? prisma.user.findMany({ where: { clientId: client.id, role: "CLIENT" }, select: { weeklyStatusViewedAt: true } }) : Promise.resolve([]),
+    client.weeklyCallAgentId ? prisma.user.findUnique({ where: { id: client.weeklyCallAgentId }, select: { name: true } }).then((u) => u?.name ?? null) : Promise.resolve(null),
   ]);
+  const latestLogged = statusCalls.reduce<string | null>((max, c) => (c.submittedAt && (!max || c.submittedAt > max) ? c.submittedAt : max), null);
+  const seen = (at: Date | null | undefined) => !!latestLogged && !!at && at.toISOString() >= latestLogged;
+  const statusIsNew = viewer.role === "CLIENT" && !!latestLogged && !seen(me?.weeklyStatusViewedAt);
+  const lastHeld = statusCalls.find((c) => c.status === "HELD");
 
   const referrals = await prisma.referral.findMany({ where: { referralLinkId: referralLink.id }, orderBy: { createdAt: "desc" } });
 
@@ -199,15 +208,6 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
       <div className="grid grid-cols-3 gap-5">
         {/* Main column — the day-to-day, coaching-relevant activity */}
         <div className="col-span-2 space-y-5">
-          <WeeklyUpdatesPanel
-            clientId={client.id}
-            isCoach={isCoach}
-            currentWeekOf={weekStart().toISOString()}
-            initial={weeklyUpdates.map((u) => ({ id: u.id, weekOf: u.weekOf.toISOString(), wins: u.wins, issues: u.issues, nextSteps: u.nextSteps, createdBy: u.createdBy }))}
-            onDraft={isCoach ? getWeeklyDraft : undefined}
-            onSave={isCoach ? saveWeeklyUpdate : undefined}
-          />
-
           {clientSheet && <ClientUpdatesPanel clientId={client.id} onUpdateStage={updateLeadStage} />}
 
           <div className="card rounded-2xl p-5">
@@ -271,15 +271,6 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
             </dl>
           </div>
 
-          {isCoach && (
-            <ContactLogPanel
-              clientId={client.id}
-              me={viewer.name}
-              onLog={logContact}
-              initial={contacts.map((c) => ({ id: c.id, contactedAt: c.contactedAt.toISOString(), method: c.method, loggedBy: c.loggedBy, notes: c.notes, nextStep: c.nextStep, nextStepDue: c.nextStepDue?.toISOString() ?? null }))}
-            />
-          )}
-
           {isCoach && <ReportVisibilityCard clientId={client.id} initial={visibility} onSave={saveReportVisibility} />}
 
           {isCoach && (
@@ -290,19 +281,6 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
               onTest={sendSlackTest}
               onCreateTask={createManualClickUpTask}
               onCreateFolder={createClientClickUpFolder}
-            />
-          )}
-
-          {isTeam && (
-            <WeeklyCallCard
-              clientId={client.id}
-              clientSlug={client.slug}
-              agentId={client.weeklyCallAgentId}
-              day={client.weeklyCallDay}
-              health={client.health}
-              team={team}
-              meetings={meetings.map((m) => ({ id: m.id, weekOf: m.weekOf.toISOString(), status: m.status, mood: m.clientMood ? MOOD_LABELS[m.clientMood] : null }))}
-              onSave={saveWeeklyCall}
             />
           )}
 
@@ -346,6 +324,48 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
           </div>
         </div>
       </div>
+    </div>
+  );
+
+  const weeklyContent = (
+    <div className="grid grid-cols-3 gap-5">
+      <div className={isTeam ? "col-span-2" : "col-span-3"}>
+        <WeeklyStatusPanel
+          calls={statusCalls}
+          nextCall={nextCallLabel(new Date(), client.weeklyCallDay, lastHeld?.nextMeetingAt ? new Date(lastHeld.nextMeetingAt) : null, amName)}
+          canTick={viewer.role === "CLIENT"}
+          seenByClient={isTeam && clientViews.length ? clientViews.some((u) => seen(u.weeklyStatusViewedAt)) : null}
+          onToggle={viewer.role === "CLIENT" ? toggleCallStep : undefined}
+          onLogCall={isTeam ? startCall.bind(null, client.id) : undefined}
+          earlier={weeklyUpdates.map((u) => ({ id: u.id, weekOf: u.weekOf.toISOString(), wins: u.wins, issues: u.issues, nextSteps: u.nextSteps, createdBy: u.createdBy }))}
+        />
+      </div>
+      {isTeam && (
+        <div className="space-y-5">
+            {isTeam && (
+              <WeeklyCallCard
+                clientId={client.id}
+                clientSlug={client.slug}
+                agentId={client.weeklyCallAgentId}
+                day={client.weeklyCallDay}
+                health={client.health}
+                team={team}
+                meetings={meetings.map((m) => ({ id: m.id, weekOf: m.weekOf.toISOString(), status: m.status, mood: m.clientMood ? MOOD_LABELS[m.clientMood] : null }))}
+                onSave={saveWeeklyCall}
+              />
+            )}
+
+            {isCoach && (
+              <ContactLogPanel
+                clientId={client.id}
+                me={viewer.name}
+                onLog={logContact}
+                initial={contacts.map((c) => ({ id: c.id, contactedAt: c.contactedAt.toISOString(), method: c.method, loggedBy: c.loggedBy, notes: c.notes, nextStep: c.nextStep, nextStepDue: c.nextStepDue?.toISOString() ?? null }))}
+              />
+            )}
+
+        </div>
+      )}
     </div>
   );
 
@@ -537,6 +557,7 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
             content: dashboardContent,
             badge: awaitingUpdates ? `${awaitingUpdates} lead${awaitingUpdates === 1 ? " needs" : "s need"} an update` : undefined,
           },
+          { key: "weekly", label: "Weekly status", content: weeklyContent, badge: statusIsNew ? "New" : undefined, onOpen: statusIsNew ? markWeeklyStatusViewed : undefined },
           ...(clientSheet || isCoach ? [{ key: "leads", label: "Leads", content: leadsContent }] : []),
           { key: "growth", label: "Growth", content: hold ? <HoldNote /> : <GrowthPanel clientId={client.id} isCoach={isCoach} /> },
           { key: "gameplan", label: "Gameplan", content: gameplanContent },

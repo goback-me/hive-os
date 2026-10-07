@@ -7,7 +7,7 @@ type Events = { sales: boolean; liveTransfers: boolean; weeklyUpdates: boolean; 
 const EVENT_LABELS: Record<keyof Events, string> = {
   sales: "New sale",
   liveTransfers: "New live transfer",
-  weeklyUpdates: "Weekly update published",
+  weeklyUpdates: "Weekly call summary",
   dailyDigest: "Daily 8am digest",
 };
 type Result = { ok: true } | { error: string };

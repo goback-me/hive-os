@@ -548,6 +548,7 @@ model WeeklyMeeting {
   notHeldReason     String?
   leadsDiscussed    String[]      @default([])
   leadsReturned     String[]      @default([])
+  stepsDone         Int[]         @default([]) // indexes of nextSteps lines the client has ticked
   durationMins      Int?
   clickupTaskId     String?
   emailedToClientAt DateTime?
@@ -897,6 +898,9 @@ model User {
   createdAt DateTime @default(now())
   // This team member's ClickUp user id — weekly call tasks are assigned to it.
   clickupUserId String?
+  // When this user last opened a client's Weekly status tab — a CLIENT login
+  // sees "New" on the tab until they've seen the latest call.
+  weeklyStatusViewedAt DateTime?
   callClients   Client[]        @relation("WeeklyCallAgent")
   meetings      WeeklyMeeting[]
 

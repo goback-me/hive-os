@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { signActionToken, verifyActionToken, ACTION_TOKEN_DAYS } from "./action-token";
 import { canAccessClient, signInReturnUrl } from "./access";
-import { CLIENT_CALL_SELECT, TEAM_CALL_SELECT, callSelectFor, clientCallEmail, currentCallDate, meetingKey, meetingPath, meetingSchedule, meetingTaskUpdate, meetingsToCreate, previousCallDate, splitSteps } from "./weekly-meetings";
+import { CLIENT_CALL_SELECT, TEAM_CALL_SELECT, callSelectFor, clientCallEmail, currentCallDate, meetingKey, meetingPath, meetingSchedule, meetingTaskUpdate, meetingsToCreate, nextCallLabel, previousCallDate, splitSteps } from "./weekly-meetings";
 import { actionLink } from "./email";
 import { computeHealth, kpisRed } from "./client-health";
 import type { KpiValues } from "./kpi";
@@ -126,5 +126,13 @@ const half = (f: number): KpiValues => ({ ...k0, leads: k0.leads * f, liveTransf
 assert.equal(kpisRed(half(0.5), k0), true, "everything halved → red");
 assert.equal(kpisRed(k0, k0), false);
 assert.equal(kpisRed(k0, { ...k0, leads: 0, liveTransfers: 0, consultsBooked: 0, quotes: 0, sales: 0 }), false, "nothing to compare → not red");
+
+// ── Weekly status tab: "Next call: <date> with <AM>" ──
+const wed = new Date("2026-10-07T01:00:00Z"); // Wed 7 Oct, Sydney
+assert.match(nextCallLabel(wed, "FRIDAY", null, "Sam")!, /^Fri,? 9 Oct with Sam$/, "this week's call day, still ahead");
+assert.match(nextCallLabel(new Date("2026-10-10T01:00:00Z"), "FRIDAY", null, "Sam")!, /^Fri,? 16 Oct with Sam$/, "Saturday → next week's");
+assert.match(nextCallLabel(wed, "FRIDAY", new Date("2026-10-13T13:00:00Z"), "Sam")!, /^Wed,? 14 Oct with Sam$/, "the date the last call set wins");
+assert.match(nextCallLabel(wed, "FRIDAY", new Date("2026-09-30T14:00:00Z"), "Sam")!, /9 Oct/, "a past set date is ignored");
+assert.equal(nextCallLabel(wed, "FRIDAY", null, null), null, "no AM, no date → nothing");
 
 console.log("weekly-meetings: all checks passed");

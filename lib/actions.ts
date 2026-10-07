@@ -5,7 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
-import { requireAdmin, requireCoach, requireClientAccess } from "@/lib/auth";
+import { requireAdmin, requireCoach, requireClientAccess, requireUser } from "@/lib/auth";
 import { getClerkAdminClient } from "@/lib/clerk-admin";
 import { syncLeadsFromSheet, type SyncSummary } from "@/lib/lead-sync";
 import { HANDOVER_STAGES, isReturn, parseTarget, planStageEvents } from "@/lib/lead-status";
@@ -17,9 +17,8 @@ import { getMonthToDateVsLast, rebuildHistory } from "@/lib/kpi";
 import { reportsOnHold } from "@/lib/report-hold";
 import { sendActionEmail } from "@/lib/email";
 import { runHealthChecks } from "@/lib/data-health";
-import { draftWeeklyUpdate } from "@/lib/weekly";
-import { kickSlack, parseSlackEvents, queueLeadEvent, queueSlack, queueTestMessage, queueWeeklyUpdatePost } from "@/lib/slack";
-import { NOT_HELD_REASONS, WEEKDAYS, callDateLabel, clientCallEmail, currentCallDate, meetingPath, meetingTaskUpdate } from "@/lib/weekly-meetings";
+import { kickSlack, parseSlackEvents, queueLeadEvent, queueSlack, queueTestMessage } from "@/lib/slack";
+import { NOT_HELD_REASONS, WEEKDAYS, callDateLabel, clientCallEmail, currentCallDate, meetingPath, meetingTaskUpdate, splitSteps } from "@/lib/weekly-meetings";
 import { createClientFolder, ensureTask, finishTask } from "@/lib/clickup";
 import { sydneyLocalToDate } from "@/lib/sheet-parse";
 
@@ -451,6 +450,27 @@ export async function startCall(clientId: string) {
   redirect(meetingPath(client.slug, call.id));
 }
 
+// The client ticks off a next step from a held call (Weekly status tab).
+// Only the client's own logins tick; the team sees the ticks.
+export async function toggleCallStep(meetingId: string, index: number, done: boolean) {
+  const call = await prisma.weeklyMeeting.findUnique({ where: { id: meetingId }, select: { clientId: true, status: true, nextSteps: true, stepsDone: true } });
+  if (!call || call.status !== "HELD") throw new Error("Call not found");
+  const user = await requireClientAccess(call.clientId);
+  if (user.role !== "CLIENT") throw new Error("Only the client ticks off next steps");
+  if (!Number.isInteger(index) || index < 0 || index >= splitSteps(call.nextSteps).length) throw new Error("Invalid step");
+  const set = new Set(call.stepsDone);
+  if (done) set.add(index);
+  else set.delete(index);
+  await prisma.weeklyMeeting.update({ where: { id: meetingId }, data: { stepsDone: Array.from(set).sort((x, y) => x - y) } });
+  revalidatePath(`/clients`);
+}
+
+// The viewer opened the Weekly status tab — clears its "New" badge.
+export async function markWeeklyStatusViewed() {
+  const user = await requireUser();
+  await prisma.user.updateMany({ where: { clerkId: user.clerkId }, data: { weeklyStatusViewedAt: new Date() } });
+}
+
 export type MeetingInput = {
   held: boolean;
   summary: string;
@@ -474,7 +494,7 @@ export type MeetingInput = {
 // is raised, and the admin channel hears about it. Slack / ClickUp failures
 // never block the save.
 export async function submitWeeklyMeeting(meetingId: string, input: MeetingInput) {
-  const meeting = await prisma.weeklyMeeting.findUnique({ where: { id: meetingId }, include: { client: { select: { id: true, name: true, slug: true, slackChannelId: true, clientType: true, email: true, users: { where: { role: "CLIENT" }, select: { email: true } } } }, agent: { select: { name: true } } } });
+  const meeting = await prisma.weeklyMeeting.findUnique({ where: { id: meetingId }, include: { client: { select: { id: true, name: true, slug: true, slackChannelId: true, slackEvents: true, clientType: true, email: true, users: { where: { role: "CLIENT" }, select: { email: true } } } }, agent: { select: { name: true } } } });
   if (!meeting) throw new Error("Meeting not found");
   const user = await requireClientAccess(meeting.clientId);
   if (user.role !== "COACH") throw new Error("Only the team logs weekly calls");
@@ -528,7 +548,7 @@ export async function submitWeeklyMeeting(meetingId: string, input: MeetingInput
     await prisma.contactLog.create({
       data: { clientId: meeting.clientId, contactedAt: meeting.weekOf, method: "meeting", loggedBy: user.name, notes: text(input.summary), nextStep: text(input.nextSteps), nextStepDue: nextMeetingAt },
     });
-    if (meeting.client.slackChannelId) {
+    if (meeting.client.slackChannelId && parseSlackEvents(meeting.client.slackEvents).weeklyUpdates) {
       const t = [
         `:telephone_receiver: *Weekly call — ${callDateLabel(meeting.weekOf)}* (${user.name})`,
         input.summary.trim(),
@@ -576,26 +596,6 @@ export async function logContact(clientId: string, formData: FormData) {
     },
   });
   revalidatePath(`/clients`);
-}
-
-// Weekly status update: one per client per week (saving again edits it).
-export async function saveWeeklyUpdate(clientId: string, input: { weekOf: string; wins: string; issues: string; nextSteps: string }) {
-  const user = await requireCoach();
-  const weekOf = new Date(input.weekOf);
-  if (Number.isNaN(weekOf.getTime())) throw new Error("Invalid week");
-  const data = { wins: input.wins.trim(), issues: input.issues.trim(), nextSteps: input.nextSteps.trim(), createdBy: user.name };
-  if (!data.wins && !data.issues && !data.nextSteps) throw new Error("Write something first");
-  const saved = await prisma.weeklyUpdate.upsert({ where: { clientId_weekOf: { clientId, weekOf } }, create: { clientId, weekOf, ...data }, update: data });
-  // Posted to the client's Slack channel the first time it's published.
-  await queueWeeklyUpdatePost(saved.id).catch(() => {});
-  kickSlack();
-  revalidatePath(`/clients`);
-}
-
-// Pre-filled draft for this week (lib/weekly.ts).
-export async function getWeeklyDraft(clientId: string) {
-  await requireCoach();
-  return draftWeeklyUpdate(clientId);
 }
 
 // ── Slack + ClickUp per client (coach only) ─────────────────────────────

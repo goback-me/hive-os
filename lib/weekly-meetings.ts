@@ -191,3 +191,56 @@ export async function runMeetingJobs(now = new Date()) {
   }
   return out;
 }
+
+// ── Weekly status tab (app/(app)/clients/[slug]/page.tsx) ──────────────────
+
+// One logged call as the tab shows it. `internal` exists only for the team.
+export type StatusCall = {
+  id: string;
+  weekOf: string;
+  status: "HELD" | "NOT_HELD";
+  amName: string | null;
+  summary: string | null;
+  steps: string[];
+  stepsDone: number[];
+  nextMeetingAt: string | null;
+  submittedAt: string | null;
+  internal?: { notes: string | null; outcome: string | null; reason: string | null };
+};
+
+type ClientRow = Prisma.WeeklyMeetingGetPayload<{ select: typeof CLIENT_CALL_SELECT & { stepsDone: true } }>;
+const toStatus = (c: ClientRow): StatusCall => ({
+  id: c.id,
+  weekOf: c.weekOf.toISOString(),
+  status: c.status as StatusCall["status"],
+  amName: c.agent?.name ?? null,
+  summary: c.status === "HELD" ? c.summary : null,
+  steps: c.status === "HELD" ? splitSteps(c.nextSteps) : [],
+  stepsDone: c.stepsDone,
+  nextMeetingAt: c.nextMeetingAt?.toISOString() ?? null,
+  submittedAt: c.submittedAt?.toISOString() ?? null,
+});
+
+// Logged calls, newest first. A CLIENT's query never selects internalNotes,
+// the outcome or the not-held reason.
+export async function getStatusCalls(clientId: string, role: "COACH" | "CLIENT", take = 26): Promise<StatusCall[]> {
+  const where = { clientId, status: { in: ["HELD", "NOT_HELD"] as MeetingStatus[] } };
+  if (role === "CLIENT") {
+    return (await prisma.weeklyMeeting.findMany({ where, orderBy: { weekOf: "desc" }, take, select: { ...CLIENT_CALL_SELECT, stepsDone: true } })).map(toStatus);
+  }
+  const rows = await prisma.weeklyMeeting.findMany({ where, orderBy: { weekOf: "desc" }, take, select: { ...TEAM_CALL_SELECT, stepsDone: true } });
+  return rows.map((c) => ({ ...toStatus(c), internal: { notes: c.internalNotes, outcome: c.clientMood ? MOOD_LABELS[c.clientMood] : null, reason: c.notHeldReason } }));
+}
+
+// "Fri 17 Oct with Sam": the date the last call set, if it's still ahead,
+// else the next regular call day (this week's if not past). No account
+// manager and no date set → null.
+export function nextCallLabel(now: Date, day: Weekday, setDate: Date | null, amName: string | null) {
+  const today = sydneyDay(now);
+  let d: Date | null = setDate && sydneyDay(setDate) >= today ? setDate : null;
+  if (!d && amName) {
+    const thisWeek = currentCallDate(now, day);
+    d = sydneyDay(thisWeek) >= today ? thisWeek : sydneyDayPlus(thisWeek, 7);
+  }
+  return d ? `${callDateLabel(d)}${amName ? ` with ${amName}` : ""}` : null;
+}
