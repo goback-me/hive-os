@@ -11,6 +11,10 @@ export default function ClientTabsShell({ tabs }: { tabs: Tab[] }) {
   const fromUrl = useSearchParams().get("tab");
   const [active, setActiveState] = useState(tabs.some((t) => t.key === fromUrl) ? fromUrl! : tabs[0]?.key);
   const [opened, setOpened] = useState<string[]>([]);
+  // The sidebar links straight to a tab (?tab=leads) — follow it.
+  useEffect(() => {
+    if (fromUrl && fromUrl !== active && tabs.some((t) => t.key === fromUrl)) setActiveState(fromUrl);
+  }, [fromUrl]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     const tab = tabs.find((t) => t.key === active);
     if (!tab?.onOpen || opened.includes(tab.key)) return;

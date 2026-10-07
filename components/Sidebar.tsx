@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import ThemeToggle from "./ThemeToggle";
 import AlertBell from "./AlertBell";
 import { SignOutButton } from "@clerk/nextjs";
@@ -19,13 +19,22 @@ const COACH_NAV_ITEMS = [
 
 // callsToUpdate = the viewer's calls past their time and not logged yet
 // (lib/am-calls.ts) — the red badge on My Calls.
-export default function Sidebar({ user, callsToUpdate = 0 }: { user: { name: string; role: "COACH" | "CLIENT"; isAgent?: boolean }; callsToUpdate?: number }) {
+// A client's own portal, one item per tab of their client page.
+const clientNav = (slug: string) => [
+  { href: `/clients/${slug}?tab=dashboard`, label: "Dashboard", icon: "space_dashboard", tab: "dashboard" },
+  { href: `/clients/${slug}?tab=leads`, label: "Leads", icon: "person_search", tab: "leads" },
+  { href: `/clients/${slug}?tab=weekly`, label: "Weekly status", icon: "event_note", tab: "weekly" },
+];
+
+export default function Sidebar({ user, callsToUpdate = 0 }: { user: { name: string; role: "COACH" | "CLIENT"; isAgent?: boolean; clientSlug?: string | null }; callsToUpdate?: number }) {
   const pathname = usePathname();
+  const tab = useSearchParams().get("tab") ?? "dashboard";
   // A client login only ever has their own client page — no cross-client
   // nav items are rendered for them at all, not just hidden via CSS.
   // An agent gets their calls, their client list, Account Management (their
   // clients) and Leads only.
-  const navItems = user.role !== "COACH" ? [] : user.isAgent ? COACH_NAV_ITEMS.filter((i) => ["/my-calls", "/clients", "/account-management", "/leads"].includes(i.href)) : COACH_NAV_ITEMS;
+  const navItems: { href: string; label: string; icon: string; tab?: string }[] =
+    user.role !== "COACH" ? (user.clientSlug ? clientNav(user.clientSlug) : []) : user.isAgent ? COACH_NAV_ITEMS.filter((i) => ["/my-calls", "/clients", "/account-management", "/leads"].includes(i.href)) : COACH_NAV_ITEMS;
 
   return (
     <aside
@@ -42,7 +51,7 @@ export default function Sidebar({ user, callsToUpdate = 0 }: { user: { name: str
 
       <nav className="flex-1 space-y-1">
         {navItems.map((item) => {
-          const active = pathname === item.href || pathname?.startsWith(item.href + "/");
+          const active = item.tab ? tab === item.tab : pathname === item.href || pathname?.startsWith(item.href + "/");
           return (
             <Link
               key={item.href}

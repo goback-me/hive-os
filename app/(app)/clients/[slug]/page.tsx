@@ -60,7 +60,7 @@ import ReportVisibilityCard from "@/components/ReportVisibilityCard";
 import LeadsPanel from "@/components/LeadsPanel";
 import ClientTabsShell from "@/components/ClientTabsShell";
 import OnboardingChecklist from "@/components/OnboardingChecklist";
-import GameplanPanel from "@/components/GameplanPanel";
+import DriveLinkButton from "@/components/DriveLinkButton";
 import PlaybooksPanel from "@/components/PlaybooksPanel";
 import AdsPanel from "@/components/AdsPanel";
 import AwardsPanel from "@/components/AwardsPanel";
@@ -407,9 +407,6 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
     />
   );
 
-  const gameplanContent = (
-    <GameplanPanel clientId={client.id} currentLink={client.gameplanFigmaLink} onSave={saveGameplanLink} />
-  );
 
   const playbooksContent = (
     <PlaybooksPanel
@@ -509,17 +506,7 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
                 <span className="material-symbols-outlined text-[14px]">check_circle</span> Onboarding completed
               </span>
             )}
-            {client.gameplanFigmaLink && (
-              <a
-                href={client.gameplanFigmaLink}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="px-2.5 py-1 rounded-full text-xs font-bold flex items-center gap-1"
-                style={{ border: "1px solid var(--border)", color: "var(--text-primary)" }}
-              >
-                <span className="material-symbols-outlined text-[14px]">folder_open</span> Google Drive
-              </a>
-            )}
+            <DriveLinkButton clientId={client.id} link={client.gameplanFigmaLink} canEdit={isTeam} onSave={saveGameplanLink} />
           </div>
         </div>
       </div>
@@ -564,7 +551,7 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
           { key: "weekly", label: "Weekly status", content: weeklyContent, badge: statusIsNew ? "New" : undefined, onOpen: statusIsNew ? markWeeklyStatusViewed : undefined },
           ...(clientSheet || isCoach ? [{ key: "leads", label: "Leads", content: leadsContent }] : []),
           { key: "growth", label: "Growth", content: hold ? <HoldNote /> : <GrowthPanel clientId={client.id} isCoach={isCoach} maxFrom={maxFrom} /> },
-          { key: "gameplan", label: "Gameplan", content: gameplanContent },
+          // Gameplan tab removed for now — the Drive folder is the header button.
           { key: "playbooks", label: "Playbooks", content: playbooksContent },
           { key: "ads", label: "Ads", content: adsContent },
           { key: "awards", label: "Awards", content: awardsContent },

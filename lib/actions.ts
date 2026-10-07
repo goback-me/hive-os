@@ -291,10 +291,12 @@ export async function addLeadNote(leadId: string, formData: FormData) {
   revalidatePath(`/clients`);
 }
 
-// ── Gameplan (Drive embed) ───────────────────────────────────────────────
+// ── Google Drive link (client page header — components/DriveLinkButton.tsx) ──
 export async function saveGameplanLink(clientId: string, formData: FormData) {
-  await requireClientAccess(clientId);
+  const user = await requireClientAccess(clientId);
+  if (user.role !== "COACH") throw new Error("Only the Hive team can change the Drive link");
   const link = String(formData.get("figmaLink") || "").trim();
+  if (link && !/^https:\/\/(?:drive|docs)\.google\.com\//.test(link)) throw new Error("That doesn't look like a Google Drive / Docs link");
   await prisma.client.update({ where: { id: clientId }, data: { gameplanFigmaLink: link || null } });
   revalidatePath(`/clients`);
 }

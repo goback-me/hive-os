@@ -146,7 +146,8 @@ export default function LeadsPanel({
   // Handed to the client and waiting on their update.
   const [awaitingFilter, setAwaitingFilter] = useState(false);
   const [awaitingCount, setAwaitingCount] = useState(0);
-  const [showAll, setShowAll] = useState(false);
+  // A client sees all their leads (paged); the team starts on a preview.
+  const [showAll, setShowAll] = useState(!isCoach);
   const pageSize = showAll ? PAGE_SIZE : PREVIEW_SIZE;
   const [loadingLeads, setLoadingLeads] = useState(false);
   const [leadsLoaded, setLeadsLoaded] = useState(false); // false until the first page arrives

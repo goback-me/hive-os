@@ -13,7 +13,9 @@ export default async function AppGroupLayout({ children }: { children: ReactNode
 
   return (
     <>
-      <Sidebar user={{ name: user.name, role: user.role, isAgent: user.isAgent }} callsToUpdate={callsToUpdate} />
+      <Suspense fallback={null}>
+        <Sidebar user={{ name: user.name, role: user.role, isAgent: user.isAgent, clientSlug: user.clientSlug }} callsToUpdate={callsToUpdate} />
+      </Suspense>
       <main className="ml-64 min-h-screen">{children}</main>
       {/* Side panels on any page: ?lead=<id> (components/LeadLink.tsx) and
           ?update=<callId> (components/CallUpdatePanel.tsx). */}
