@@ -118,6 +118,9 @@ export default function AdsPanel({ clientId, isCoach, onSetReporting, maxFrom }:
             Each lead and everything it led to — live transfers, bookings, quotes, sales — is credited to the campaign that generated it, counted when it happened in this period. Revenue is dated by the won date.
           </p>
 
+          {/* Jobs won — same panel as Leads → Sales, on the same range: after the campaign table, before the campaign ticks + Meta connection. */}
+          <SalesPanel clientId={clientId} rangeQuery={rangeQuery} rangeLabel={rangeLabel} isCoach={isCoach} reloadKey={0} />
+
           {isCoach && data.campaigns && (
             <div className="card rounded-2xl p-5">
               <button onClick={() => setShowTicks((s) => !s)} className="w-full flex items-center justify-between text-left">
@@ -151,9 +154,6 @@ export default function AdsPanel({ clientId, isCoach, onSetReporting, maxFrom }:
           )}
         </div>
       )}
-
-      {/* Jobs won — same panel as Leads → Sales, on the same range; sits just above the Meta connection. */}
-      <SalesPanel clientId={clientId} rangeQuery={rangeQuery} rangeLabel={rangeLabel} isCoach={isCoach} reloadKey={0} />
     </div>
   );
 }
