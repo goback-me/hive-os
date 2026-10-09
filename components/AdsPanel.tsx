@@ -77,8 +77,6 @@ export default function AdsPanel({ clientId, isCoach, onSetReporting, maxFrom }:
 
       {/* Campaign performance — revenue, spend, profit, ROI (moved here from the Leads tab). */}
       <ProfitRoiPanel clientId={clientId} rangeQuery={rangeQuery} rangeLabel={rangeLabel} isCoach={isCoach} />
-      {/* Jobs won — same panel as Leads → Sales, on the same range. */}
-      <SalesPanel clientId={clientId} rangeQuery={rangeQuery} rangeLabel={rangeLabel} isCoach={isCoach} reloadKey={0} />
 
       {!data ? (
         <div className="card rounded-2xl p-5"><span className="skeleton h-4 w-40 block mb-4" /><span className="skeleton h-24 w-full block" /></div>
@@ -153,6 +151,9 @@ export default function AdsPanel({ clientId, isCoach, onSetReporting, maxFrom }:
           )}
         </div>
       )}
+
+      {/* Jobs won — same panel as Leads → Sales, on the same range; sits just above the Meta connection. */}
+      <SalesPanel clientId={clientId} rangeQuery={rangeQuery} rangeLabel={rangeLabel} isCoach={isCoach} reloadKey={0} />
     </div>
   );
 }
