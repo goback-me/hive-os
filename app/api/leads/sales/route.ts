@@ -3,7 +3,7 @@ import { requireUser, canAccessClient } from "@/lib/auth";
 import { holdResponse } from "@/lib/report-hold";
 import { getReportVisibility } from "@/lib/client-stats";
 import { getSales } from "@/lib/sales";
-import { rangeFromParams } from "@/lib/date-range";
+import { previousReportRange, rangeFromParams } from "@/lib/date-range";
 
 // Leads tab → Sales section (components/SalesPanel.tsx). Costs are left out
 // for a CLIENT when cost metrics are hidden.
@@ -19,5 +19,6 @@ export async function GET(req: NextRequest) {
   if (hold) return hold;
 
   const visibility = await getReportVisibility(clientId);
-  return NextResponse.json(await getSales(clientId, rangeFromParams(req.nextUrl.searchParams).range, user, visibility));
+  const { range, report } = rangeFromParams(req.nextUrl.searchParams);
+  return NextResponse.json(await getSales(clientId, range, user, visibility, previousReportRange(report)));
 }

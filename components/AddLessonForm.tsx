@@ -3,6 +3,7 @@
 import { useEffect, useRef, type RefObject } from "react";
 import { useFormState, useFormStatus } from "react-dom";
 import { createLesson, type CreateLessonState } from "@/lib/actions";
+import { RichTextEditor } from "@/components/RichText";
 
 // Lives inside the <form> so useFormStatus can see it. Resets the
 // (uncontrolled) inputs after a successful submit — needed now that the
@@ -53,7 +54,7 @@ export default function AddLessonForm({ modules }: { modules: { id: string; titl
         style={inputStyle}
         className="px-3 py-2 rounded-lg outline-none text-sm"
       />
-      <textarea name="content" placeholder="Written content (optional)" rows={3} style={inputStyle} className="px-3 py-2 rounded-lg outline-none text-sm resize-none" />
+      <RichTextEditor name="content" placeholder="Written content (optional) — headings, lists, links, images, videos…" />
       {state?.error && (
         <p className="text-xs" style={{ color: "var(--danger)" }}>
           {state.error}

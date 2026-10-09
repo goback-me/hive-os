@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useTransition } from "react";
 import { createPortal, useFormState, useFormStatus } from "react-dom";
 import type { CreateLessonState } from "@/lib/actions";
+import { RichContent, RichTextEditor, embedUrl } from "@/components/RichText";
 
 type Lesson = { id: string; title: string; videoUrl: string | null; content: string | null };
 type ModuleWithLessons = { id: string; title: string; lessons: Lesson[] };
@@ -61,13 +62,6 @@ export default function PlaybooksPanel({
     startTransition(() => {
       onToggle(clientId, lessonId, willComplete);
     });
-  }
-
-  function embedUrl(url: string) {
-    const yt = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([\w-]+)/);
-    if (yt) return `https://www.youtube.com/embed/${yt[1]}`;
-    if (url.includes("loom.com/share/")) return url.replace("/share/", "/embed/");
-    return url;
   }
 
   return (
@@ -161,21 +155,25 @@ export default function PlaybooksPanel({
           style={{ background: "rgba(0,0,0,0.6)" }}
           onClick={() => setOpenLesson(null)}
         >
-          <div className="card rounded-2xl overflow-hidden" style={{ width: "100%", maxWidth: 700 }} onClick={(e) => e.stopPropagation()}>
-            <div className="p-4 flex justify-between items-center" style={{ borderBottom: "1px solid var(--border)" }}>
-              <p className="font-semibold" style={{ color: "var(--text-primary)" }}>{openLesson.title}</p>
+          <div className="card rounded-2xl overflow-hidden flex flex-col" style={{ width: "100%", maxWidth: 820, maxHeight: "90vh" }} onClick={(e) => e.stopPropagation()}>
+            <div className="p-4 flex justify-between items-center shrink-0" style={{ borderBottom: "1px solid var(--border)" }}>
+              <p className="font-heading font-bold text-lg" style={{ color: "var(--text-primary)" }}>{openLesson.title}</p>
               <button onClick={() => setOpenLesson(null)} style={{ color: "var(--text-muted)" }}>
                 <span className="material-symbols-outlined">close</span>
               </button>
             </div>
-            {openLesson.videoUrl && (
-              <div style={{ aspectRatio: "16/9" }}>
-                <iframe src={embedUrl(openLesson.videoUrl)} style={{ width: "100%", height: "100%", border: "none" }} allowFullScreen />
-              </div>
-            )}
-            {openLesson.content && (
-              <div className="p-5 text-sm" style={{ color: "var(--text-secondary)" }}>{openLesson.content}</div>
-            )}
+            <div className="overflow-y-auto">
+              {openLesson.videoUrl && (
+                <div style={{ aspectRatio: "16/9" }}>
+                  <iframe src={embedUrl(openLesson.videoUrl)} style={{ width: "100%", height: "100%", border: "none" }} allowFullScreen />
+                </div>
+              )}
+              {openLesson.content && (
+                <div className="px-8 py-6">
+                  <RichContent html={openLesson.content} />
+                </div>
+              )}
+            </div>
           </div>
         </div>,
         document.body
@@ -210,7 +208,7 @@ export default function PlaybooksPanel({
 
       {addOpen === "lesson" && mounted && createPortal(
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.6)" }} onClick={() => setAddOpen(null)}>
-          <div className="card rounded-2xl overflow-hidden" style={{ width: "100%", maxWidth: 480 }} onClick={(e) => e.stopPropagation()}>
+          <div className="card rounded-2xl overflow-y-auto" style={{ width: "100%", maxWidth: 720, maxHeight: "90vh" }} onClick={(e) => e.stopPropagation()}>
             <div className="p-5 flex justify-between items-center" style={{ borderBottom: "1px solid var(--border)" }}>
               <h3 className="font-heading font-bold text-lg" style={{ color: "var(--text-primary)" }}>Add lesson</h3>
               <button onClick={() => setAddOpen(null)} style={{ color: "var(--text-muted)" }}>
@@ -235,7 +233,7 @@ export default function PlaybooksPanel({
               </div>
               <div>
                 <label className="text-xs font-semibold block mb-1" style={{ color: "var(--text-secondary)" }}>Written content (optional)</label>
-                <textarea name="content" rows={3} style={{ width: "100%", background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }} className="px-3 py-2 rounded-lg outline-none text-sm resize-none" />
+                <RichTextEditor name="content" />
               </div>
               {lessonState?.error && (
                 <p className="text-xs" style={{ color: "var(--danger)" }}>{lessonState.error}</p>

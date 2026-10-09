@@ -60,14 +60,14 @@ export default function SalesPanel({ clientId, rangeQuery, rangeLabel, isCoach, 
       <div className="flex items-center justify-between gap-3 mb-4">
         <div>
           <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{t.sales}</p>
-          <p className="text-[11px] mt-0.5" style={{ color: "var(--text-muted)" }}>Won leads, dated by when they were won · table: {rangeLabel}</p>
+          <p className="text-[11px] mt-0.5" style={{ color: "var(--text-muted)" }}>Won leads, dated by when they were won · {rangeLabel}</p>
         </div>
         {loading && <span className="material-symbols-outlined text-[18px] animate-spin" style={{ color: "var(--text-muted)" }}>progress_activity</span>}
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5 transition-opacity" style={{ opacity: loading ? 0.55 : 1 }}>
-        <CompareCard icon="handshake" label={`${t.sales} this month`} value={s.thisMonth.count.toLocaleString()} diff={s.thisMonth.count - s.lastMonthToDate.count} diffText={(d) => Math.abs(d).toLocaleString()} tone={s.tone.count} compare={`${s.compareLabel}: ${s.lastMonthToDate.count}`} sub={`Last month ${s.lastMonth.count} · Lifetime ${s.lifetime.count}`} />
-        <CompareCard icon="payments" label="Revenue this month" value={money(s.thisMonth.revenue)} diff={s.thisMonth.revenue - s.lastMonthToDate.revenue} diffText={(d) => money(Math.abs(d))} tone={s.tone.revenue} compare={`${s.compareLabel}: ${money(s.lastMonthToDate.revenue)}`} sub={`Last month ${money(s.lastMonth.revenue)} · Lifetime ${money(s.lifetime.revenue)}`} />
+        <CompareCard icon="handshake" label={t.sales} value={s.current.count.toLocaleString()} diff={s.previous ? s.current.count - s.previous.count : 0} diffText={(d) => Math.abs(d).toLocaleString()} tone={s.tone.count} compare={s.previous ? `${s.compareLabel}: ${s.previous.count}` : rangeLabel} sub={s.previous ? `${rangeLabel} · Lifetime ${s.lifetime.count}` : ""} />
+        <CompareCard icon="payments" label="Revenue" value={money(s.current.revenue)} diff={s.previous ? s.current.revenue - s.previous.revenue : 0} diffText={(d) => money(Math.abs(d))} tone={s.tone.revenue} compare={s.previous ? `${s.compareLabel}: ${money(s.previous.revenue)}` : rangeLabel} sub={s.previous ? `${rangeLabel} · Lifetime ${money(s.lifetime.revenue)}` : ""} />
         {showCost && (
           <Card icon="price_check" label={`Cost per ${t.sale.toLowerCase()}`} badge={costBadge}>
             <p className="font-heading font-bold text-2xl" style={{ color: "var(--text-primary)" }}>{money(s.costPerSale)}</p>

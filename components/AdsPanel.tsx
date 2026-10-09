@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { StartDateWarning } from "@/components/StartDateField";
 import DateRangePicker, { useReportRange } from "@/components/DateRangePicker";
+import SalesPanel from "@/components/SalesPanel";
 import ProfitRoiPanel from "@/components/ProfitRoiPanel";
 import HiddenBadge from "@/components/HiddenBadge";
 import { reportRangeLabel, reportRangeQuery } from "@/lib/date-range";
@@ -76,6 +77,8 @@ export default function AdsPanel({ clientId, isCoach, onSetReporting, maxFrom }:
 
       {/* Campaign performance — revenue, spend, profit, ROI (moved here from the Leads tab). */}
       <ProfitRoiPanel clientId={clientId} rangeQuery={rangeQuery} rangeLabel={rangeLabel} isCoach={isCoach} />
+      {/* Jobs won — same panel as Leads → Sales, on the same range. */}
+      <SalesPanel clientId={clientId} rangeQuery={rangeQuery} rangeLabel={rangeLabel} isCoach={isCoach} reloadKey={0} />
 
       {!data ? (
         <div className="card rounded-2xl p-5"><span className="skeleton h-4 w-40 block mb-4" /><span className="skeleton h-24 w-full block" /></div>

@@ -1,8 +1,8 @@
 "use client";
 
 import { useFormState } from "react-dom";
-import { useState } from "react";
-import { createUser, deleteUser, saveUserClickUp } from "@/lib/actions";
+import { useState, useTransition } from "react";
+import { createUser, deleteUser, saveUserClickUp, updateUser } from "@/lib/actions";
 import type { CreateClientState } from "@/lib/actions";
 import AddClientModal from "../clients/AddClientModal";
 
@@ -50,6 +50,7 @@ export default function UsersPanel({
 }) {
   const [state, formAction] = useFormState(createUserAction, null);
   const [role, setRole] = useState<UserRow["role"]>("CLIENT");
+  const [editing, setEditing] = useState<string | null>(null);
 
   return (
     <section className="card rounded-2xl p-6">
@@ -65,6 +66,9 @@ export default function UsersPanel({
 
       <div className="space-y-2 mb-5">
         {users.map((u) => (
+          editing === u.id ? (
+            <EditUserRow key={u.id} user={u} onDone={() => setEditing(null)} />
+          ) : (
           <div key={u.id} className="flex items-center justify-between rounded-lg p-3" style={{ background: "var(--surface)" }}>
             <div>
               <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>
@@ -87,6 +91,15 @@ export default function UsersPanel({
                 {clickupMembers.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
               </select>
             )}
+            {(u.role !== "ADMIN" || canManageAdmins) && (
+              <button
+                onClick={() => setEditing(u.id)}
+                className={`text-xs font-semibold px-3 py-1.5 rounded-lg mr-2 ${u.role !== "CLIENT" && clickupMembers ? "" : "ml-auto"}`}
+                style={{ color: "var(--text-secondary)", border: "1px solid var(--border-strong)" }}
+              >
+                Edit
+              </button>
+            )}
             {(u.role !== "ADMIN" || canManageAdmins) && <form action={deleteUser.bind(null, u.id)}>
               <button
                 type="submit"
@@ -97,6 +110,7 @@ export default function UsersPanel({
               </button>
             </form>}
           </div>
+          )
         ))}
         {users.length === 0 && <p className="text-sm" style={{ color: "var(--text-secondary)" }}>No users yet.</p>}
       </div>
@@ -163,5 +177,35 @@ export default function UsersPanel({
         </button>
       </form>
     </section>
+  );
+}
+// Inline edit of a login's name / email (lib/actions.ts updateUser).
+function EditUserRow({ user, onDone }: { user: UserRow; onDone: () => void }) {
+  const [name, setName] = useState(user.name);
+  const [email, setEmail] = useState(user.email);
+  const [error, setError] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
+  const inputStyle = { background: "var(--surface-card)", border: "1px solid var(--border)", color: "var(--text-primary)" };
+
+  function save() {
+    setError(null);
+    startTransition(async () => {
+      const result = await updateUser(user.id, name, email).catch((e) => ({ error: e instanceof Error ? e.message : "Couldn't save" }));
+      if (result?.error) setError(result.error);
+      else onDone();
+    });
+  }
+
+  return (
+    <div className="rounded-lg p-3 space-y-2" style={{ background: "var(--surface)" }}>
+      <div className="flex gap-2 flex-wrap">
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Full name" aria-label="Name" className="flex-1 min-w-[160px] px-3 py-2 rounded-lg outline-none text-sm" style={inputStyle} />
+        <input value={email} onChange={(e) => setEmail(e.target.value)} type="email" placeholder="Email" aria-label="Email" className="flex-1 min-w-[200px] px-3 py-2 rounded-lg outline-none text-sm" style={inputStyle} />
+        <button onClick={onDone} disabled={pending} className="px-3 py-2 rounded-lg text-xs font-semibold" style={{ border: "1px solid var(--border)", color: "var(--text-secondary)" }}>Cancel</button>
+        <button onClick={save} disabled={pending} className="px-3 py-2 rounded-lg text-xs font-bold disabled:opacity-50" style={{ background: "var(--primary)", color: "#fff" }}>{pending ? "Saving…" : "Save"}</button>
+      </div>
+      {email.trim().toLowerCase() !== user.email && <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>They&apos;ll sign in with the new email from now on — their password stays the same.</p>}
+      {error && <p className="text-xs" style={{ color: "var(--danger)" }}>{error}</p>}
+    </div>
   );
 }

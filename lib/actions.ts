@@ -1268,6 +1268,43 @@ export async function saveUserClickUp(userId: string, clickupUserId: string | nu
   revalidatePath("/settings");
 }
 
+// Coach-only (an admin's row: admin-only, like deleteUser): rename a login
+// or change its email. Clerk first — it's the source of truth for sign-in —
+// then the Prisma mirror. A new email is added verified + primary and the old
+// one removed, so they sign in with the new address from now on.
+export async function updateUser(userId: string, name: string, email: string): Promise<{ error: string } | null> {
+  const me = await requireCoach();
+  name = name.trim();
+  email = email.trim().toLowerCase();
+  if (!name) return { error: "Name is required" };
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { error: "Enter a valid email" };
+
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) return { error: "User not found" };
+  if (user.role === "ADMIN" && !me.isAdmin) return { error: "Only an admin can edit an admin" };
+  if (email !== user.email && (await prisma.user.findUnique({ where: { email } }))) return { error: "A user with that email already exists" };
+
+  const clerk = await getClerkAdminClient();
+  try {
+    const [firstName, ...rest] = name.split(" ");
+    await clerk.users.updateUser(user.clerkId, { firstName, lastName: rest.join(" ") });
+    await clerk.users.updateUserMetadata(user.clerkId, { publicMetadata: { name } });
+    if (email !== user.email) {
+      const existing = await clerk.users.getUser(user.clerkId);
+      await clerk.emailAddresses.createEmailAddress({ userId: user.clerkId, emailAddress: email, verified: true, primary: true });
+      for (const e of existing.emailAddresses) {
+        if (e.emailAddress.toLowerCase() !== email) await clerk.emailAddresses.deleteEmailAddress(e.id);
+      }
+    }
+  } catch (e: unknown) {
+    return { error: (e as { errors?: { message?: string }[] })?.errors?.[0]?.message || (e instanceof Error ? e.message : "Couldn't update the login") };
+  }
+
+  await prisma.user.update({ where: { id: userId }, data: { name, email } });
+  revalidatePath("/settings");
+  return null;
+}
+
 export async function deleteUser(userId: string) {
   const me = await requireCoach();
 

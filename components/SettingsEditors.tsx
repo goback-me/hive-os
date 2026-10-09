@@ -10,6 +10,7 @@ import {
   deleteLesson,
   type CreateLessonState,
 } from "@/lib/actions";
+import { RichTextEditor } from "@/components/RichText";
 
 // Settings: click a row to open its text for editing (native <details>), Save
 // or Delete in place. Deletes ask first — they drop every client's progress.
@@ -103,7 +104,7 @@ function LessonEditor({ lesson }: { lesson: { id: string; title: string; videoUr
           <input type="hidden" name="id" value={lesson.id} />
           <input name="title" required defaultValue={lesson.title} placeholder="Lesson title" style={inputStyle} className={inputClass} />
           <input name="videoUrl" type="url" defaultValue={lesson.videoUrl ?? ""} placeholder="YouTube or Loom link (optional)" style={inputStyle} className={inputClass} />
-          <textarea name="content" defaultValue={lesson.content ?? ""} placeholder="Written content (optional)" rows={5} style={inputStyle} className={`${inputClass} resize-y`} />
+          <RichTextEditor name="content" defaultValue={lesson.content} />
           {state?.error && <p className="text-xs" style={{ color: "var(--danger)" }}>{state.error}</p>}
           <Buttons deleteAction={deleteLesson} what="lesson" />
         </form>

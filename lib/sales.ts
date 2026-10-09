@@ -2,7 +2,7 @@ import { prisma } from "./prisma";
 import { sydneyDay } from "./sheet-parse";
 import { milestoneSql, wonAtSql } from "./milestones";
 import { metaDays } from "./meta-ads";
-import { addMonths, monthKeyOf, toneFor, type Tone } from "./kpi";
+import { toneFor, type Tone } from "./kpi";
 import { dailySpend, getReportingScope, type Range } from "./reporting-scope";
 import type { ReportVisibility } from "./report-visibility";
 import type { ClientTypeValue } from "./client-terms";
@@ -31,12 +31,11 @@ type Period = { count: number; revenue: number };
 
 export type SalesResponse = {
   summary: {
-    thisMonth: Period;
-    lastMonth: Period;
-    lastMonthToDate: Period; // same days of last month — what "this month" is compared against
+    current: Period; // the selected range
+    previous: Period | null; // the period before it (previousReportRange); null for "Maximum"
     lifetime: Period;
     tone: { count: Tone | null; revenue: Tone | null };
-    compareLabel: string;
+    compareLabel: string | null; // e.g. "vs 1–9 Sept"
     costPerSale: number | null; // selected range
     lastSale: { wonAt: string; name: string | null } | null;
   };
@@ -54,6 +53,7 @@ export async function getSales(
   range: Range,
   viewer: { role: "COACH" | "CLIENT" },
   visibility: ReportVisibility,
+  prev: { from: Date; to: Date; label: string } | null,
   now = new Date()
 ): Promise<SalesResponse> {
   const scope = await getReportingScope(clientId);
@@ -90,34 +90,28 @@ export async function getSales(
     };
   });
 
-  // This month vs last month (Sydney), compared like the Snapshot cards:
-  // month-to-date against the same days of last month.
-  const thisKey = monthKeyOf(now);
-  const lastKey = addMonths(thisKey, -1);
-  const todayDom = Number(sydneyDay(now).slice(8, 10));
+  // The cards follow the picked range, compared with the period before it
+  // (this month so far vs the same days of last month, last 3 months vs the
+  // 3 before, …) — same green/red rule as the Snapshot cards.
   const period = (pick: (s: SaleRow) => boolean): Period => {
     const list = sales.filter(pick);
     return { count: list.length, revenue: list.reduce((s, x) => s + (x.value ?? 0), 0) };
   };
-  const monthOf = (s: SaleRow) => monthKeyOf(new Date(s.wonAt));
-  const thisMonth = period((s) => monthOf(s) === thisKey);
-  const lastMonth = period((s) => monthOf(s) === lastKey);
-  const lastMonthToDate = period((s) => monthOf(s) === lastKey && Number(sydneyDay(new Date(s.wonAt)).slice(8, 10)) <= todayDom);
+  const current = period((s) => inRange(new Date(s.wonAt)));
+  const previous = prev ? period((s) => new Date(s.wonAt) >= prev.from && new Date(s.wonAt) < prev.to) : null;
 
   const ranged = sales.filter((s) => inRange(new Date(s.wonAt)));
   const { since: rs, until: ru } = metaDays(range);
   const rangeSpend = spendDays.reduce((s, [d, v]) => ((!rs || d >= rs) && (!ru || d <= ru) ? s + v : s), 0);
   const last = sales[sales.length - 1];
-  const lastMonthName = new Date(`${lastKey}-15T00:00:00Z`).toLocaleDateString("en-AU", { month: "short", timeZone: "UTC" });
 
   return {
     summary: {
-      thisMonth,
-      lastMonth,
-      lastMonthToDate,
+      current,
+      previous,
       lifetime: period(() => true),
-      tone: { count: toneFor("count", thisMonth.count, lastMonthToDate.count), revenue: toneFor("count", thisMonth.revenue, lastMonthToDate.revenue) },
-      compareLabel: `vs 1–${todayDom} ${lastMonthName}`,
+      tone: previous ? { count: toneFor("count", current.count, previous.count), revenue: toneFor("count", current.revenue, previous.revenue) } : { count: null, revenue: null },
+      compareLabel: prev ? `vs ${prev.label}` : null,
       costPerSale: costHidden || !hasSpend || !ranged.length ? null : rangeSpend / ranged.length,
       lastSale: last ? { wonAt: last.wonAt, name: last.name } : null,
     },
