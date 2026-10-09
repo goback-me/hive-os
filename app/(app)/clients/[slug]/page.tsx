@@ -33,6 +33,7 @@ import {
   submitClientReferral,
   toggleCallStep,
   markWeeklyStatusViewed,
+  saveHiddenTabs,
 } from "@/lib/actions";
 import WeeklyStatusPanel from "@/components/WeeklyStatusPanel";
 import { HEALTH_LABELS, getClientHealth } from "@/lib/client-health";
@@ -215,7 +216,7 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
       <div className="grid grid-cols-3 gap-5">
         {/* Main column — the day-to-day, coaching-relevant activity */}
         <div className="col-span-2 space-y-5">
-          {clientSheet && <ClientUpdatesPanel clientId={client.id} onUpdateStage={updateLeadStage} />}
+          {clientSheet && <ClientUpdatesPanel clientId={client.id} onUpdateStage={updateLeadStage} collapsible />}
 
           <div className="card rounded-2xl p-5">
             <div className="flex justify-between items-center mb-4">
@@ -278,7 +279,7 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
             </dl>
           </div>
 
-          {isCoach && <ReportVisibilityCard clientId={client.id} initial={visibility} onSave={saveReportVisibility} />}
+          {isCoach && <ReportVisibilityCard clientId={client.id} initial={visibility} onSave={saveReportVisibility} initialHiddenTabs={client.hiddenTabs} onSaveTabs={saveHiddenTabs} />}
 
           {isCoach && (
             <IntegrationsCard
@@ -559,7 +560,8 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
           { key: "ads", label: "Ads", content: adsContent },
           { key: "awards", label: "Awards", content: awardsContent },
           { key: "referrals", label: "Referrals", content: referralsContent },
-        ]}
+          // A CLIENT login doesn't get the tabs the team switched off (Client view settings).
+        ].filter((t) => viewer.role !== "CLIENT" || !client.hiddenTabs.includes(t.key))}
       />
     </div>
   );

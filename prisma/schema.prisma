@@ -1033,6 +1033,9 @@ model Client {
   // defaults in lib/report-visibility.ts. Enforced server-side: hidden data is
   // never sent to a CLIENT. Coaches always see everything.
   reportVisibility Json?
+  // Client-page tabs a CLIENT login doesn't get (keys in lib/report-visibility.ts
+  // CLIENT_TABS). The team always sees every tab.
+  hiddenTabs       String[]   @default([])
   // TRADE clients' reports say "Onsite quote" / "Job won" instead of
   // "Quote" / "Sale" (lib/client-terms.ts).
   clientType       ClientType @default(OTHER)

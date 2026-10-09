@@ -11,7 +11,7 @@ import { syncLeadsFromSheet, type SyncSummary } from "@/lib/lead-sync";
 import { CLIENT_STAGES, HANDOVER_STAGES, isReturn, parseTarget, planStageEvents } from "@/lib/lead-status";
 import { refreshHandoverAt } from "@/lib/reminders";
 import { parseCycleOverrides, recalculateCycle, type CycleStep } from "@/lib/buying-cycle";
-import { parseVisibility, type ReportVisibility } from "@/lib/report-visibility";
+import { CLIENT_TABS, parseVisibility, type ReportVisibility } from "@/lib/report-visibility";
 import { kickWriteBacks, queueLeadChange } from "@/lib/sheet-writeback";
 import { getMonthToDateVsLast, rebuildHistory } from "@/lib/kpi";
 import { reportsOnHold } from "@/lib/report-hold";
@@ -214,6 +214,30 @@ export async function createOnboardingStepTemplate(formData: FormData) {
   revalidatePath("/settings");
 }
 
+// Settings → Onboarding template: edit a step's text, or remove it (and
+// every client's tick for it).
+export async function updateOnboardingStepTemplate(formData: FormData) {
+  await requireCoach();
+  const id = String(formData.get("id") || "");
+  const title = String(formData.get("title") || "").trim();
+  const description = String(formData.get("description") || "").trim();
+  if (!title) throw new Error("Title is required");
+  await prisma.onboardingStepTemplate.update({ where: { id }, data: { title, description: description || null } });
+  revalidatePath("/settings");
+  revalidatePath("/clients");
+}
+
+export async function deleteOnboardingStepTemplate(formData: FormData) {
+  await requireCoach();
+  const id = String(formData.get("id") || "");
+  await prisma.$transaction([
+    prisma.clientOnboardingStep.deleteMany({ where: { templateId: id } }),
+    prisma.onboardingStepTemplate.delete({ where: { id } }),
+  ]);
+  revalidatePath("/settings");
+  revalidatePath("/clients");
+}
+
 // ── Progress notes — a coach or the client themselves can log one ────────
 export async function createProgressNote(clientId: string, formData: FormData) {
   const user = await requireClientAccess(clientId);
@@ -339,6 +363,14 @@ export async function saveReportVisibility(clientId: string, flags: Partial<Repo
   await prisma.client.update({ where: { id: clientId }, data: { reportVisibility: next } });
   revalidatePath(`/clients/${client.slug}`);
   return next;
+}
+
+// Coach-only: which client-page tabs this client's own login doesn't see.
+export async function saveHiddenTabs(clientId: string, hiddenTabs: string[]) {
+  await requireCoach();
+  const keys = new Set<string>(CLIENT_TABS.map((t) => t.key));
+  const client = await prisma.client.update({ where: { id: clientId }, data: { hiddenTabs: hiddenTabs.filter((k) => keys.has(k)) }, select: { slug: true } });
+  revalidatePath(`/clients/${client.slug}`);
 }
 
 // Coach-only: the client's onboarding date ("YYYY-MM-DD", Sydney; "" clears
@@ -868,6 +900,61 @@ export async function createLesson(_prev: CreateLessonState, formData: FormData)
   revalidatePath("/settings");
   revalidatePath("/clients");
   return null;
+}
+
+// Settings → Playbooks library: edit or remove a module / lesson. Removing
+// one also drops every client's progress on it.
+export async function updateModule(formData: FormData) {
+  await requireCoach();
+  const id = String(formData.get("id") || "");
+  const title = String(formData.get("title") || "").trim();
+  if (!title) throw new Error("Module title is required");
+  await prisma.module.update({ where: { id }, data: { title } });
+  revalidatePath("/settings");
+  revalidatePath("/clients");
+}
+
+export async function deleteModule(formData: FormData) {
+  await requireCoach();
+  const id = String(formData.get("id") || "");
+  await prisma.$transaction([
+    prisma.clientLessonProgress.deleteMany({ where: { lesson: { moduleId: id } } }),
+    prisma.lesson.deleteMany({ where: { moduleId: id } }),
+    prisma.module.delete({ where: { id } }),
+  ]);
+  revalidatePath("/settings");
+  revalidatePath("/clients");
+}
+
+// Same checks as createLesson; the link is only re-checked when it changed.
+export async function updateLesson(_prev: CreateLessonState, formData: FormData): Promise<CreateLessonState> {
+  await requireCoach();
+  const id = String(formData.get("id") || "");
+  const title = String(formData.get("title") || "").trim();
+  const videoUrl = String(formData.get("videoUrl") || "").trim();
+  const content = String(formData.get("content") || "").trim();
+  if (!title) return { error: "Lesson title is required" };
+  const lesson = await prisma.lesson.findUnique({ where: { id }, select: { videoUrl: true } });
+  if (!lesson) return { error: "Lesson not found" };
+  if (videoUrl && videoUrl !== lesson.videoUrl) {
+    const linkError = await checkLinkReachable(videoUrl);
+    if (linkError) return { error: linkError };
+  }
+  await prisma.lesson.update({ where: { id }, data: { title, videoUrl: videoUrl || null, content: content || null } });
+  revalidatePath("/settings");
+  revalidatePath("/clients");
+  return null;
+}
+
+export async function deleteLesson(formData: FormData) {
+  await requireCoach();
+  const id = String(formData.get("id") || "");
+  await prisma.$transaction([
+    prisma.clientLessonProgress.deleteMany({ where: { lessonId: id } }),
+    prisma.lesson.delete({ where: { id } }),
+  ]);
+  revalidatePath("/settings");
+  revalidatePath("/clients");
 }
 
 export type CreateClientState = { error: string } | { slug: string } | null;

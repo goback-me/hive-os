@@ -61,6 +61,7 @@ export default function ClientUpdatesPanel({
   pinnedIds = [],
   keepSaved = false,
   emptyText,
+  collapsible = false,
 }: {
   clientId: string;
   onUpdateStage: (leadId: string, target: string, value?: number) => Promise<void>;
@@ -71,7 +72,9 @@ export default function ClientUpdatesPanel({
   pinnedIds?: string[];
   keepSaved?: boolean;
   emptyText?: string; // shown instead of hiding the panel when nothing's waiting
+  collapsible?: boolean; // starts folded to its header (Dashboard / Leads tabs)
 }) {
+  const [open, setOpen] = useState(!collapsible);
   const [saved, setSaved] = useState<Set<string>>(new Set());
   const [rows, setRows] = useState<Row[] | null>(null);
   const [total, setTotal] = useState(0);
@@ -104,13 +107,16 @@ export default function ClientUpdatesPanel({
 
   return (
     <div className="card rounded-2xl p-5">
-      <div className="flex items-center justify-between mb-1">
+      <button onClick={() => collapsible && setOpen((o) => !o)} className={`w-full flex items-center justify-between ${open ? "mb-1" : ""}`} style={{ cursor: collapsible ? "pointer" : "default" }} aria-expanded={open}>
         <p className="text-sm font-semibold flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
           <span className="material-symbols-outlined text-[18px]" style={{ color: "var(--primary)" }}>task_alt</span>
           Update your leads
           <span className="px-2 py-0.5 rounded-full text-[10px] font-bold" style={{ background: "var(--primary-tint)", color: "var(--primary)" }}>{total}</span>
         </p>
-      </div>
+        {collapsible && <span className="material-symbols-outlined text-[18px]" style={{ color: "var(--text-muted)" }}>{open ? "expand_less" : "expand_more"}</span>}
+      </button>
+      {open && (
+      <>
       <p className="text-xs mb-4" style={{ color: "var(--text-muted)" }}>Tell us what happened with each lead — oldest first. It updates your sheet too.</p>
       {reminders > 0 && (
         <p className="text-xs mb-3 px-3 py-2 rounded-lg flex items-center gap-1.5" style={{ background: "var(--tag-amber-bg)", color: "var(--tag-amber-fg)" }}>
@@ -149,6 +155,8 @@ export default function ClientUpdatesPanel({
         ))}
       </div>
       {total > rows.length && <p className="text-[11px] mt-3" style={{ color: "var(--text-muted)" }}>Showing the oldest {rows.length} of {total}.</p>}
+      </>
+      )}
     </div>
   );
 }

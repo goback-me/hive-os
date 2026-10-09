@@ -25,7 +25,7 @@ const clientNav = (slug: string) => [
   { href: `/clients/${slug}?tab=weekly`, label: "Weekly status", icon: "event_note", tab: "weekly" },
 ];
 
-export default function Sidebar({ user, callsToUpdate = 0 }: { user: { name: string; role: "COACH" | "CLIENT"; isAgent?: boolean; clientSlug?: string | null }; callsToUpdate?: number }) {
+export default function Sidebar({ user, callsToUpdate = 0, hiddenTabs = [] }: { user: { name: string; role: "COACH" | "CLIENT"; isAgent?: boolean; clientSlug?: string | null }; callsToUpdate?: number; hiddenTabs?: string[] }) {
   const pathname = usePathname();
   const tab = useSearchParams().get("tab") ?? "dashboard";
   // A client login only ever has their own client page — no cross-client
@@ -33,7 +33,7 @@ export default function Sidebar({ user, callsToUpdate = 0 }: { user: { name: str
   // An agent gets their calls, their client list, Account Management (their
   // clients) and Leads only.
   const navItems: { href: string; label: string; icon: string; tab?: string }[] =
-    user.role !== "COACH" ? (user.clientSlug ? clientNav(user.clientSlug) : []) : user.isAgent ? COACH_NAV_ITEMS.filter((i) => ["/clients", "/leads", "/account-management"].includes(i.href)) : COACH_NAV_ITEMS;
+    user.role !== "COACH" ? (user.clientSlug ? clientNav(user.clientSlug).filter((i) => !hiddenTabs.includes(i.tab)) : []) : user.isAgent ? COACH_NAV_ITEMS.filter((i) => ["/clients", "/leads", "/account-management"].includes(i.href)) : COACH_NAV_ITEMS;
 
   return (
     <aside

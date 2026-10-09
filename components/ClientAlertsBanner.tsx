@@ -17,7 +17,7 @@ export default function ClientAlertsBanner({
 }) {
   const router = useRouter();
   const [alerts, setAlerts] = useState(initial);
-  const [expanded, setExpanded] = useState(initial.some((a) => a.severity === "DANGER"));
+  const [expanded, setExpanded] = useState(false); // folded — the header still says how many / how bad
   const [pending, startTransition] = useTransition();
   const danger = alerts.some((a) => a.severity === "DANGER");
 

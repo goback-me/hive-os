@@ -4,6 +4,7 @@ import { requireCoach } from "@/lib/auth";
 import { listClickUpMembers } from "@/lib/clickup";
 import UsersPanel from "./UsersPanel";
 import AddLessonForm from "@/components/AddLessonForm";
+import { StepEditor, ModuleEditor } from "@/components/SettingsEditors";
 
 export const dynamic = "force-dynamic";
 
@@ -14,7 +15,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: { s
     prisma.integrationSettings.findUnique({ where: { id: "singleton" } }),
     prisma.onboardingStepTemplate.findMany({ orderBy: { order: "asc" } }),
     prisma.awardTier.findMany({ orderBy: { order: "asc" } }),
-    prisma.module.findMany({ orderBy: { order: "asc" }, include: { lessons: true } }),
+    prisma.module.findMany({ orderBy: { order: "asc" }, include: { lessons: { orderBy: { order: "asc" } } } }),
     prisma.user.findMany({ orderBy: { createdAt: "asc" }, include: { client: { select: { name: true } } } }),
     prisma.client.findMany({ where: { archivedAt: null, status: { not: "CHURNED" } }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
   ]);
@@ -102,17 +103,11 @@ export default async function SettingsPage({ searchParams }: { searchParams: { s
       <section className="card rounded-2xl p-6">
         <h3 className="font-heading font-bold text-lg mb-1" style={{ color: "var(--text-primary)" }}>Onboarding template</h3>
         <p className="text-sm mb-4" style={{ color: "var(--text-secondary)" }}>
-          Every client gets this same checklist. Add steps once, applies to everyone.
+          Every client gets this same checklist. Add steps once, applies to everyone. Click a step to edit or delete it.
         </p>
         <div className="space-y-2 mb-4">
           {onboardingSteps.map((s, i) => (
-            <div key={s.id} className="flex items-center gap-3 rounded-lg p-3" style={{ background: "var(--surface)" }}>
-              <span className="text-xs font-bold w-5" style={{ color: "var(--text-muted)" }}>{i + 1}</span>
-              <div>
-                <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>{s.title}</p>
-                {s.description && <p className="text-xs" style={{ color: "var(--text-secondary)" }}>{s.description}</p>}
-              </div>
-            </div>
+            <StepEditor key={s.id} index={i} step={{ id: s.id, title: s.title, description: s.description }} />
           ))}
           {onboardingSteps.length === 0 && <p className="text-sm" style={{ color: "var(--text-secondary)" }}>No steps yet.</p>}
         </div>
@@ -126,17 +121,16 @@ export default async function SettingsPage({ searchParams }: { searchParams: { s
       <section className="card rounded-2xl p-6">
         <h3 className="font-heading font-bold text-lg mb-1" style={{ color: "var(--text-primary)" }}>Playbooks library</h3>
         <p className="text-sm mb-4" style={{ color: "var(--text-secondary)" }}>
-          Shared across every client. Add a module, then add lessons to it.
+          Shared across every client. Add a module, then add lessons to it. Click a module or lesson to edit or delete it.
         </p>
 
         <div className="space-y-2 mb-4">
           {modules.map((mod, i) => (
-            <div key={mod.id} className="rounded-lg p-3" style={{ background: "var(--surface)" }}>
-              <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{i + 1}. {mod.title}</p>
-              <p className="text-xs mt-1" style={{ color: "var(--text-muted)" }}>
-                {mod.lessons.length} lesson{mod.lessons.length !== 1 ? "s" : ""}
-              </p>
-            </div>
+            <ModuleEditor
+              key={mod.id}
+              index={i}
+              mod={{ id: mod.id, title: mod.title, lessons: mod.lessons.map((l) => ({ id: l.id, title: l.title, videoUrl: l.videoUrl, content: l.content })) }}
+            />
           ))}
           {modules.length === 0 && <p className="text-sm" style={{ color: "var(--text-secondary)" }}>No modules yet.</p>}
         </div>

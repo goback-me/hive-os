@@ -22,6 +22,7 @@ export default function SetupChecklist({
   const [email, setEmail] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  const [open, setOpen] = useState(false);
   const missing = items.filter((i) => !i.ok);
   if (!missing.length) return null;
 
@@ -38,11 +39,14 @@ export default function SetupChecklist({
     });
 
   return (
-    <div className="card rounded-2xl p-5 mb-6" style={{ borderLeft: "4px solid var(--tag-amber-fg)" }}>
-      <p className="text-sm font-semibold flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
+    <div className="card rounded-2xl px-5 py-4 mb-6" style={{ borderLeft: "4px solid var(--tag-amber-fg)" }}>
+      <button onClick={() => setOpen((o) => !o)} className="text-sm font-semibold flex items-center gap-2 text-left" style={{ color: "var(--text-primary)" }} aria-expanded={open}>
         <span className="material-symbols-outlined text-[18px]" style={{ color: "var(--tag-amber-fg)" }}>checklist</span>
         Automation setup — {missing.length} thing{missing.length === 1 ? "" : "s"} still to set up
-      </p>
+        <span className="material-symbols-outlined text-[16px]">{open ? "expand_less" : "expand_more"}</span>
+      </button>
+      {open && (
+      <>
       <p className="text-xs mb-3" style={{ color: "var(--text-muted)" }}>Nothing is broken — these automations are just paused for this client until they&apos;re set.</p>
       <div className="space-y-2">
         {missing.map((i) => (
@@ -74,6 +78,8 @@ export default function SetupChecklist({
         ))}
       </div>
       {error && <p className="text-xs mt-2" style={{ color: "var(--danger)" }}>{error}</p>}
+      </>
+      )}
     </div>
   );
 }

@@ -370,8 +370,6 @@ export default function LeadsPanel({
       {/* TODO pending Aizal Loom spec — top of the Leads tab, don't redesign yet. */}
       {activeSubTab === "leads" && (reportsHold ? <HoldNote /> : <LeadWinsCard clientId={clientId} rangeQuery={rangeQuery} reloadKey={reloadKey} />)}
 
-      {activeSubTab === "leads" && <ClientUpdatesPanel clientId={clientId} onUpdateStage={onUpdateStage} reloadKey={reloadKey} onSaved={reload} />}
-
       {activeSubTab === "leads" && (
         <div className="card rounded-2xl p-5 overflow-x-auto">
           <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
@@ -564,6 +562,9 @@ export default function LeadsPanel({
           )}
         </div>
       )}
+
+      {/* Leads + status table first; the "Update your leads" list sits under it, folded. */}
+      {activeSubTab === "leads" && <ClientUpdatesPanel clientId={clientId} onUpdateStage={onUpdateStage} reloadKey={reloadKey} onSaved={reload} collapsible />}
 
       {pendingChange && (
         <div

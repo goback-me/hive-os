@@ -32,3 +32,17 @@ export function parseVisibility(raw: unknown): ReportVisibility {
   for (const k of VISIBILITY_KEYS) if (typeof obj[k] === "boolean") out[k] = obj[k] as boolean;
   return out;
 }
+
+// The client page's tabs, in order — what Client.hiddenTabs can switch off
+// for the client's own login (also drops the matching sidebar link).
+export const CLIENT_TABS = [
+  { key: "onboarding", label: "Onboarding" },
+  { key: "dashboard", label: "Dashboard" },
+  { key: "weekly", label: "Weekly status" },
+  { key: "leads", label: "Leads" },
+  { key: "growth", label: "Growth" },
+  { key: "playbooks", label: "Playbooks" },
+  { key: "ads", label: "Ads" },
+  { key: "awards", label: "Awards" },
+  { key: "referrals", label: "Referrals" },
+] as const;

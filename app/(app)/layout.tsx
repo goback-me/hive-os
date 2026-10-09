@@ -11,11 +11,14 @@ export default async function AppGroupLayout({ children }: { children: ReactNode
   // Team: my calls past their time and not logged (Account Management badge).
   const callsToUpdate =
     user.role === "COACH" ? await prisma.amCall.count({ where: { status: "PENDING", scheduledAt: { lt: new Date() }, client: ACTIVE_CLIENT, callPerson: { clerkId: user.clerkId } } }) : 0;
+  // Client: the tabs the team hid from them drop out of their sidebar too.
+  const hiddenTabs =
+    user.role === "CLIENT" && user.clientId ? (await prisma.client.findUnique({ where: { id: user.clientId }, select: { hiddenTabs: true } }))?.hiddenTabs ?? [] : [];
 
   return (
     <>
       <Suspense fallback={null}>
-        <Sidebar user={{ name: user.name, role: user.role, isAgent: user.isAgent, clientSlug: user.clientSlug }} callsToUpdate={callsToUpdate} />
+        <Sidebar user={{ name: user.name, role: user.role, isAgent: user.isAgent, clientSlug: user.clientSlug }} callsToUpdate={callsToUpdate} hiddenTabs={hiddenTabs} />
       </Suspense>
       <main className="ml-64 min-h-screen">{children}</main>
       {/* Side panels on any page: ?lead=<id> (components/LeadLink.tsx) and
