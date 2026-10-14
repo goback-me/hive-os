@@ -1,5 +1,5 @@
 import { prisma } from "./prisma";
-import { milestoneSql, wonAtSql } from "./milestones";
+import { milestoneSql, quoteAtSql, wonAtSql } from "./milestones";
 import { HANDOVER_STAGES } from "./lead-status";
 import { clampRange, getReportingScope, type Range } from "./reporting-scope";
 
@@ -29,7 +29,7 @@ async function countPeriod(clientId: string, since: Date, r: Range): Promise<Per
       SELECT l."createdAt" AS opt_in,
         ${milestoneSql(HANDOVER_STAGES)} AS handover,
         ${milestoneSql("CONSULT_BOOKED")} AS booked,
-        ${milestoneSql("QUOTE_SENT")} AS quote,
+        ${quoteAtSql()} AS quote,
         CASE WHEN l.stage = 'WON' THEN ${wonAtSql()} END AS won
       FROM l
     )

@@ -49,8 +49,11 @@ const prospect: [string, R][] = [
   ["Self booked", { stage: "CONSULT_BOOKED" }],
   ["Consult cancelled", { stage: "CONSULT_CANCELLED" }],
   ["Cancelled", { stage: "CONSULT_CANCELLED" }],
-  ["Didn't attend", { stage: "CONSULT_NO_SHOW" }],
-  ["No show", { stage: "CONSULT_NO_SHOW" }],
+  // A no-show is a cancelled appointment — rebook it, or it's lost.
+  ["Didn't attend", { stage: "CONSULT_CANCELLED" }],
+  ["No show", { stage: "CONSULT_CANCELLED" }],
+  ["No show - rebook", { stage: "CONSULT_CANCELLED" }],
+  ["No show - lost", { stage: "LOST", lostReason: "GHOSTED" }],
   ["ATTENDED BOOKING ", { stage: "CONSULT_ATTENDED" }],
   ["Attended", { stage: "CONSULT_ATTENDED" }],
   ["QUOTED", { stage: "QUOTE_SENT" }],
@@ -89,6 +92,18 @@ assert.deepEqual(resolveStatus("N/A", {}, unmapped, classifyHive), CHASE);
 assert.equal(resolveStatus("Mystery 🤔", {}, unmapped, classifyProspect), undefined);
 resolveStatus("mystery", {}, unmapped, classifyHive);
 assert.deepEqual(unmapped, { mystery: 2 });
+
+// A quote never un-happens: quoted + lost/DQ = the outcome AND a quote, from
+// the rules or a saved mapping. Plain LOST / DQ claim no quote.
+assert.deepEqual(resolveStatus("QUOTED - LOST", {}, {}, classifyProspect), { stage: "LOST", lostReason: "UNKNOWN", quoted: true });
+assert.deepEqual(resolveStatus("Quote lost", {}, {}, classifyProspect), { stage: "LOST", lostReason: "UNKNOWN", quoted: true });
+assert.deepEqual(resolveStatus("QUOTED - DQ budget", {}, {}, classifyProspect), { stage: "DISQUALIFIED", dqReason: "BUDGET", quoted: true });
+assert.deepEqual(resolveStatus("Quote - disqualified", {}, {}, classifyProspect), { stage: "DISQUALIFIED", dqReason: "UNKNOWN", quoted: true });
+assert.deepEqual(resolveStatus("Quote - lost", { "quote lost": { stage: "LOST", lostReason: "BUDGET" } }, {}, classifyProspect), { stage: "LOST", lostReason: "BUDGET", quoted: true });
+assert.deepEqual(resolveStatus("LOST", {}, {}, classifyProspect), { stage: "LOST", lostReason: "UNKNOWN" });
+assert.deepEqual(resolveStatus("DQ - getting 3 quotes", {}, {}, classifyProspect), { stage: "DISQUALIFIED", dqReason: "UNKNOWN" });
+// …and the quote reaches the funnel as the furthest stage passed
+assert.equal(combineTargets(classifyHive("LIVE TRANSFER"), resolveStatus("QUOTED - LOST", {}, {}, classifyProspect)).prior, "QUOTE_SENT");
 
 // Higher rank wins; a cancellation outranks the booking it cancels
 assert.equal(combineTargets(classifyHive("LIVE TRANSFER"), classifyProspect("BOOKED")!).final.stage, "CONSULT_BOOKED");

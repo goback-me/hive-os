@@ -2,11 +2,13 @@
 
 import { useState } from "react";
 import LeadLink from "@/components/LeadLink";
+import DuplicateRowsFix from "@/components/DuplicateRowsFix";
 
 export type AlertItem = {
   id: string;
   clientName: string;
   clientSlug: string;
+  type?: string;
   severity: "DANGER" | "WARNING";
   title: string;
   detail: string;
@@ -27,7 +29,10 @@ export default function AlertRow({ alert, showClient, onHandled }: { alert: Aler
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [fixing, setFixing] = useState(false);
   const danger = alert.severity === "DANGER";
+  // Sheet/HQ mismatch: Fix opens the duplicate rows right here, not the sheet page.
+  const inlineFix = alert.type === "RECONCILE_MISMATCH";
 
   function handle() {
     if (!note.trim()) return;
@@ -74,10 +79,16 @@ export default function AlertRow({ alert, showClient, onHandled }: { alert: Aler
         {alert.dismissNote && <p className="text-[11px] mt-0.5 italic" style={{ color: "var(--text-muted)" }}>Handled: {alert.dismissNote}</p>}
         {(!alert.status || alert.status === "OPEN") && (
           <div className="flex items-center gap-2 mt-1.5 flex-wrap">
-            {alert.fixUrl && (
-              <a href={alert.fixUrl} className="px-2.5 py-1 rounded-lg text-xs font-bold" style={{ background: "var(--primary)", color: "#fff" }}>
-                Fix
-              </a>
+            {inlineFix ? (
+              <button onClick={() => setFixing((f) => !f)} className="px-2.5 py-1 rounded-lg text-xs font-bold" style={{ background: "var(--primary)", color: "#fff" }}>
+                {fixing ? "Close" : "Fix"}
+              </button>
+            ) : (
+              alert.fixUrl && (
+                <a href={alert.fixUrl} className="px-2.5 py-1 rounded-lg text-xs font-bold" style={{ background: "var(--primary)", color: "#fff" }}>
+                  Fix
+                </a>
+              )
             )}
             {noting ? (
               <>
@@ -103,6 +114,7 @@ export default function AlertRow({ alert, showClient, onHandled }: { alert: Aler
             {error && <span className="text-[11px]" style={{ color: "var(--danger)" }}>{error}</span>}
           </div>
         )}
+        {fixing && <DuplicateRowsFix alertId={alert.id} />}
       </div>
     </div>
   );

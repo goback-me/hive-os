@@ -10,6 +10,8 @@
 // write-back still on its way) are left out of `won` on both sides — they
 // differ on purpose. Pure: lib/reconcile.check.ts runs it on a fixture.
 
+import { normalizeEmail, normalizePhone } from "./sheet-parse";
+
 export type SideCounts = {
   rows: number;
   hive: Record<string, number>;
@@ -20,6 +22,31 @@ export type SideCounts = {
 };
 
 export type Diff = { metric: string; sheet: number; hq: number };
+
+// A sheet row with no lead of its own: another row with the same email (or
+// the same email+phone+name) took it, and HQ shows only that row — keptRow.
+// Row numbers as in the sheet (header = row 1). Shown by the reconcile
+// alert's Fix panel (components/DuplicateRowsFix.tsx).
+export type RowCells = { name: string; email: string; phone: string; hive: string; prospect: string };
+export type DuplicateRow = RowCells & { row: number; keptRow: number; kept: RowCells; match: "email" | "phone" | "name" };
+type RowOnLead = RowCells & { lead: string };
+
+// rows: row index → the lead it landed on; owners: the row index each lead
+// ended up showing.
+export function duplicateRows(rows: Map<number, RowOnLead>, owners: Set<number>): DuplicateRow[] {
+  const ownerOf = new Map(Array.from(rows).filter(([i]) => owners.has(i)).map(([i, r]) => [r.lead, i]));
+  const out: DuplicateRow[] = [];
+  for (const [i, r] of Array.from(rows)) {
+    const k = ownerOf.get(r.lead);
+    if (owners.has(i) || k === undefined) continue;
+    const { lead: _a, ...cells } = r;
+    const { lead: _b, ...kept } = rows.get(k)!;
+    const same = (a: string, b: string, norm: (v: string) => string) => !!norm(a) && norm(a) === norm(b);
+    const match = same(r.email, kept.email, normalizeEmail) ? "email" : same(r.phone, kept.phone, normalizePhone) ? "phone" : "name";
+    out.push({ row: i + 2, keptRow: k + 2, kept, match, ...cells });
+  }
+  return out;
+}
 
 // Raw cell values → counts, blank cells skipped, exact text kept.
 export function countValues(values: (string | null | undefined)[]): Record<string, number> {

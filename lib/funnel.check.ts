@@ -27,7 +27,16 @@ const c = emptyCounts();
 
 assert.equal(c.leads, 8);
 assert.equal(c.contacted, 5); // CONTACTED, DQ post-handover, no-show, lost, won
-assert.equal(c.qualified, 4);
+assert.equal(c.qualified, 4); // contacted, not DQ: CONTACTED, no-show, lost, won
+assert.equal(funnelRates(c).qualifiedRate, 80);
+// "Not ready yet" is still qualified; a DQ after handover isn't.
+{
+  const q = emptyCounts();
+  addLead(q, lead({ stage: "NURTURE" }));
+  addLead(q, lead({ stage: "DISQUALIFIED", dqPhase: "POST_HANDOVER", eventStages: ["HANDOVER_LIVE"] }));
+  assert.equal(q.contacted, 2);
+  assert.equal(q.qualified, 1);
+}
 assert.equal(c.handovers, 4);
 assert.equal(c.liveTransfers, 2);
 assert.equal(c.consultsBooked, 3);
@@ -53,7 +62,7 @@ assert.match(drop!.advice, /Offer\/intent/);
 console.log("funnel: all checks passed");
 
 // Handovers = every HANDOVER_STAGES; live transfers = HANDOVER_LIVE only;
-// liveTransferRate = live / all handovers.
+// liveTransferRate = live / qualified (all 4 are contacted, none DQ).
 {
   const h = emptyCounts();
   [lead({ stage: "HANDOVER_LIVE" }), lead({ stage: "HANDOVER_ATTEMPTED" }), lead({ stage: "HANDOVER_TEXT" }), lead({ stage: "HANDOVER_ATTEMPTED" })].forEach((l) => addLead(h, l));

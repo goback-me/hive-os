@@ -1,17 +1,20 @@
 import { prisma } from "./prisma";
 import { SHEET_TZ, sydneyLocalToDate } from "./sheet-parse";
 import { getReportingScope, scopedSpend, type ReportingScope } from "./reporting-scope";
-import { milestoneSql, wonAtSql } from "./milestones";
+import { liveAtSql, milestoneSql, quoteAtSql, wonAtSql } from "./milestones";
 import { terms } from "./client-terms";
 import type { ReportVisibility } from "./report-visibility";
+import { addLead, emptyCounts, funnelRates } from "./funnel";
 
 // Snapshot KPIs — activity-based, bucketed by Sydney calendar month.
 //
 // leads           opt-in date (Lead.createdAt) in the window
 // contacted       distinct leads first contacted in the window
-// liveTransfers   distinct leads whose live handover happened in the window
+// liveTransfers   distinct leads whose live handover happened in the window —
+//                 imported ones included, dated by first contact (liveAtSql)
 // consultsBooked  distinct leads whose consult was booked in the window
-// quotes          distinct leads whose quote went out in the window
+// quotes          distinct leads whose quote went out in the window — Won and
+//                 "quoted – lost/DQ" leads included (quoteAtSql)
 // quotesOrBookings distinct leads whose first booking or quote (whichever came
 //                 first — any kind of booking counts once) was in the window
 // sales / revenue leads won in the window (won date) and their job values
@@ -102,10 +105,10 @@ async function countKpis(clientId: string, w: Window, startDate: Date | null) {
     ), m AS (
       SELECT l."createdAt" AS opt_in, l.value,
         ${milestoneSql("CONTACTED")} AS contacted,
-        ${milestoneSql("HANDOVER_LIVE")} AS live,
+        ${liveAtSql()} AS live,
         ${milestoneSql("CONSULT_BOOKED")} AS booked,
-        ${milestoneSql("QUOTE_SENT")} AS quote,
-        ${milestoneSql(["CONSULT_BOOKED", "QUOTE_SENT"])} AS booked_or_quote,
+        ${quoteAtSql()} AS quote,
+        LEAST(${milestoneSql("CONSULT_BOOKED")}, ${quoteAtSql()}) AS booked_or_quote,
         CASE WHEN l.stage = 'WON' THEN ${wonAtSql()} END AS won
       FROM l
     )
@@ -303,13 +306,30 @@ export async function rebuildHistory(clientId: string, { cached = true, now = ne
 
 // ── Snapshot cards ─────────────────────────────────────────────────────────
 
-export type CardKey = "liveTransfers" | "consultsBooked" | "quotes" | "sales" | "costPerQuote" | "costPerSale" | "leads";
+export type RateKey = "contactRate" | "qualifiedRate" | "liveTransferRate";
+export type CardKey = "liveTransfers" | "consultsBooked" | "quotes" | "sales" | "costPerQuote" | "costPerSale" | "leads" | RateKey;
 export type Tone = "green" | "amber" | "red";
+type CardKind = "count" | "cost" | "rate";
+
+// The month's leads as a cohort (opted in during the window), through the
+// Leads-tab funnel maths (lib/funnel.ts): contacted / leads, qualified
+// (contacted, not DQ) / contacted, live transfers / qualified. Cohort rates
+// mature as leads move on, so they're always computed live — never frozen.
+async function cohortRates(clientId: string, w: Pick<Window, "from" | "to">, startDate: Date | null): Promise<Record<RateKey, number | null>> {
+  const leads = await prisma.lead.findMany({
+    where: { clientId, deletedAt: null, createdAt: { gte: startDate && startDate > w.from ? startDate : w.from, lt: w.to } },
+    select: { stage: true, dqPhase: true, dqReason: true, lostReason: true, stageEvents: { select: { stage: true } } },
+  });
+  const c = emptyCounts();
+  for (const l of leads) addLead(c, { ...l, campaign: "", eventStages: l.stageEvents.map((e) => e.stage) });
+  const { contactRate, qualifiedRate, liveTransferRate } = funnelRates(c);
+  return { contactRate, qualifiedRate, liveTransferRate };
+}
 
 export type SnapshotCard = {
   key: CardKey;
   label: string;
-  kind: "count" | "cost";
+  kind: CardKind;
   value: number | null;
   previous: number | null;
   tone: Tone | null;
@@ -328,7 +348,7 @@ export type Snapshot = {
   spendSource: KpiValues["spendSource"]; // coach only (null for a CLIENT)
 };
 
-function cardsFor(clientType: Parameters<typeof terms>[0]): { key: CardKey; label: string; kind: "count" | "cost" }[] {
+function cardsFor(clientType: Parameters<typeof terms>[0]): { key: CardKey; label: string; kind: CardKind }[] {
   const t = terms(clientType);
   return [
     { key: "liveTransfers", label: "Live transfers", kind: "count" },
@@ -338,21 +358,26 @@ function cardsFor(clientType: Parameters<typeof terms>[0]): { key: CardKey; labe
     { key: "costPerQuote", label: `Cost per ${t.quote.toLowerCase()}`, kind: "cost" },
     { key: "costPerSale", label: `Cost per ${t.sale.toLowerCase()}`, kind: "cost" },
     { key: "leads", label: "Leads", kind: "count" },
+    { key: "contactRate", label: "Contact rate", kind: "rate" },
+    { key: "qualifiedRate", label: "Qualified rate", kind: "rate" },
+    { key: "liveTransferRate", label: "Live transfer rate", kind: "rate" },
   ];
 }
 
 // Green = at least as good as before (costs: as low or lower); amber = worse
 // but within 10%; red = more than 10% worse. No tone when there's nothing to
-// compare with (previous missing or 0).
-export function toneFor(kind: "count" | "cost", value: number | null, previous: number | null): Tone | null {
+// compare with (previous missing or 0). Rates: higher is better, like counts.
+export function toneFor(kind: CardKind, value: number | null, previous: number | null): Tone | null {
   if (value == null || previous == null || previous === 0) return null;
-  const worse = kind === "count" ? (previous - value) / previous : (value - previous) / previous;
+  const worse = kind === "cost" ? (value - previous) / previous : (previous - value) / previous;
   return worse <= 0 ? "green" : worse <= 0.1 ? "amber" : "red";
 }
 
-function hiddenReason(card: { key: CardKey; kind: "count" | "cost" }, value: number | null, v: ReportVisibility): string | null {
+function hiddenReason(card: { key: CardKey; kind: CardKind }, value: number | null, v: ReportVisibility): string | null {
   if (card.kind === "cost" && !v.showCostMetrics) return "Cost metrics are hidden";
   if (card.kind === "cost" && value == null) return card.key === "costPerQuote" ? "No quotes or spend yet" : "No sales or spend yet";
+  if (card.kind === "rate" && !v.showFunnel) return "Funnel is hidden";
+  if (card.kind === "rate" && value == null) return "Not enough leads yet";
   if (card.kind === "count" && value === 0) return "Zero this period";
   return null;
 }
@@ -386,29 +411,38 @@ export async function getSnapshot(
   let compareLabel: string;
   const history = await getKpiHistory(clientId, k, 6, now);
   const values = history[history.length - 1].values;
+  const prevWindow = isCurrent ? monthWindow(prevKey, today) : monthWindow(prevKey);
   if (isCurrent) {
-    previous = await computeWindow(scope, monthWindow(prevKey, today), { cached: true, strictSpend: false });
+    previous = await computeWindow(scope, prevWindow, { cached: true, strictSpend: false });
     compareLabel = `vs 1–${today} ${monthLabel(prevKey).split(" ")[0]}`;
   } else {
     previous = history.length > 1 ? history[history.length - 2].values : await getMonthKpis(clientId, prevKey);
     compareLabel = `vs ${monthLabel(prevKey).split(" ")[0]}`;
   }
+  // Rates per month (the bars), and for the comparison window.
+  const [rateHistory, prevRates] = await Promise.all([
+    Promise.all(history.map((h) => cohortRates(clientId, h.month === current ? { ...monthWindow(h.month), to: now } : monthWindow(h.month), scope.startDate))),
+    cohortRates(clientId, prevWindow, scope.startDate),
+  ]);
+  const isRate = (key: CardKey): key is RateKey => key === "contactRate" || key === "qualifiedRate" || key === "liveTransferRate";
+  const at = (key: CardKey, kpi: KpiValues, rates: Record<RateKey, number | null>) => (isRate(key) ? rates[key] : kpi[key]);
   const { y, m } = parseKey(k);
   const pace = (v: number) => Math.round((v / today) * daysIn(y, m));
 
   const isClient = viewer.role === "CLIENT";
   const cards = cardsFor(client?.clientType).flatMap((c): SnapshotCard[] => {
-    const value = values[c.key];
+    const value = at(c.key, values, rateHistory[history.length - 1]);
+    const before = at(c.key, previous, prevRates);
     const reason = hiddenReason(c, value, visibility);
     if (isClient && reason) return []; // never sent to the client at all
     return [
       {
         ...c,
         value,
-        previous: previous[c.key],
-        tone: toneFor(c.kind, value, previous[c.key]),
+        previous: before,
+        tone: toneFor(c.kind, value, before),
         pace: isCurrent && c.kind === "count" && value ? (today < daysIn(y, m) ? pace(value) : null) : null,
-        history: history.map((h) => ({ month: h.month, value: h.values[c.key] })),
+        history: history.map((h, i) => ({ month: h.month, value: at(c.key, h.values, rateHistory[i]) })),
         hiddenFromClient: reason,
       },
     ];

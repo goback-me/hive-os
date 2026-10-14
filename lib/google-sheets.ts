@@ -204,6 +204,26 @@ export function columnLetter(i: number): string {
   return s;
 }
 
+// ── Sheets: a tab's numeric id (the #gid in its URL) ─────────────────
+export async function getSheetTabId(accessToken: string, spreadsheetId: string, sheetName: string): Promise<number | null> {
+  const res = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=sheets.properties(sheetId,title)`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!res.ok) throw new Error(`Sheets metadata fetch failed: ${await res.text()}`);
+  const tab = ((await res.json()).sheets ?? []).find((s: { properties: { title: string } }) => s.properties.title === sheetName);
+  return tab ? (tab.properties.sheetId as number) : null;
+}
+
+// ── Sheets: delete one row (1-based, as numbered in Sheets) ──────────
+export async function deleteSheetRow(accessToken: string, spreadsheetId: string, tabId: number, row: number) {
+  const res = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}:batchUpdate`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ requests: [{ deleteDimension: { range: { sheetId: tabId, dimension: "ROWS", startIndex: row - 1, endIndex: row } } }] }),
+  });
+  if (!res.ok) throw new Error(`Row delete failed: ${await res.text()}`);
+}
+
 // ── Sheets: write cells (USER_ENTERED, as if typed) ──────────────────
 // Returns the HTTP status so the caller can back off on 429.
 export async function batchUpdateValues(accessToken: string, spreadsheetId: string, data: { range: string; values: string[][] }[]) {

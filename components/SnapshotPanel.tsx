@@ -12,6 +12,9 @@ const ICONS: Record<SnapshotCard["key"], string> = {
   costPerQuote: "receipt_long",
   costPerSale: "price_check",
   leads: "person_add",
+  contactRate: "phone_in_talk",
+  qualifiedRate: "verified",
+  liveTransferRate: "swap_calls",
 };
 
 export const TONE_STYLE: Record<Tone, { bg: string; fg: string }> = {
@@ -21,7 +24,15 @@ export const TONE_STYLE: Record<Tone, { bg: string; fg: string }> = {
 };
 
 const fmt = (card: Pick<SnapshotCard, "kind">, v: number | null) =>
-  v == null ? "—" : card.kind === "cost" ? `$${v.toLocaleString("en-US", { maximumFractionDigits: v < 100 ? 2 : 0 })}` : v.toLocaleString();
+  v == null
+    ? "—"
+    : card.kind === "cost"
+    ? `$${v.toLocaleString("en-US", { maximumFractionDigits: v < 100 ? 2 : 0 })}`
+    : card.kind === "rate"
+    ? `${Math.round(v)}%`
+    : v.toLocaleString();
+// A change: dollars for costs, percentage points for rates.
+const fmtDiff = (card: Pick<SnapshotCard, "kind">, d: number) => (card.kind === "rate" ? `${Math.round(d)} pts` : card.kind === "cost" ? fmt(card, d) : d.toLocaleString());
 
 // Monthly KPI cards. Everything a CLIENT shouldn't see was already dropped by
 // the server (lib/kpi.ts getSnapshot); coaches get every card, with the ones
@@ -140,6 +151,7 @@ export default function SnapshotPanel({
       {isCoach && (
         <p className="text-[10px] mt-3" style={{ color: "var(--text-muted)" }}>
           Counts are by when each step happened (the team&apos;s dated notes, else the stage change seen live), in Sydney time.{" "}
+          Rates follow the month&apos;s leads: contacted ÷ leads, qualified (contacted, not disqualified) ÷ contacted, live transfers ÷ qualified.{" "}
           {snap.spendSource === "meta" ? "Spend from Meta." : snap.spendSource === "daily" ? "Spend from daily spend records." : "No dated spend source — connect Meta for cost cards."}
           {" "}Past months are frozen on the 1st; &ldquo;Rebuild history&rdquo; recomputes any month that isn&apos;t frozen yet.
         </p>
@@ -172,7 +184,7 @@ function KpiCard({ card, isCoach }: { card: SnapshotCard; isCoach: boolean }) {
         {diff != null && diff !== 0 && tone ? (
           <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-bold" style={{ background: tone.bg, color: tone.fg }}>
             <span className="material-symbols-outlined text-[12px]">{up ? "arrow_upward" : "arrow_downward"}</span>
-            {card.kind === "cost" ? fmt(card, Math.abs(diff)) : Math.abs(diff).toLocaleString()}
+            {fmtDiff(card, Math.abs(diff))}
           </span>
         ) : null}
         <span className="text-[10px]" style={{ color: "var(--text-muted)" }}>
@@ -201,7 +213,7 @@ function MiniBars({ history, kind }: { history: SnapshotCard["history"]; kind: S
         <div
           key={h.month}
           className="flex-1 rounded-t-[2px]"
-          title={`${h.month}: ${h.value == null ? "—" : kind === "cost" ? `$${Math.round(h.value).toLocaleString()}` : h.value.toLocaleString()}`}
+          title={`${h.month}: ${h.value == null ? "—" : kind === "cost" ? `$${Math.round(h.value).toLocaleString()}` : kind === "rate" ? `${Math.round(h.value)}%` : h.value.toLocaleString()}`}
           style={{ height: `${Math.max(((h.value ?? 0) / max) * 100, h.value ? 6 : 0)}%`, background: i === history.length - 1 ? "var(--primary)" : "var(--primary-tint)" }}
         />
       ))}

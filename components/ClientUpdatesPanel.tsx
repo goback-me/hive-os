@@ -21,10 +21,12 @@ type Row = {
 };
 
 // Quick outcomes a client can report. Quoted / Won need the amount; Lost /
-// Disqualified need a reason.
-const ACTIONS: { key: string; label: string; stage: LeadStageValue; needs?: "value" | "lost" | "dq" }[] = [
+// Disqualified need a reason. A no-show is a cancelled appointment: rebook
+// it, or it's lost (reason: ghosted — `target` sets it).
+const ACTIONS: { key: string; label: string; stage: LeadStageValue; target?: string; needs?: "value" | "lost" | "dq" }[] = [
   { key: "booked", label: "Consult booked", stage: "CONSULT_BOOKED" },
-  { key: "cancelled", label: "Consult cancelled", stage: "CONSULT_CANCELLED" },
+  { key: "cancelled", label: "No show / cancelled – rebook", stage: "CONSULT_CANCELLED" },
+  { key: "noshowLost", label: "No show – lost", stage: "LOST", target: "LOST:GHOSTED" },
   { key: "attended", label: "Attended", stage: "CONSULT_ATTENDED" },
   { key: "quoted", label: "Quoted", stage: "QUOTE_SENT", needs: "value" },
   { key: "won", label: "Won", stage: "WON", needs: "value" },
@@ -181,7 +183,7 @@ function UpdateRow({ row, onSave, pinned = false, saved = false }: { row: Row; o
   function save() {
     if (!a || !valid) return;
     setSaving(true);
-    const target = a.needs === "lost" || a.needs === "dq" ? `${a.stage}:${reason}` : a.stage;
+    const target = a.target ?? (a.needs === "lost" || a.needs === "dq" ? `${a.stage}:${reason}` : a.stage);
     onSave(target, a.needs === "value" ? amount : undefined).finally(() => setSaving(false));
   }
 

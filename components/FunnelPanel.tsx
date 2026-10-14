@@ -100,12 +100,15 @@ export default function FunnelPanel({
           })}
         </div>
         <div className="flex flex-wrap gap-x-6 gap-y-1 mt-4 pt-3" style={{ borderTop: "1px solid var(--border)" }}>
-          <Stat label="Overall conversion" value={fmtPct(overall.rates.overallConversion)} strong />
-          <Stat label="Live transfer rate" value={fmtPct(overall.rates.liveTransferRate)} />
-          <Stat label="Returned by client" value={`${c.returned.toLocaleString()} (${fmtPct(overall.rates.returnedRate)} of handovers)`} />
-          <Stat label="No-shows" value={c.noShows.toLocaleString()} />
+          {/* The headline rates, each with its count: sales ÷ leads, contacted ÷ leads,
+              qualified (contacted, not DQ) ÷ contacted, live transfers ÷ qualified. */}
+          <Stat label={`Sales (${c.won.toLocaleString()} of ${c.leads.toLocaleString()} leads)`} value={fmtPct(overall.rates.overallConversion)} strong />
+          <Stat label={`Contact rate (${c.contacted.toLocaleString()} contacted)`} value={fmtPct(overall.rates.contactRate)} />
+          <Stat label={`Qualified (${c.qualified.toLocaleString()} of ${c.contacted.toLocaleString()} contacted)`} value={fmtPct(overall.rates.qualifiedRate)} />
+          <Stat label={`Live transfer rate (${c.liveTransfers.toLocaleString()} of ${c.qualified.toLocaleString()} qualified)`} value={fmtPct(overall.rates.liveTransferRate)} />
           {dq && <Stat label="Lost" value={dq.lost.toLocaleString()} />}
           {dq && <Stat label="Disqualified" value={dq.dq.toLocaleString()} />}
+          {c.returned > 0 && <Stat label={`Returned by client (${fmtPct(overall.rates.returnedRate)} of handovers)`} value={c.returned.toLocaleString()} />}
         </div>
       </div>
 

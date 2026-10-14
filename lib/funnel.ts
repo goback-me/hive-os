@@ -56,7 +56,7 @@ export type FunnelCounts = {
 export type FunnelRates = {
   contactRate: number | null;
   qualifiedRate: number | null;
-  liveTransferRate: number | null;
+  liveTransferRate: number | null; // live transfers / qualified
   returnedRate: number | null; // returned by client / handovers
   bookingRate: number | null;
   showRate: number | null;
@@ -146,9 +146,12 @@ export function emptyCounts(): FunnelCounts {
 export function addLead(c: FunnelCounts, lead: FunnelLead) {
   const r = reachedRank(lead);
   const preContactDq = lead.stage === "DISQUALIFIED" && (lead.dqPhase ?? "PRE_CONTACT") === "PRE_CONTACT";
+  const contacted = r >= STAGE_RANK.CONTACTED && !preContactDq;
   c.leads++;
-  if (r >= STAGE_RANK.CONTACTED && !preContactDq) c.contacted++;
-  if (r >= STAGE_RANK.HANDOVER_ATTEMPTED) c.qualified++; // any handover or CLIENT_CONTACTED (or later)
+  if (contacted) c.contacted++;
+  // Qualified = contacted and not disqualified. "Not ready yet" still counts:
+  // no buying intent yet isn't a DQ.
+  if (contacted && lead.stage !== "DISQUALIFIED") c.qualified++;
   if (r >= STAGE_RANK.HANDOVER_ATTEMPTED) c.handovers++; // any HANDOVER_STAGES (live, attempted, text) or later
   if (has(lead, "HANDOVER_LIVE")) c.liveTransfers++;
   if (lead.stuckWithClient) c.stuckWithClient++;
@@ -175,7 +178,7 @@ export function funnelRates(c: FunnelCounts): FunnelRates {
   return {
     contactRate: pct(c.contacted, c.leads),
     qualifiedRate: pct(c.qualified, c.contacted),
-    liveTransferRate: pct(c.liveTransfers, c.handovers),
+    liveTransferRate: pct(c.liveTransfers, c.qualified), // leads → contacted → qualified → live transfer
     returnedRate: pct(c.returned, c.handovers),
     bookingRate: pct(c.consultsBooked, c.handovers),
     showRate: pct(c.consultsAttended, c.consultsBooked),

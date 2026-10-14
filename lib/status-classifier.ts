@@ -26,7 +26,7 @@ export const normalizeStatusText = (raw: string | null | undefined) => fixTypos(
 const has = (s: string, re: RegExp) => re.test(s);
 
 function lostReason(s: string): LostReasonValue {
-  if (has(s, /ghost/)) return "GHOSTED";
+  if (has(s, /ghost|\bno show\b|\bdidnt attend\b/)) return "GHOSTED";
   if (has(s, /elsewhere|someone else/)) return "WENT_ELSEWHERE";
   if (has(s, /budget|price|expensive/)) return "BUDGET";
   return "UNKNOWN";
@@ -45,16 +45,20 @@ function dqReason(s: string): DqReasonValue {
 
 // The shared rules, on already-normalized text. First match wins; undefined
 // = not recognised (reported back as unmapped, never guessed).
+const DQ_WORDS = /\bdisqualified\b|\bnot suitable\b|\bprice shopper\b|\btoo far\b/;
+
 function classify(s: string): ClassifiedStatus | undefined {
   if (has(s, /\bwon\b|\bsold\b/)) return { stage: "WON" };
   if (has(s, /\bquoted\b/) && has(s, /\blost\b/)) return { stage: "LOST", lostReason: lostReason(s) };
   if (has(s, /\blost\b/)) return { stage: "LOST", lostReason: lostReason(s) };
+  if (has(s, /\bquoted\b/) && has(s, DQ_WORDS)) return { stage: "DISQUALIFIED", dqReason: dqReason(s) };
   if (has(s, /\bquoted\b|\bquote sent\b/)) return { stage: "QUOTE_SENT" };
-  if (has(s, /\bdidnt attend\b|\bno show\b/)) return { stage: "CONSULT_NO_SHOW" };
+  // A no-show is a cancelled appointment: "No show – rebook" waits on a new
+  // booking; "No show – lost" is caught by the lost rule above.
+  if (has(s, /\bdidnt attend\b|\bno show\b|\bcancell?ed\b/)) return { stage: "CONSULT_CANCELLED" };
   if (has(s, /\battended\b/)) return { stage: "CONSULT_ATTENDED" };
-  if (has(s, /\bcancell?ed\b/)) return { stage: "CONSULT_CANCELLED" };
   if (has(s, /\bbooked\b|\bpre consult\b/)) return { stage: "CONSULT_BOOKED" };
-  if (has(s, /\bdisqualified\b|\bnot suitable\b|\bprice shopper\b|\btoo far\b/)) return { stage: "DISQUALIFIED", dqReason: dqReason(s) };
+  if (has(s, DQ_WORDS)) return { stage: "DISQUALIFIED", dqReason: dqReason(s) };
   if (has(s, /\blive transfer\b/)) return { stage: "HANDOVER_LIVE" };
   if (has(s, /\blive attempted\b/)) return { stage: "HANDOVER_ATTEMPTED" };
   if (has(s, /\btext hand ?over\b/)) return { stage: "HANDOVER_TEXT" };
@@ -101,6 +105,13 @@ export function parseMapping(mapping: unknown): Record<string, StageTarget> {
   return out;
 }
 
+// A quote never un-happens: "Quote – lost", "Quoted – DQ" end the deal AND
+// say a quote went out. Tagged here so saved mappings get it too. Plain
+// "LOST" / "DQ" claim no quote. ("quotes" is left out: "getting 3 quotes"
+// is a price shopper, not our quote.)
+const withQuote = (t: StageTarget, key: string): StageTarget =>
+  (t.stage === "LOST" || t.stage === "DISQUALIFIED") && /\bquoted?\b/.test(key) ? { ...t, quoted: true } : t;
+
 // One status cell → stage target. The client's saved mapping wins; otherwise
 // the column's keyword rules (classifyHive / classifyProspect). A value
 // neither recognises is counted in `unmapped` (normalized value → rows) and
@@ -112,12 +123,12 @@ export function resolveStatus(
   classify: (raw: string) => ClassifiedStatus | null | undefined
 ): StageTarget | undefined {
   const key = normalizeStatus(raw);
-  if (key in mapping) return mapping[key];
+  if (key in mapping) return withQuote(mapping[key], key);
   const classified = classify(raw);
   if (classified === null) return { stage: null }; // known "no outcome"
   if (classified === undefined) {
     if (key) unmapped[key] = (unmapped[key] ?? 0) + 1;
     return undefined;
   }
-  return classified;
+  return withQuote(classified, key);
 }

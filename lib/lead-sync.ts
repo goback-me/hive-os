@@ -3,7 +3,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getAdminGoogleConnection, getDropdownOptions, getValidAccessToken, getSheetValues, hasWriteScope } from "@/lib/google-sheets";
 import { automationWrites, queueWrites, type CellWrite } from "@/lib/sheet-writeback";
-import { countValues, reconcile, type SideCounts } from "@/lib/reconcile";
+import { countValues, duplicateRows, reconcile, type DuplicateRow, type RowCells, type SideCounts } from "@/lib/reconcile";
 import { runHealthChecks } from "@/lib/data-health";
 import { refreshHandoverAt } from "@/lib/reminders";
 import { kickSlack, queueLeadEvent } from "@/lib/slack";
@@ -115,7 +115,7 @@ export async function syncLeadsFromSheet(clientId: string): Promise<SyncSummary>
   }
 }
 
-type ReconInput = { sheet: SideCounts; seenIds: string[]; badOptInLeadIds: string[] };
+type ReconInput = { sheet: SideCounts; seenIds: string[]; badOptInLeadIds: string[]; duplicates: DuplicateRow[] };
 
 // Raw sheet vs what HQ now holds (lib/reconcile.ts), saved per sync — the
 // last 50 are kept. Leads with a newer HQ change are left out of "won" on
@@ -138,7 +138,7 @@ async function saveReconciliation(clientId: string, recon: ReconInput) {
   };
   const diffs = reconcile(recon.sheet, hq);
   await prisma.syncReconciliation.create({
-    data: { clientId, sheetCounts: { ...recon.sheet, badOptInLeadIds: recon.badOptInLeadIds }, hqCounts: hq, diffs, ok: diffs.length === 0 },
+    data: { clientId, sheetCounts: { ...recon.sheet, badOptInLeadIds: recon.badOptInLeadIds, duplicates: recon.duplicates.slice(0, 100) }, hqCounts: hq, diffs, ok: diffs.length === 0 },
   });
   const old = await prisma.syncReconciliation.findMany({ where: { clientId }, orderBy: { createdAt: "desc" }, skip: 50, select: { id: true } });
   if (old.length) await prisma.syncReconciliation.deleteMany({ where: { id: { in: old.map((o) => o.id) } } });
@@ -208,6 +208,7 @@ type PendingUpdate = {
   events: PlannedEvent[];
   noteJob?: NoteJob;
   returned?: boolean; // sent back to Chase Up by the client (isReturn)
+  reread?: boolean; // status cells unchanged since last sync (eventRows)
   dqNotes?: string[]; // DQ reason left to the AI pass — the lead's note entries
 };
 
@@ -216,13 +217,23 @@ type StageEventRow = { id: string; leadId: string; stage: LeadStageValue; at: Da
 // Planned events → rows. A brand-new lead's stages are IMPORT (we don't know
 // when they happened); a change seen on an existing lead is SYNC — or
 // RETURNED_BY_CLIENT when it's a handed-over lead going back to Chase Up.
-function eventRows(leadId: string, planned: PlannedEvent[], isNew: boolean, at: Date, returned = false): StageEventRow[] {
+// `reread` = the status cells didn't change since last sync: an observed
+// stage is then old news our rules only now read (e.g. the quote in an old
+// "Quoted – lost"), so IMPORT — not dated today.
+function eventRows(leadId: string, planned: PlannedEvent[], isNew: boolean, at: Date, returned = false, reread = false): StageEventRow[] {
   return planned.map((e) => ({
     id: randomUUID(),
     leadId,
     stage: e.stage,
     at,
-    source: e.kind === "inferred" ? "INFERRED" : isNew ? "IMPORT" : returned && e.kind === "change" && e.stage === "CHASE_UP" ? "RETURNED_BY_CLIENT" : "SYNC",
+    source:
+      e.kind === "inferred"
+        ? "INFERRED"
+        : isNew || (reread && e.kind === "observed")
+        ? "IMPORT"
+        : returned && e.kind === "change" && e.stage === "CHASE_UP"
+        ? "RETURNED_BY_CLIENT"
+        : "SYNC",
   }));
 }
 
@@ -348,7 +359,8 @@ async function runSync(
   // For reconciliation: every identified row as the sheet has it.
   const sheetRows: { hive: string; prospect: string; won: boolean; value: number | null }[] = [];
   const badOptIn: string[] = []; // lead id, or externalKey for a new lead
-  const creates = new Map<string, { data: Record<string, unknown>; events: PlannedEvent[]; noteJob?: NoteJob; dqNotes?: string[] }>(); // externalKey -> new lead
+  const creates = new Map<string, { row: number; data: Record<string, unknown>; events: PlannedEvent[]; noteJob?: NoteJob; dqNotes?: string[] }>(); // externalKey -> new lead
+  const rowLead = new Map<number, RowCells & { lead: string }>(); // row index -> the lead it landed on
   let identifiedRows = 0;
 
   rows.forEach((row, rowIdx) => {
@@ -418,6 +430,7 @@ async function runSync(
     const dateOptIn = dateOptInIdx !== -1 ? parseSheetDate(cells[rowIdx][dateOptInIdx]) : null;
     if (dateOptInIdx !== -1 && !dateOptIn) badOptIn.push(existing?.id ?? externalKey);
     sheetRows.push({ hive: rawStatus, prospect: rawResultStatus, won: final.stage === "WON" && !hqWins, value });
+    rowLead.set(rowIdx, { lead: existing?.id ?? `new:${externalKey}`, name, email, phone, hive: rawStatus.trim(), prospect: rawResultStatus.trim() });
     const attempts = attemptsIdx !== -1 ? parseInt(row[attemptsIdx], 10) : NaN;
 
     // Feedback/notes cell → dated events, only when the cell changed since the
@@ -522,6 +535,7 @@ async function runSync(
         events: plan.events,
         noteJob,
         returned,
+        reread: !sheetChanged,
         dqNotes: dq.aiNotes,
       });
     } else {
@@ -529,6 +543,7 @@ async function runSync(
       const reasons = reasonFields(final, plan.dqPhase);
       const dq = applyDqSource(reasons, { final, hive: statusTarget, prospect: resultTarget, notes: cellNotes, cellChanged: true });
       creates.set(externalKey, {
+        row: rowIdx,
         data: { id: randomUUID(), clientId, stage: final.stage, ...reasons, ...dq.fields, ...baseData },
         events: plan.events,
         noteJob,
@@ -594,7 +609,7 @@ async function runSync(
   const newLeads = Array.from(creates.values());
   const events: StageEventRow[] = [
     ...newLeads.flatMap((c) => eventRows(c.data.id as string, c.events, true, now)),
-    ...updates.flatMap((u) => eventRows(u.lead.id, u.events, false, now, u.returned)),
+    ...updates.flatMap((u) => eventRows(u.lead.id, u.events, false, now, u.returned, u.reread)),
   ];
 
   // Leads whose notes were re-parsed: their note events are replaced wholesale.
@@ -657,6 +672,7 @@ async function runSync(
       },
       seenIds: [...Array.from(claimed.keys()), ...Array.from(creates.values()).map((c) => c.data.id as string)],
       badOptInLeadIds: badOptIn.map(idOf),
+      duplicates: duplicateRows(rowLead, new Set([...Array.from(claimed.values()), ...newLeads.map((c) => c.row)])),
     },
     summary: { total: rows.length, leads: identifiedRows, created: creates.size, updated: updates.length - restored, removed: staleIds.length, restored },
     unmapped,

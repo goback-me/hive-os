@@ -110,7 +110,7 @@ export async function runHealthChecks(clientId: string, now = new Date()) {
     const latest = await prisma.syncReconciliation.findFirst({ where: { clientId }, orderBy: { createdAt: "desc" } });
     if (latest && !latest.ok) {
       const diffs = latest.diffs as Diff[];
-      f.push({ type: "RECONCILE_MISMATCH", severity: "DANGER", title: "Sheet and HQ don't match", detail: diffs.slice(0, 8).map((d) => `${d.metric}: sheet ${d.sheet}, HQ ${d.hq}`).join("\n"), fixHint: "Usually duplicate rows (same email/phone/name) or a renamed status — fix the sheet, then sync. Client reports are paused until this clears.", fixUrl: url.sheet, count: diffs.length });
+      f.push({ type: "RECONCILE_MISMATCH", severity: "DANGER", title: "Sheet and HQ don't match", detail: diffs.slice(0, 8).map((d) => `${d.metric}: sheet ${d.sheet}, HQ ${d.hq}`).join("\n"), fixHint: "Usually duplicate rows (same email/phone/name) — press Fix to see which rows clash and delete or correct them. Client reports are paused until this clears.", fixUrl: url.sheet, count: diffs.length });
     }
     const badOptIn = ((latest?.sheetCounts as { badOptInLeadIds?: string[] } | null)?.badOptInLeadIds ?? []).filter(Boolean);
     if (badOptIn.length) {

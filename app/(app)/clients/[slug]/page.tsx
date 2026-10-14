@@ -531,6 +531,7 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
             id: a.id,
             clientName: client.name,
             clientSlug: client.slug,
+            type: a.type,
             severity: a.severity,
             title: a.title,
             detail: a.detail,

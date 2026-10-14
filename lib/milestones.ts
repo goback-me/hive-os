@@ -80,6 +80,31 @@ export function milestoneSql(stages: LeadStageValue | LeadStageValue[]): Prisma.
   )`;
 }
 
+// A quote's date — what every quote count uses. A quote never un-happens: a
+// lead is quoted once it has any Quote Sent step (any source — an old
+// "Quoted – lost" included) or is Won (a sale had a quote). Dated by its
+// Quote Sent milestone; unknown → its outcome's date, else (like wonAtSql)
+// its last note, else its opt-in date. So a Won lead's quote never lands
+// after its sale.
+export const quoteAtSql = () => Prisma.sql`COALESCE(
+  ${milestoneSql("QUOTE_SENT")},
+  CASE WHEN l.stage = 'WON' OR EXISTS (SELECT 1 FROM "LeadStageEvent" e WHERE e."leadId" = l.id AND e.stage::text = 'QUOTE_SENT') THEN COALESCE(
+    ${milestoneSql(["WON", "LOST", "DISQUALIFIED"])},
+    (SELECT MAX(ne.at) FROM "LeadNoteEvent" ne WHERE ne."leadId" = l.id),
+    l."createdAt"
+  ) END
+)`;
+
+// A live transfer's date — what every live-transfer count uses. Its
+// milestone; a live transfer we only know undated (on the sheet at the first
+// import, or read from an old status) counts too, dated by first contact,
+// else the opt-in date — not dropped, and not piled into the import month.
+export const liveAtSql = () => Prisma.sql`COALESCE(
+  ${milestoneSql("HANDOVER_LIVE")},
+  CASE WHEN EXISTS (SELECT 1 FROM "LeadStageEvent" e WHERE e."leadId" = l.id AND e.stage::text = 'HANDOVER_LIVE')
+    THEN COALESCE(${milestoneSql("CONTACTED")}, l."createdAt") END
+)`;
+
 // A sale's date. The WON milestone when we have one; a lead that was already
 // Won when first imported has no real close time, so its last dated note
 // stands in, else (last resort, so its revenue isn't lost) its opt-in date.

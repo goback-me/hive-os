@@ -1,5 +1,5 @@
 import { prisma } from "./prisma";
-import { milestoneSql, wonAtSql } from "./milestones";
+import { liveAtSql, milestoneSql, quoteAtSql, wonAtSql } from "./milestones";
 import { getMetaAllCampaigns } from "./meta-ads";
 import { clampRange, getReportingScope, type Range, type ScopeCampaign } from "./reporting-scope";
 import type { ReportVisibility } from "./report-visibility";
@@ -81,9 +81,9 @@ export async function getAdsReport(clientId: string, requested: Range, viewer: {
         FROM "Lead" WHERE "clientId" = ${clientId} AND "deletedAt" IS NULL AND "createdAt" >= ${since}
       ), m AS (
         SELECT l.campaign, l."createdAt" AS opt_in, l.value,
-          ${milestoneSql("HANDOVER_LIVE")} AS live,
+          ${liveAtSql()} AS live,
           ${milestoneSql("CONSULT_BOOKED")} AS booked,
-          ${milestoneSql("QUOTE_SENT")} AS quote,
+          ${quoteAtSql()} AS quote,
           CASE WHEN l.stage = 'WON' THEN ${wonAtSql()} END AS won
         FROM l
       )

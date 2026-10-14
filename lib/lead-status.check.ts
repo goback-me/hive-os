@@ -56,6 +56,10 @@ plan = planStageEvents({ oldStage: null, newStage: "DISQUALIFIED", prior: "HANDO
 assert.equal(plan.dqPhase, "POST_HANDOVER");
 assert.deepEqual(plan.events.map((e) => `${e.kind}:${e.stage}`), ["change:DISQUALIFIED", "observed:HANDOVER_TEXT", "inferred:CONTACTED"]);
 
+// An old "Quoted – lost" read again: the quote (and the path to it) is filled in
+plan = planStageEvents({ oldStage: "LOST", newStage: "LOST", prior: "QUOTE_SENT", eventStages: new Set(["CONTACTED", "HANDOVER_LIVE", "LOST"]) });
+assert.deepEqual(plan.events.map((e) => `${e.kind}:${e.stage}`), ["observed:QUOTE_SENT", "inferred:CONSULT_BOOKED", "inferred:CONSULT_ATTENDED"]);
+
 // No change → no events
 assert.equal(planStageEvents({ oldStage: "CONTACTED", newStage: "CONTACTED", prior: "CONTACTED", eventStages: new Set(["CONTACTED"]) }).events.length, 0);
 

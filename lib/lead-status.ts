@@ -37,7 +37,7 @@ export const STAGE_LABELS: Record<LeadStageValue, string> = {
   HANDOVER_TEXT: "Text handover",
   CLIENT_CONTACTED: "Client Contacted",
   CONSULT_BOOKED: "Consult Booked",
-  CONSULT_CANCELLED: "Consult Cancelled",
+  CONSULT_CANCELLED: "Consult Cancelled / No-show",
   CONSULT_NO_SHOW: "Consult No-Show",
   CONSULT_ATTENDED: "Consult Attended",
   QUOTE_SENT: "Quote Sent",
@@ -121,7 +121,9 @@ function sameStep(a: LeadStageValue, b: LeadStageValue) {
 // ── Mapping targets ─────────────────────────────────────────────────────
 // stage: null = "no outcome" (e.g. a blank / "N/A" Prospect Status) — the
 // value is known and deliberately contributes nothing.
-export type StageTarget = { stage: LeadStageValue | null; dqReason?: DqReasonValue; lostReason?: LostReasonValue };
+// quoted: a Lost / DQ result that says a quote went out ("Quote – lost") —
+// set from the cell text by resolveStatus, never stored in a mapping.
+export type StageTarget = { stage: LeadStageValue | null; dqReason?: DqReasonValue; lostReason?: LostReasonValue; quoted?: boolean };
 
 // Stored mapping values are objects now; older rows stored a bare stage
 // string ("WON"). The dropdowns use "STAGE", "STAGE:REASON" or "__none__".
@@ -163,16 +165,18 @@ export function targetLabel(t: StageTarget | undefined): string {
   return STAGE_LABELS[t.stage];
 }
 
-// Every option a mapping dropdown offers, in funnel order.
+// Every option a mapping dropdown offers, in funnel order. No-Show isn't
+// offered: a no-show is a cancelled appointment (rebook it, or it's lost) —
+// the stage only stays for old data.
 export const TARGET_OPTIONS: { value: string; label: string }[] = [
-  ...LEAD_STAGES.filter((s) => s !== "LOST" && s !== "DISQUALIFIED").map((s) => ({ value: s, label: STAGE_LABELS[s] })),
+  ...LEAD_STAGES.filter((s) => s !== "LOST" && s !== "DISQUALIFIED" && s !== "CONSULT_NO_SHOW").map((s) => ({ value: s, label: STAGE_LABELS[s] })),
   ...LOST_REASONS.map((r) => ({ value: `LOST:${r}`, label: `Lost · ${LOST_REASON_LABELS[r]}` })),
   ...DQ_REASONS.map((r) => ({ value: `DISQUALIFIED:${r}`, label: `DQ · ${DQ_REASON_LABELS[r]}` })),
 ];
 
 // The prospect-side stages a CLIENT login may set (their side of the deal,
 // as on the "Update your leads" panel). Enforced in updateLeadStage.
-export const CLIENT_STAGES: LeadStageValue[] = ["CLIENT_CONTACTED", "CONSULT_BOOKED", "CONSULT_CANCELLED", "CONSULT_NO_SHOW", "CONSULT_ATTENDED", "QUOTE_SENT", "WON", "LOST", "DISQUALIFIED"];
+export const CLIENT_STAGES: LeadStageValue[] = ["CLIENT_CONTACTED", "CONSULT_BOOKED", "CONSULT_CANCELLED", "CONSULT_ATTENDED", "QUOTE_SENT", "WON", "LOST", "DISQUALIFIED"];
 export const targetOptionsFor = (role: "COACH" | "CLIENT") =>
   role === "COACH" ? TARGET_OPTIONS : TARGET_OPTIONS.filter((o) => CLIENT_STAGES.includes(o.value.split(":")[0] as LeadStageValue));
 
@@ -186,13 +190,14 @@ export function stageText(lead: { stage: LeadStageValue; dqReason?: DqReasonValu
 // Hive column + Prospect column → one stage. The higher-ranked wins; on a tie
 // (both terminal) the Prospect/result column wins — it's the client's word
 // on how the deal ended. `prior` is the furthest non-terminal stage either
-// column shows, used for dqPhase and so a DQ still records how far it got.
-// `fallback` applies when neither column gives a stage.
+// column shows (Quote Sent for a "quoted – lost/DQ"), used for dqPhase and so
+// a Lost/DQ still records how far it got. `fallback` applies when neither
+// column gives a stage.
 export function combineTargets(status: StageTarget | undefined, result: StageTarget | undefined, fallback: LeadStageValue = "CHASE_UP") {
   const s = status?.stage ? status : undefined;
   const r = result?.stage ? result : undefined;
   const final: StageTarget = !s && !r ? { stage: fallback } : !s ? r! : !r ? s : STAGE_RANK[s.stage!] > STAGE_RANK[r.stage!] ? s : r;
-  const prior = [s?.stage, r?.stage]
+  const prior = [s?.stage, r?.stage, s?.quoted || r?.quoted ? ("QUOTE_SENT" as const) : null]
     .filter((x): x is LeadStageValue => !!x && !isTerminal(x))
     .sort((a, b) => STAGE_RANK[b] - STAGE_RANK[a])[0] ?? null;
   return { final: final as StageTarget & { stage: LeadStageValue }, prior };

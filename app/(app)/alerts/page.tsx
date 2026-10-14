@@ -60,7 +60,7 @@ export default async function AlertsPage({ searchParams }: { searchParams: { cli
           <div key={a.id}>
             <AlertRow
               showClient
-              alert={{ id: a.id, clientName: a.client.name, clientSlug: a.client.slug, severity: a.severity, title: a.title, detail: a.detail, fixHint: a.fixHint, fixUrl: a.fixUrl, status: a.status, lastSeenAt: a.lastSeenAt.toISOString(), dismissNote: a.dismissNote, ...leadsOf.get(a.id) }}
+              alert={{ id: a.id, clientName: a.client.name, clientSlug: a.client.slug, type: a.type, severity: a.severity, title: a.title, detail: a.detail, fixHint: a.fixHint, fixUrl: a.fixUrl, status: a.status, lastSeenAt: a.lastSeenAt.toISOString(), dismissNote: a.dismissNote, ...leadsOf.get(a.id) }}
             />
             <p className="text-[10px] -mt-1 mb-2 pl-7" style={{ color: "var(--text-muted)" }}>
               {TYPE_LABEL(a.status)} · first seen {when(a.firstSeenAt)} · last seen {when(a.lastSeenAt)}
