@@ -5,13 +5,15 @@ import { liveAtSql, milestoneSql, quoteAtSql, wonAtSql } from "./milestones";
 import { terms } from "./client-terms";
 import type { ReportVisibility } from "./report-visibility";
 import { addLead, emptyCounts, funnelRates } from "./funnel";
+import { isAutoBooked } from "./lead-status";
 
 // Snapshot KPIs — activity-based, bucketed by Sydney calendar month.
 //
 // leads           opt-in date (Lead.createdAt) in the window
 // contacted       distinct leads first contacted in the window
-// liveTransfers   distinct leads whose live handover happened in the window —
-//                 imported ones included, dated by first contact (liveAtSql)
+// liveTransfers   distinct leads live transferred in the window — live or text
+//                 handover, or auto/self-booked; imported ones dated by first
+//                 contact (liveAtSql)
 // consultsBooked  distinct leads whose consult was booked in the window
 // quotes          distinct leads whose quote went out in the window — Won and
 //                 "quoted – lost/DQ" leads included (quoteAtSql)
@@ -101,7 +103,7 @@ async function countKpis(clientId: string, w: Window, startDate: Date | null) {
   const since = startDate ?? new Date(0);
   const [row] = await prisma.$queryRaw<{ leads: bigint; contacted: bigint; live: bigint; booked: bigint; quotes: bigint; booked_or_quoted: bigint; sales: bigint; revenue: unknown }[]>`
     WITH l AS (
-      SELECT id, "createdAt", stage, value FROM "Lead" WHERE "clientId" = ${clientId} AND "deletedAt" IS NULL AND "createdAt" >= ${since}
+      SELECT id, "createdAt", stage, value, "hiveStatusRaw", "prospectStatusRaw" FROM "Lead" WHERE "clientId" = ${clientId} AND "deletedAt" IS NULL AND "createdAt" >= ${since}
     ), m AS (
       SELECT l."createdAt" AS opt_in, l.value,
         ${milestoneSql("CONTACTED")} AS contacted,
@@ -318,10 +320,10 @@ type CardKind = "count" | "cost" | "rate";
 async function cohortRates(clientId: string, w: Pick<Window, "from" | "to">, startDate: Date | null): Promise<Record<RateKey, number | null>> {
   const leads = await prisma.lead.findMany({
     where: { clientId, deletedAt: null, createdAt: { gte: startDate && startDate > w.from ? startDate : w.from, lt: w.to } },
-    select: { stage: true, dqPhase: true, dqReason: true, lostReason: true, stageEvents: { select: { stage: true } } },
+    select: { stage: true, dqPhase: true, dqReason: true, lostReason: true, hiveStatusRaw: true, prospectStatusRaw: true, stageEvents: { select: { stage: true } } },
   });
   const c = emptyCounts();
-  for (const l of leads) addLead(c, { ...l, campaign: "", eventStages: l.stageEvents.map((e) => e.stage) });
+  for (const l of leads) addLead(c, { ...l, campaign: "", eventStages: l.stageEvents.map((e) => e.stage), autoBooked: isAutoBooked(l.hiveStatusRaw, l.prospectStatusRaw) });
   const { contactRate, qualifiedRate, liveTransferRate } = funnelRates(c);
   return { contactRate, qualifiedRate, liveTransferRate };
 }

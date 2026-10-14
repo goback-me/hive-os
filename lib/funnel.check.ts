@@ -1,7 +1,7 @@
 // Run: npx tsx lib/funnel.check.ts — throws on the first failure.
 import assert from "node:assert/strict";
 import { addLead, biggestDrop, emptyCounts, funnelRates, isStuckWithClient, reachedRank, type FunnelLead } from "./funnel";
-import { STAGE_RANK } from "./lead-status";
+import { STAGE_RANK, isAutoBooked } from "./lead-status";
 
 const lead = (p: Partial<FunnelLead>): FunnelLead => ({ campaign: "A", stage: "CHASE_UP", dqPhase: null, dqReason: null, lostReason: null, eventStages: [], ...p });
 
@@ -38,7 +38,7 @@ assert.equal(funnelRates(c).qualifiedRate, 80);
   assert.equal(q.qualified, 1);
 }
 assert.equal(c.handovers, 4);
-assert.equal(c.liveTransfers, 2);
+assert.equal(c.liveTransfers, 3); // 2 live + the text handover
 assert.equal(c.consultsBooked, 3);
 assert.equal(c.noShows, 1);
 assert.equal(c.consultsAttended, 2);
@@ -61,15 +61,20 @@ assert.match(drop!.advice, /Offer\/intent/);
 
 console.log("funnel: all checks passed");
 
-// Handovers = every HANDOVER_STAGES; live transfers = HANDOVER_LIVE only;
-// liveTransferRate = live / qualified (all 4 are contacted, none DQ).
+// Handovers = every HANDOVER_STAGES; live transfers = live or text handover,
+// or auto/self-booked; liveTransferRate = live / qualified (all contacted, none DQ).
 {
   const h = emptyCounts();
   [lead({ stage: "HANDOVER_LIVE" }), lead({ stage: "HANDOVER_ATTEMPTED" }), lead({ stage: "HANDOVER_TEXT" }), lead({ stage: "HANDOVER_ATTEMPTED" })].forEach((l) => addLead(h, l));
   assert.equal(h.handovers, 4);
-  assert.equal(h.liveTransfers, 1);
-  assert.equal(funnelRates(h).liveTransferRate, 25);
+  assert.equal(h.liveTransfers, 2);
+  assert.equal(funnelRates(h).liveTransferRate, 50);
+  addLead(h, lead({ stage: "CONSULT_BOOKED", autoBooked: true }));
+  assert.equal(h.liveTransfers, 3);
 }
+assert.equal(isAutoBooked("Auto booked"), true);
+assert.equal(isAutoBooked(null, "SELF-BOOKED"), true);
+assert.equal(isAutoBooked("BOOKED", "Meeting booked"), false);
 
 // Handovers stuck with the client 14+ days → that drop is the client's.
 {

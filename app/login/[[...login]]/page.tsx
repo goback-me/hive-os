@@ -60,7 +60,7 @@ export default function LoginPage({ searchParams }: { searchParams: { error?: st
                 colorInputBackground: "#ffffff",
                 colorInputText: "#1D1D1F",
                 borderRadius: "0.75rem",
-                fontFamily: "\"Inter\", \"SF Pro Text\", \"SF Pro Icons\", \"Helvetica Neue\", Helvetica, Arial, sans-serif",
+                fontFamily: "\"General Sans\", \"SF Pro Text\", \"SF Pro Icons\", \"Helvetica Neue\", Helvetica, Arial, sans-serif",
               },
               elements: {
                 footerAction: "hidden",

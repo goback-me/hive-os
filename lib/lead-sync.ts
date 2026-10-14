@@ -16,6 +16,7 @@ import {
   HANDOVER_STAGES,
   awaitingClientUpdate,
   combineTargets,
+  isAutoBooked,
   isReturn,
   planStageEvents,
   type DqPhaseValue,
@@ -792,7 +793,7 @@ export async function getClientFunnel(clientId: string, range?: { from?: Date; t
   const [leads, spend, durations] = await Promise.all([
     prisma.lead.findMany({
       where: { clientId, deletedAt: null, ...(createdAt ? { createdAt } : {}) },
-      select: { campaign: true, stage: true, dqPhase: true, dqReason: true, lostReason: true, awaitingClientUpdate: true, handoverAt: true, createdAt: true, returnedCount: true, stageEvents: { select: { stage: true } } },
+      select: { campaign: true, stage: true, dqPhase: true, dqReason: true, lostReason: true, awaitingClientUpdate: true, handoverAt: true, createdAt: true, returnedCount: true, hiveStatusRaw: true, prospectStatusRaw: true, stageEvents: { select: { stage: true } } },
     }),
     scopedSpend(scope, dateRange),
     getFunnelDurations(clientId, dateRange),
@@ -801,7 +802,7 @@ export async function getClientFunnel(clientId: string, range?: { from?: Date; t
   const overall = emptyCounts();
   const byCampaign = new Map<string, FunnelCounts>();
   for (const l of leads) {
-    const lead: FunnelLead = { ...l, campaign: campaignKey(l.campaign), eventStages: l.stageEvents.map((e) => e.stage), stuckWithClient: isStuckWithClient(l), returned: l.returnedCount > 0 };
+    const lead: FunnelLead = { ...l, campaign: campaignKey(l.campaign), eventStages: l.stageEvents.map((e) => e.stage), stuckWithClient: isStuckWithClient(l), returned: l.returnedCount > 0, autoBooked: isAutoBooked(l.hiveStatusRaw, l.prospectStatusRaw) };
     if (!byCampaign.has(lead.campaign)) byCampaign.set(lead.campaign, emptyCounts());
     addLead(byCampaign.get(lead.campaign)!, lead);
     addLead(overall, lead);

@@ -1,5 +1,5 @@
 import { Prisma } from "@prisma/client";
-import type { LeadStageValue } from "./lead-status";
+import { AUTO_BOOKED_PATTERN, LIVE_TRANSFER_STAGES, type LeadStageValue } from "./lead-status";
 import { CALL_ATTEMPT_EVENTS, type NoteEventValue } from "./notes-parser";
 
 // When a lead reached a funnel step — the one rule every duration, KPI,
@@ -95,15 +95,22 @@ export const quoteAtSql = () => Prisma.sql`COALESCE(
   ) END
 )`;
 
-// A live transfer's date — what every live-transfer count uses. Its
-// milestone; a live transfer we only know undated (on the sheet at the first
-// import, or read from an old status) counts too, dated by first contact,
-// else the opt-in date — not dropped, and not piled into the import month.
-export const liveAtSql = () => Prisma.sql`COALESCE(
-  ${milestoneSql("HANDOVER_LIVE")},
-  CASE WHEN EXISTS (SELECT 1 FROM "LeadStageEvent" e WHERE e."leadId" = l.id AND e.stage::text = 'HANDOVER_LIVE')
-    THEN COALESCE(${milestoneSql("CONTACTED")}, l."createdAt") END
-)`;
+// A live transfer's date — what every live-transfer count uses. A live
+// transfer = live or text handover, or an auto/self-booked lead
+// (LIVE_TRANSFER_STAGES / AUTO_BOOKED_PATTERN). Dated by the handover's
+// milestone, else (auto-booked) the booking's; one we only know undated (on
+// the sheet at the first import) counts too, dated by first contact, else
+// the opt-in date — not dropped, and not piled into the import month.
+// Needs l."hiveStatusRaw" / l."prospectStatusRaw".
+export const liveAtSql = () => {
+  const autoBooked = Prisma.sql`(COALESCE(l."hiveStatusRaw", '') ~* ${AUTO_BOOKED_PATTERN} OR COALESCE(l."prospectStatusRaw", '') ~* ${AUTO_BOOKED_PATTERN})`;
+  return Prisma.sql`COALESCE(
+    ${milestoneSql(LIVE_TRANSFER_STAGES)},
+    CASE WHEN ${autoBooked} THEN ${milestoneSql("CONSULT_BOOKED")} END,
+    CASE WHEN ${autoBooked} OR EXISTS (SELECT 1 FROM "LeadStageEvent" e WHERE e."leadId" = l.id AND e.stage::text IN (${Prisma.join(LIVE_TRANSFER_STAGES)}))
+      THEN COALESCE(${milestoneSql("CONTACTED")}, l."createdAt") END
+  )`;
+};
 
 // A sale's date. The WON milestone when we have one; a lead that was already
 // Won when first imported has no real close time, so its last dated note

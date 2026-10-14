@@ -115,7 +115,7 @@ export default function AdsPanel({ clientId, isCoach, onSetReporting, maxFrom }:
             </table>
           </div>
           <p className="text-[10px] -mt-3" style={{ color: "var(--text-muted)" }}>
-            Each lead and everything it led to — live transfers, bookings, quotes, sales — is credited to the campaign that generated it, counted when it happened in this period. Revenue is dated by the won date.
+            Each lead and everything it led to — live transfers, bookings, quotes, sales — is credited to the campaign that generated it, counted when it happened in this period. Live transfers include text handovers and auto/self-booked leads. Revenue is dated by the won date.
           </p>
 
           {/* Jobs won — same panel as Leads → Sales, on the same range: after the campaign table, before the campaign ticks + Meta connection. */}

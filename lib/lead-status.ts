@@ -103,6 +103,14 @@ export const TERMINAL_STAGES: LeadStageValue[] = ["WON", "LOST", "DISQUALIFIED"]
 export const HANDOVER_STAGES: LeadStageValue[] = ["HANDOVER_LIVE", "HANDOVER_ATTEMPTED", "HANDOVER_TEXT"];
 export const isTerminal = (s: LeadStageValue) => TERMINAL_STAGES.includes(s);
 
+// What every report counts as a live transfer: a live transfer, a text
+// handover, or a lead that booked itself ("auto booked" / "self booked" in
+// either status column) — the client got the lead each way. The pattern is
+// matched case-insensitively here and in SQL (lib/milestones.ts liveAtSql).
+export const LIVE_TRANSFER_STAGES: LeadStageValue[] = ["HANDOVER_LIVE", "HANDOVER_TEXT"];
+export const AUTO_BOOKED_PATTERN = "(self|auto)[^a-z]*booked";
+export const isAutoBooked = (...cells: (string | null | undefined)[]) => cells.some((c) => new RegExp(AUTO_BOOKED_PATTERN, "i").test(c ?? ""));
+
 // Returned by the client: a lead past the handover (handover / consult /
 // quote) sent back to Chase Up. Logged as a RETURNED_BY_CLIENT stage event;
 // the lead keeps its history and counts once per stage in the funnel.

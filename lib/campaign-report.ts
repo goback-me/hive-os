@@ -76,7 +76,7 @@ export async function getAdsReport(clientId: string, requested: Range, viewer: {
     prisma.$queryRaw<Activity[]>`
       WITH l AS (
         -- Blank, "-" and an unfilled ad template ("{{campaign.name}}") are all "no campaign".
-        SELECT id, "createdAt", stage, value,
+        SELECT id, "createdAt", stage, value, "hiveStatusRaw", "prospectStatusRaw",
           CASE WHEN TRIM(COALESCE(campaign, '')) IN ('', '-') OR campaign LIKE '{{%' THEN ${UNATTRIBUTED} ELSE TRIM(campaign) END AS campaign
         FROM "Lead" WHERE "clientId" = ${clientId} AND "deletedAt" IS NULL AND "createdAt" >= ${since}
       ), m AS (

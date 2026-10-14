@@ -93,8 +93,8 @@ html.fonts-loaded .material-symbols-outlined {
   --color-border: var(--border);
   --color-border-strong: var(--border-strong);
 
-  --font-heading: "Inter", "SF Pro Text", "SF Pro Icons", "Helvetica Neue", Helvetica, Arial, sans-serif;
-  --font-body: "Inter", "SF Pro Text", "SF Pro Icons", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-heading: "General Sans", "SF Pro Text", "SF Pro Icons", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-body: "General Sans", "SF Pro Text", "SF Pro Icons", "Helvetica Neue", Helvetica, Arial, sans-serif;
 }
 
 body {

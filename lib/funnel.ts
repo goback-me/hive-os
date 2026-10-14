@@ -6,6 +6,7 @@
 import {
   DQ_PHASES,
   DQ_REASONS,
+  LIVE_TRANSFER_STAGES,
   LOST_REASONS,
   STAGE_RANK,
   isTerminal,
@@ -25,6 +26,7 @@ export type FunnelLead = {
   eventStages: LeadStageValue[]; // every LeadStageEvent stage, any source
   stuckWithClient?: boolean; // handed over STUCK_DAYS+ ago, still awaiting the client's update
   returned?: boolean; // sent back to Chase Up by the client at least once (Lead.returnedCount)
+  autoBooked?: boolean; // "auto/self booked" in a status column — counts as a live transfer (isAutoBooked)
 };
 
 // A handover still awaiting the client's update this long is "stuck with
@@ -153,7 +155,7 @@ export function addLead(c: FunnelCounts, lead: FunnelLead) {
   // no buying intent yet isn't a DQ.
   if (contacted && lead.stage !== "DISQUALIFIED") c.qualified++;
   if (r >= STAGE_RANK.HANDOVER_ATTEMPTED) c.handovers++; // any HANDOVER_STAGES (live, attempted, text) or later
-  if (has(lead, "HANDOVER_LIVE")) c.liveTransfers++;
+  if (lead.autoBooked || LIVE_TRANSFER_STAGES.some((s) => has(lead, s))) c.liveTransfers++; // live / text handover / auto-booked
   if (lead.stuckWithClient) c.stuckWithClient++;
   if (lead.returned) c.returned++;
   if (r >= STAGE_RANK.CONSULT_BOOKED) c.consultsBooked++;
