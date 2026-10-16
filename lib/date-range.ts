@@ -7,7 +7,7 @@ import { sydneyDay, sydneyLocalToDate } from "./sheet-parse";
 // resolves to no lower bound, which the server clamps to the client's start
 // date (lib/reporting-scope.ts clampRange) — agency views: all data.
 
-export const REPORT_PRESETS = ["this_month", "last_month", "last_3_months", "since_start", "custom"] as const;
+export const REPORT_PRESETS = ["since_start", "this_month", "last_month", "last_3_months", "custom"] as const;
 export type ReportPreset = (typeof REPORT_PRESETS)[number];
 export const REPORT_LABELS: Record<ReportPreset, string> = {
   this_month: "Month to date",
@@ -35,7 +35,8 @@ const monthStart = (day: string, n = 0) => {
   return `${Math.floor(i / 12)}-${String((i % 12) + 1).padStart(2, "0")}-01`;
 };
 
-export const DEFAULT_REPORT_RANGE: ReportRange = { preset: "this_month" };
+// Everything by default — narrowing is the client's choice.
+export const DEFAULT_REPORT_RANGE: ReportRange = { preset: "since_start" };
 
 export function parseReportRange(sp: { get(k: string): string | null }): ReportRange {
   const preset = sp.get("range") as ReportPreset;
@@ -61,14 +62,20 @@ export function reportRangeLabel(r: ReportRange) {
 // the picker). Maximum starts at `maxFrom` (the client's start date, or the
 // earliest data), "YYYY-MM-DD"; without one it's just "→ <today>".
 export function reportRangeDates(r: ReportRange, maxFrom: string | null | undefined, now = new Date()) {
-  const today = sydneyDay(now);
-  const days = reportDays(r, now);
-  const since = r.preset === "since_start" ? (maxFrom && maxFrom <= today ? maxFrom : undefined) : days.since;
-  const until = days.until ?? today;
+  const { since, until } = reportRangeDays(r, maxFrom, now);
   const fmt = (d: string, year: boolean) => new Date(`${d}T12:00:00Z`).toLocaleDateString("en-AU", { day: "numeric", month: "short", ...(year ? { year: "numeric" } : {}), timeZone: "UTC" });
   if (!since) return `→ ${fmt(until, true)}`;
   if (since === until) return fmt(until, true);
   return `${fmt(since, since.slice(0, 4) !== until.slice(0, 4))} – ${fmt(until, true)}`;
+}
+
+// The inclusive "YYYY-MM-DD" days a range covers (since is undefined for
+// Maximum with no known start) — the picker prefills its date inputs with it.
+export function reportRangeDays(r: ReportRange, maxFrom: string | null | undefined, now = new Date()) {
+  const today = sydneyDay(now);
+  const days = reportDays(r, now);
+  const since = r.preset === "since_start" ? (maxFrom && maxFrom <= today ? maxFrom : undefined) : days.since;
+  return { since, until: days.until ?? today };
 }
 
 // Inclusive Sydney days → {from, to exclusive}. this_month / last_3_months

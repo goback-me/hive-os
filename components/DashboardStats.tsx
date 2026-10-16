@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import DateRangePicker, { useReportRange } from "@/components/DateRangePicker";
 import HiddenBadge from "@/components/HiddenBadge";
-import { reportRangeLabel, reportRangeQuery } from "@/lib/date-range";
+import { DEFAULT_REPORT_RANGE, reportRangeLabel, reportRangeQuery } from "@/lib/date-range";
 import type { ViewerStats } from "@/lib/client-stats";
 
 const money = (v: number) => `${v < 0 ? "-" : ""}$${Math.abs(v).toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
@@ -21,8 +21,8 @@ export default function DashboardStats({ clientId, initial, isCoach, maxFrom }: 
   const [error, setError] = useState<string | null>(null);
   const req = useRef(0);
 
-  // The server rendered month to date — no fetch needed on first paint for it.
-  const skipFirst = useRef(range.preset === "this_month");
+  // The server rendered the default range — no fetch needed on first paint for it.
+  const skipFirst = useRef(range.preset === DEFAULT_REPORT_RANGE.preset);
   useEffect(() => {
     if (skipFirst.current) {
       skipFirst.current = false;

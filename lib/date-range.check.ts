@@ -1,6 +1,6 @@
 // Run: npx tsx lib/date-range.check.ts — throws on the first failure.
 import assert from "node:assert/strict";
-import { DEFAULT_REPORT_RANGE, REPORT_LABELS, REPORT_PRESETS, parseReportRange, previousReportRange, reportRangeDates, reportRangeQuery, resolveReportRange } from "./date-range";
+import { DEFAULT_REPORT_RANGE, REPORT_LABELS, REPORT_PRESETS, parseReportRange, previousReportRange, reportRangeDates, reportRangeDays, reportRangeQuery, resolveReportRange } from "./date-range";
 
 const q = (s: string) => new URLSearchParams(s);
 // 2 Oct 2026 09:00 Sydney (AEST, DST starts 4 Oct 2026).
@@ -23,9 +23,9 @@ assert.deepEqual(resolveReportRange({ preset: "custom", from: "2026-10-01", to: 
 // URL round trip; bad or reversed customs.
 assert.deepEqual(parseReportRange(q(reportRangeQuery({ preset: "custom", from: "2026-09-01", to: "2026-09-10" }))), { preset: "custom", from: "2026-09-01", to: "2026-09-10" });
 assert.deepEqual(parseReportRange(q("range=custom&from=2026-09-10&to=2026-09-01")), { preset: "custom", from: "2026-09-01", to: "2026-09-10" });
-assert.deepEqual(parseReportRange(q("range=custom&from=2026-02-31&to=2026-03-01")), { preset: "this_month" });
-assert.deepEqual(parseReportRange(q("range=nope")), { preset: "this_month" });
-assert.deepEqual(parseReportRange(q("")), { preset: "this_month" }, "no range → month to date");
+assert.deepEqual(parseReportRange(q("range=custom&from=2026-02-31&to=2026-03-01")), { preset: "since_start" });
+assert.deepEqual(parseReportRange(q("range=nope")), { preset: "since_start" });
+assert.deepEqual(parseReportRange(q("")), { preset: "since_start" }, "no range → Maximum");
 assert.deepEqual(parseReportRange(q("range=last_month")), { preset: "last_month" });
 
 // Previous periods.
@@ -41,8 +41,8 @@ assert.match(p3.label, /^1 Sept? 2026 – 10 Sept? 2026$/);
 assert.equal(previousReportRange({ preset: "since_start" }, now), null);
 
 // The one preset list, default first.
-assert.deepEqual(REPORT_PRESETS.map((p) => REPORT_LABELS[p]), ["Month to date", "Last month", "Last 3 months", "Maximum", "Custom"]);
-assert.equal(DEFAULT_REPORT_RANGE.preset, "this_month");
+assert.deepEqual(REPORT_PRESETS.map((p) => REPORT_LABELS[p]), ["Maximum", "Month to date", "Last month", "Last 3 months", "Custom"]);
+assert.equal(DEFAULT_REPORT_RANGE.preset, "since_start");
 
 // Dates shown under the picker — always from today, never hardcoded.
 const sep = "Sept?"; // ICU builds differ on "Sep"/"Sept"
@@ -54,5 +54,9 @@ assert.match(reportRangeDates({ preset: "since_start" }, "2025-11-03", now), /^3
 assert.match(reportRangeDates({ preset: "since_start" }, null, now), /^→ 2 Oct 2026$/);
 assert.match(reportRangeDates({ preset: "custom", from: "2026-09-11", to: "2026-09-20" }, null, now), new RegExp(`^11 ${sep} – 20 ${sep} 2026$`));
 assert.match(reportRangeDates({ preset: "this_month" }, null, new Date("2026-12-31T01:00:00Z")), /^1 Dec – 31 Dec 2026$/);
+
+// Picker prefill: the actual days of each range.
+assert.deepEqual(reportRangeDays({ preset: "last_month" }, null, now), { since: "2026-09-01", until: "2026-09-30" });
+assert.deepEqual(reportRangeDays({ preset: "since_start" }, "2026-07-01", now), { since: "2026-07-01", until: "2026-10-02" });
 
 console.log("date-range: all checks passed");

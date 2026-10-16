@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { REPORT_LABELS, REPORT_PRESETS, parseReportRange, reportRangeDates, reportRangeLabel, reportRangeQuery, type ReportRange } from "@/lib/date-range";
+import { REPORT_LABELS, REPORT_PRESETS, parseReportRange, reportRangeDates, reportRangeDays, reportRangeLabel, reportRangeQuery, type ReportRange } from "@/lib/date-range";
 
 // The selected report range lives in the URL (?range=…&from=…&to=…), so it
 // survives a refresh and can be shared. history.replaceState keeps it a
@@ -24,12 +24,14 @@ export function useReportRange(): [ReportRange, (r: ReportRange) => void] {
 // The app's one date range picker — at the top of a tab, every report section
 // below follows it. The actual dates show under it; maxFrom ("YYYY-MM-DD") is
 // where Maximum starts: the client's start date, or the earliest data.
+// Presets are one click; the From/To dates are always there, prefilled with
+// the current range, so picking exact days needs no extra step.
 export default function DateRangePicker({ value, onChange, maxFrom }: { value: ReportRange; onChange: (r: ReportRange) => void; maxFrom?: string | null }) {
   const [open, setOpen] = useState(false);
-  const [showCustom, setShowCustom] = useState(value.preset === "custom");
-  const [from, setFrom] = useState(value.from ?? "");
-  const [to, setTo] = useState(value.to ?? "");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
   const ref = useRef<HTMLDivElement>(null);
+  const today = reportRangeDays({ preset: "this_month" }, null).until;
 
   useEffect(() => {
     function onClickOutside(e: MouseEvent) {
@@ -39,13 +41,23 @@ export default function DateRangePicker({ value, onChange, maxFrom }: { value: R
     return () => document.removeEventListener("mousedown", onClickOutside);
   }, []);
 
+  function toggle() {
+    if (!open) {
+      const d = reportRangeDays(value, maxFrom);
+      setFrom(d.since ?? "");
+      setTo(d.until);
+    }
+    setOpen(!open);
+  }
+
   const inputStyle = { background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" };
 
   return (
     <div className="relative flex flex-col items-end" ref={ref}>
       <button
         aria-label="Date range"
-        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        onClick={toggle}
         className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold"
         style={{ border: "1px solid var(--border)", color: "var(--text-primary)", background: "var(--surface)" }}
       >
@@ -56,17 +68,15 @@ export default function DateRangePicker({ value, onChange, maxFrom }: { value: R
       <span className="text-[11px] mt-0.5" style={{ color: "var(--text-muted)" }}>{reportRangeDates(value, maxFrom)}</span>
       {open && (
         <div
-          className="absolute right-0 top-full z-20 mt-1 rounded-lg overflow-hidden py-1 min-w-[220px]"
+          className="absolute right-0 top-full z-20 mt-1 rounded-lg overflow-hidden py-1 w-[260px] max-w-[calc(100vw-32px)]"
           style={{ background: "var(--surface-card)", border: "1px solid var(--border)", boxShadow: "0 20px 40px -16px rgba(0,0,0,0.25)" }}
         >
-          {REPORT_PRESETS.map((p) => {
-            const active = showCustom ? p === "custom" : p === value.preset;
+          {REPORT_PRESETS.filter((p) => p !== "custom").map((p) => {
+            const active = p === value.preset;
             return (
               <button
                 key={p}
                 onClick={() => {
-                  if (p === "custom") return setShowCustom(true); // pick the dates below, then Apply
-                  setShowCustom(false);
                   onChange({ preset: p });
                   setOpen(false);
                 }}
@@ -78,16 +88,17 @@ export default function DateRangePicker({ value, onChange, maxFrom }: { value: R
                 }}
               >
                 {REPORT_LABELS[p]}
-                {p === "since_start" && <span className="text-[11px] font-normal" style={{ color: "var(--text-muted)" }}> · {maxFrom ? reportRangeDates({ preset: "since_start" }, maxFrom) : "start → today"}</span>}
+                <span className="text-[11px] font-normal" style={{ color: "var(--text-muted)" }}> · {p === "since_start" && !maxFrom ? "start → today" : reportRangeDates({ preset: p }, maxFrom)}</span>
               </button>
             );
           })}
-          {showCustom && <div className="px-3 pb-2 pt-2 space-y-1.5" style={{ borderTop: "1px solid var(--border)" }}>
+          <div className="px-3 pb-2 pt-2 space-y-1.5" style={{ borderTop: "1px solid var(--border)", background: value.preset === "custom" ? "var(--primary-tint)" : "transparent" }}>
+            <p className="text-xs font-bold" style={{ color: value.preset === "custom" ? "var(--primary)" : "var(--text-primary)" }}>Or pick exact dates</p>
             <label className="flex items-center justify-between gap-2 text-xs" style={{ color: "var(--text-muted)" }}>
-              From <input type="date" value={from} max={to || undefined} onChange={(e) => setFrom(e.target.value)} className="px-2 py-1 rounded-md text-xs outline-none" style={inputStyle} />
+              From <input type="date" value={from} max={to || today} onChange={(e) => setFrom(e.target.value)} className="px-2 py-1 rounded-md text-xs outline-none" style={inputStyle} />
             </label>
             <label className="flex items-center justify-between gap-2 text-xs" style={{ color: "var(--text-muted)" }}>
-              To <input type="date" value={to} min={from || undefined} onChange={(e) => setTo(e.target.value)} className="px-2 py-1 rounded-md text-xs outline-none" style={inputStyle} />
+              To <input type="date" value={to} min={from || undefined} max={today} onChange={(e) => setTo(e.target.value)} className="px-2 py-1 rounded-md text-xs outline-none" style={inputStyle} />
             </label>
             <button
               disabled={!from || !to}
@@ -97,9 +108,9 @@ export default function DateRangePicker({ value, onChange, maxFrom }: { value: R
               }}
               className="w-full btn-gradient px-3 py-1.5 rounded-lg text-xs font-bold disabled:opacity-40"
             >
-              Apply custom range
+              Show these dates
             </button>
-          </div>}
+          </div>
         </div>
       )}
     </div>

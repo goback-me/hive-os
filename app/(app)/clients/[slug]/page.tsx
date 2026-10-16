@@ -53,7 +53,7 @@ import { checkAndGrantAwards } from "@/lib/awards";
 import { STAGE_LABELS, STAGE_STYLE } from "@/lib/lead-status";
 import { sydneyDay } from "@/lib/sheet-parse";
 import { getClientStats, statsForViewer } from "@/lib/client-stats";
-import { resolveReportRange } from "@/lib/date-range";
+import { DEFAULT_REPORT_RANGE, resolveReportRange } from "@/lib/date-range";
 import { getSnapshot } from "@/lib/kpi";
 import { parseVisibility } from "@/lib/report-visibility";
 import DashboardStats from "@/components/DashboardStats";
@@ -131,8 +131,8 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
     // not just when a lesson gets toggled — so editing a tier's threshold or a
     // payment landing doesn't require an unrelated action to unlock it.
     checkAndGrantAwards(client.id),
-    // Dashboard cards' first paint (This month); the range picker refetches.
-    getClientStats(client.id, resolveReportRange({ preset: "this_month" }), false),
+    // Dashboard cards' first paint (the default range); the picker refetches.
+    getClientStats(client.id, resolveReportRange(DEFAULT_REPORT_RANGE), DEFAULT_REPORT_RANGE.preset === "since_start"),
     // Snapshot KPI cards (current Sydney month); the month picker refetches.
     getSnapshot(client.id, null, viewer, visibility),
     // Lazily provisions a referral link for clients that existed before this
