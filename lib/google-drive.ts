@@ -1,3 +1,5 @@
+import { googleFetch } from "./google-sheets";
+
 const FOLDER_MIME = "application/vnd.google-apps.folder";
 
 export type DriveItem = {
@@ -41,7 +43,7 @@ export function isFolder(item: Pick<DriveItem, "mimeType">): boolean {
 }
 
 export async function getDriveMeta(accessToken: string, id: string): Promise<DriveItem> {
-  const res = await fetch(
+  const res = await googleFetch(accessToken,
     `https://www.googleapis.com/drive/v3/files/${id}?fields=${META_FIELDS}&supportsAllDrives=true`,
     { headers: { Authorization: `Bearer ${accessToken}` } }
   );
@@ -58,7 +60,7 @@ export async function listDriveChildren(accessToken: string, folderId: string): 
     supportsAllDrives: "true",
     includeItemsFromAllDrives: "true",
   });
-  const res = await fetch(`https://www.googleapis.com/drive/v3/files?${params.toString()}`, {
+  const res = await googleFetch(accessToken, `https://www.googleapis.com/drive/v3/files?${params.toString()}`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   if (!res.ok) throw new Error(`Drive folder list failed (${res.status}): ${await res.text()}`);
@@ -107,7 +109,7 @@ export async function fetchDriveFileContent(accessToken: string, item: DriveItem
   const url = isGoogleNativeType(item.mimeType)
     ? `https://www.googleapis.com/drive/v3/files/${item.id}/export?mimeType=${encodeURIComponent("application/pdf")}`
     : `https://www.googleapis.com/drive/v3/files/${item.id}?alt=media&supportsAllDrives=true`;
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+  const res = await googleFetch(accessToken, url);
   if (!res.ok) throw new Error(`Drive file fetch failed (${res.status}): ${await res.text()}`);
   return res;
 }

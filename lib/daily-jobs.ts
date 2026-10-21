@@ -10,9 +10,10 @@ import { adminChannel, parseSlackEvents, queueSlack, slackConfigured } from "./s
 import { ensureTask } from "./clickup";
 import { weekStart } from "./weekly";
 import { terms } from "./client-terms";
+import { callDateLabel } from "./am-calls";
 
 // Run by the cron every day from 8am Sydney. Mondays: each client's weekly
-// Slack digest (last week's numbers) and the main channel's weekly summary.
+// Slack digest (last week's numbers + call) and the main channel's weekly summary.
 // Every day: the weekly ClickUp tasks (made once a week each). Every item
 // has a dedupe key for its week, so the 5-minute cron sends each once.
 // What's on is ticked per client (Slack) and in Settings (lib/automations.ts).
@@ -55,6 +56,13 @@ export async function runDailyJobs(now = new Date()) {
   const kpiCache = new Map<string, Awaited<ReturnType<typeof getRangeKpis>>>();
   const weekKpis = async (id: string) => kpiCache.get(id) ?? kpiCache.set(id, await getRangeKpis(id, lastWeek, now)).get(id)!;
   const n = (v: number, one: string, many: string) => `${v} ${v === 1 ? one : many}`;
+  // Last week's account-manager calls (a rescheduled one lives on as its replacement).
+  const calls = today !== weekKey ? [] : await prisma.amCall.findMany({
+    where: { scheduledAt: { gte: lastWeek.from, lt: lastWeek.to }, status: { not: "RESCHEDULED" } },
+    select: { clientId: true, scheduledAt: true, status: true, summary: true, nextSteps: true, notHeldReason: true },
+    orderBy: { scheduledAt: "asc" },
+  });
+  const callsFor = (id: string) => calls.filter((x) => x.clientId === id);
 
   // ── Mondays: client digests — last week's numbers + what needs doing ──
   if (today === weekKey && (await slackConfigured())) {
@@ -83,6 +91,10 @@ export async function runDailyJobs(now = new Date()) {
             ]),
         awaiting ? `:hourglass_flowing_sand: ${n(awaiting, "lead is", "leads are")} waiting for your update — let us know what happened with ${awaiting === 1 ? "it" : "them"}.` : null,
         ...danger.map((a) => `:warning: ${a.title}. ${a.fixHint}`),
+        // The call summary + next steps are client-facing (they're emailed too); internal notes never are.
+        ...callsFor(c.id)
+          .filter((x) => x.status === "HELD" && x.summary)
+          .map((x) => [`:telephone_receiver: *Our call — ${callDateLabel(x.scheduledAt)}*`, x.summary, ...x.nextSteps.map((s) => `• ${s}`)].join("\n")),
         step?.nextStep ? `:point_right: Next step: ${step.nextStep}${step.nextStepDue ? ` (by ${step.nextStepDue.toLocaleDateString("en-AU", { timeZone: "Australia/Sydney", day: "numeric", month: "short" })})` : ""}` : null,
         `<${appUrl()}/clients/${c.slug}|Open Hive HQ>`,
       ].filter(Boolean);
@@ -101,7 +113,12 @@ export async function runDailyJobs(now = new Date()) {
         const stats = !k.leads && !k.liveTransfers && !k.quotes && !k.sales
           ? "quiet week"
           : [n(k.leads, "lead", "leads"), n(k.liveTransfers, "transfer", "transfers"), n(k.quotes, t.quote.toLowerCase(), t.quotes.toLowerCase()), `${n(k.sales, t.sale.toLowerCase(), t.sales.toLowerCase())}${k.revenue ? ` ($${Math.round(k.revenue).toLocaleString("en-US")})` : ""}`].join(" · ");
-        numbers.push(`• *<${appUrl()}/clients/${c.slug}|${c.name}>* — ${stats}`);
+        const callNote = callsFor(c.id)
+          .map((x) => (x.status === "HELD" ? `call held ${callDateLabel(x.scheduledAt)}` : x.status === "NOT_HELD" ? `:warning: call didn't happen (${x.notHeldReason ?? "no reason"})` : `:hourglass_flowing_sand: call ${callDateLabel(x.scheduledAt)} not logged`))
+          .join(", ");
+        numbers.push(`• *<${appUrl()}/clients/${c.slug}|${c.name}>* — ${stats}${callNote ? ` · ${callNote}` : ""}`);
+        const held = callsFor(c.id).filter((x) => x.status === "HELD" && x.summary);
+        for (const x of held) numbers.push(`      ↳ ${x.summary!.replace(/\s+/g, " ").slice(0, 200)}`);
       }
       const overdue = new Set(needs.filter((x) => x.type === "client_updates_overdue").map((x) => x.clientId));
       const flagged = rows.filter((r) => r.health !== "green" || r.dangerAlerts > 0 || overdue.has(r.clientId));

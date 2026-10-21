@@ -65,7 +65,13 @@ async function refreshAccessToken(refreshToken: string) {
       grant_type: "refresh_token",
     }),
   });
-  if (!res.ok) throw new Error(`Google token refresh failed: ${await res.text()}`);
+  if (!res.ok) {
+    const body = await res.text();
+    // invalid_grant = the refresh token itself is dead (access removed, password
+    // changed, or the OAuth app is in Testing mode — those expire after 7 days).
+    if (body.includes("invalid_grant")) throw new Error("Google connection expired — an admin needs to disconnect and reconnect Google on the Leads page.");
+    throw new Error(`Google token refresh failed: ${body}`);
+  }
   return res.json() as Promise<{ access_token: string; expires_in: number }>;
 }
 
@@ -91,25 +97,37 @@ export async function getAdminGoogleConnection() {
 
 // Returns a valid (auto-refreshed if needed) access token for the single
 // connected Google account, persisting the refreshed token back to Postgres.
-export async function getValidAccessToken(): Promise<string> {
+// `force` refreshes even if it hasn't expired — Google can revoke a token
+// early, and then every call 401s until expiresAt (see googleFetch).
+let refreshing: Promise<string> | null = null; // parallel 401s share one refresh
+export async function getValidAccessToken({ force = false } = {}): Promise<string> {
   const conn = await getAdminGoogleConnection();
   if (!conn) throw new Error("No Google account connected yet");
 
   const isExpired = conn.expiresAt.getTime() - 60_000 < Date.now(); // refresh 1 min early
-  if (!isExpired) return decryptToken(conn.accessToken);
+  if (!isExpired && !force) return decryptToken(conn.accessToken);
 
-  const refreshToken = decryptToken(conn.refreshToken);
-  const refreshed = await refreshAccessToken(refreshToken);
+  refreshing ??= (async () => {
+    const refreshed = await refreshAccessToken(decryptToken(conn.refreshToken));
+    await prisma.googleAccountConnection.update({
+      where: { id: conn.id },
+      data: {
+        accessToken: encryptToken(refreshed.access_token),
+        expiresAt: new Date(Date.now() + refreshed.expires_in * 1000),
+      },
+    });
+    return refreshed.access_token;
+  })().finally(() => (refreshing = null));
+  return refreshing;
+}
 
-  await prisma.googleAccountConnection.update({
-    where: { id: conn.id },
-    data: {
-      accessToken: encryptToken(refreshed.access_token),
-      expiresAt: new Date(Date.now() + refreshed.expires_in * 1000),
-    },
-  });
-
-  return refreshed.access_token;
+// fetch with the Google token; on a 401 the token is force-refreshed and the
+// call retried once, so a token Google revoked early heals by itself.
+export async function googleFetch(accessToken: string, url: string, init: RequestInit = {}) {
+  const call = (token: string) => fetch(url, { ...init, headers: { ...(init.headers as Record<string, string>), Authorization: `Bearer ${token}` } });
+  const res = await call(accessToken);
+  if (res.status !== 401) return res;
+  return call(await getValidAccessToken({ force: true }));
 }
 
 // ── Drive: list the connected account's Google Sheets files ─────────
@@ -120,7 +138,7 @@ export async function listSpreadsheets(accessToken: string) {
     orderBy: "modifiedTime desc",
     pageSize: "50",
   });
-  const res = await fetch(`https://www.googleapis.com/drive/v3/files?${params.toString()}`, {
+  const res = await googleFetch(accessToken, `https://www.googleapis.com/drive/v3/files?${params.toString()}`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   if (!res.ok) throw new Error(`Drive list failed: ${await res.text()}`);
@@ -130,7 +148,7 @@ export async function listSpreadsheets(accessToken: string) {
 
 // ── Sheets: list tab names within a spreadsheet ──────────────────────
 export async function listSheetTabs(accessToken: string, spreadsheetId: string) {
-  const res = await fetch(
+  const res = await googleFetch(accessToken,
     `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=sheets.properties.title`,
     { headers: { Authorization: `Bearer ${accessToken}` } }
   );
@@ -152,7 +170,7 @@ export async function getSheetValues(
 ) {
   const range = encodeURIComponent(`${sheetName}`);
   const query = opts.unformatted ? "?valueRenderOption=UNFORMATTED_VALUE&dateTimeRenderOption=SERIAL_NUMBER" : "";
-  const res = await fetch(
+  const res = await googleFetch(accessToken,
     `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${range}${query}`,
     { headers: { Authorization: `Bearer ${accessToken}` } }
   );
@@ -176,7 +194,7 @@ export async function getSheetValues(
 // [] (the column is free text).
 export async function getDropdownOptions(accessToken: string, spreadsheetId: string, sheetName: string, colIdx: number): Promise<string[]> {
   const cell = `'${sheetName.replace(/'/g, "''")}'!${columnLetter(colIdx)}2`;
-  const res = await fetch(
+  const res = await googleFetch(accessToken,
     `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?ranges=${encodeURIComponent(cell)}&includeGridData=true&fields=${encodeURIComponent("sheets.data.rowData.values.dataValidation")}`,
     { headers: { Authorization: `Bearer ${accessToken}` } }
   );
@@ -187,7 +205,7 @@ export async function getDropdownOptions(accessToken: string, spreadsheetId: str
   if (condition?.type === "ONE_OF_LIST") return raw.map((v) => v.trim()).filter(Boolean);
   if (condition?.type === "ONE_OF_RANGE" && raw[0]) {
     const range = raw[0].replace(/^=/, "").replace(/\$/g, "");
-    const r = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(range)}`, {
+    const r = await googleFetch(accessToken, `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(range)}`, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     if (!r.ok) throw new Error(`Dropdown range read failed: ${await r.text()}`);
@@ -206,7 +224,7 @@ export function columnLetter(i: number): string {
 
 // ── Sheets: a tab's numeric id (the #gid in its URL) ─────────────────
 export async function getSheetTabId(accessToken: string, spreadsheetId: string, sheetName: string): Promise<number | null> {
-  const res = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=sheets.properties(sheetId,title)`, {
+  const res = await googleFetch(accessToken, `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=sheets.properties(sheetId,title)`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   if (!res.ok) throw new Error(`Sheets metadata fetch failed: ${await res.text()}`);
@@ -216,7 +234,7 @@ export async function getSheetTabId(accessToken: string, spreadsheetId: string, 
 
 // ── Sheets: delete one row (1-based, as numbered in Sheets) ──────────
 export async function deleteSheetRow(accessToken: string, spreadsheetId: string, tabId: number, row: number) {
-  const res = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}:batchUpdate`, {
+  const res = await googleFetch(accessToken, `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}:batchUpdate`, {
     method: "POST",
     headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
     body: JSON.stringify({ requests: [{ deleteDimension: { range: { sheetId: tabId, dimension: "ROWS", startIndex: row - 1, endIndex: row } } }] }),
@@ -227,7 +245,7 @@ export async function deleteSheetRow(accessToken: string, spreadsheetId: string,
 // ── Sheets: write cells (USER_ENTERED, as if typed) ──────────────────
 // Returns the HTTP status so the caller can back off on 429.
 export async function batchUpdateValues(accessToken: string, spreadsheetId: string, data: { range: string; values: string[][] }[]) {
-  const res = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values:batchUpdate`, {
+  const res = await googleFetch(accessToken, `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values:batchUpdate`, {
     method: "POST",
     headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
     body: JSON.stringify({ valueInputOption: "USER_ENTERED", data }),

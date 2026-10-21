@@ -56,6 +56,8 @@ export default async function SettingsPage({ searchParams }: { searchParams: { s
             <p className="text-xs" style={{ color: "var(--text-secondary)" }}>
               {integration?.slackBotToken
                 ? `Connected to ${integration.slackTeamName ?? "your workspace"} — set each client's channel in its Client Details → Integrations.`
+                : process.env.SLACK_BOT_TOKEN
+                ? "Connected with the server's bot token (SLACK_BOT_TOKEN) — set each client's channel in its Client Details → Integrations."
                 : "Not connected — connect once to post sales, live transfers, weekly updates and digests to client channels."}
             </p>
             {searchParams.slack_error && <p className="text-xs mt-1" style={{ color: "var(--danger)" }}>Slack: {searchParams.slack_error}</p>}
@@ -74,8 +76,8 @@ export default async function SettingsPage({ searchParams }: { searchParams: { s
         </div>
         <form action={saveIntegrationSettings} className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
-            <Field label="ClickUp API key" name="clickupApiKey" defaultValue={integration?.clickupApiKey ?? ""} placeholder="pk_..." />
-            <Field label="ClickUp Team ID" name="clickupTeamId" defaultValue={integration?.clickupTeamId ?? ""} placeholder="123456" />
+            <Field label="ClickUp API key" name="clickupApiKey" defaultValue={integration?.clickupApiKey ?? ""} placeholder={process.env.CLICKUP_API_KEY ? "Using the server's CLICKUP_API_KEY" : "pk_..."} />
+            <Field label="ClickUp Team ID" name="clickupTeamId" defaultValue={integration?.clickupTeamId ?? ""} placeholder={process.env.CLICKUP_TEAM_ID || "123456"} />
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div>

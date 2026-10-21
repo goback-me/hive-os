@@ -9,9 +9,11 @@ import { automationOn } from "./automations";
 
 const API = "https://api.clickup.com/api/v2";
 
+// The key saved in Settings, else CLICKUP_API_KEY / CLICKUP_TEAM_ID in the env.
 async function config() {
   const s = await prisma.integrationSettings.findUnique({ where: { id: "singleton" } });
-  return s?.clickupApiKey ? { key: s.clickupApiKey, teamId: s.clickupTeamId } : null;
+  const key = s?.clickupApiKey || process.env.CLICKUP_API_KEY;
+  return key ? { key, teamId: s?.clickupTeamId || process.env.CLICKUP_TEAM_ID || null } : null;
 }
 
 async function call<T>(key: string, path: string, init: RequestInit = {}): Promise<T> {

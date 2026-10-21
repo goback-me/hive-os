@@ -269,10 +269,10 @@ Client-channel posts are ticked per client (Client Details → Integrations). Ad
 | **New sale** | A lead is marked Won with a value | 🎉 **New job won for Jake Of All Tradez!** Kate — **$30,000**, 58 days after they first enquired. |
 | **New live transfer** | A lead is live-transferred | 📞 **New live transfer for Jake Of All Tradez.** Laura Carter was just put through to you on the phone. |
 | **Weekly update** | A coach publishes the weekly update | 📝 **Here's this week's update for Jake Of All Tradez** — What went well / What's getting in the way / What happens next, + link |
-| **Weekly summary** | Mondays from 8am Sydney | 📅 **Here's how last week (13 Oct – 19 Oct) went for …** new leads, live transfers, quotes, jobs won, leads waiting on an update, next step |
+| **Weekly summary** | Mondays from 8am Sydney | 📅 **Here's how last week (13 Oct – 19 Oct) went for …** new leads, live transfers, quotes, jobs won, leads waiting on an update, last week's call (summary + next steps), next step |
 | **Waiting on an update** | With the reminder email (from 9am), at most once a week | ⏳ **7 leads waiting on an update**, with the list and a link |
 | **Weekly call summary** | When an agent logs a call as held | 📞 **Weekly call — Fri 2 Oct** summary, issues, next steps |
-| *(admin channel)* **Weekly summary** | Mondays from 8am, if a main channel is set (Settings → Automations) | Every client's numbers for last week, then the clients that need attention |
+| *(admin channel)* **Weekly summary** | Mondays from 8am, if a main channel is set (Settings → Automations) | Every client's numbers and call status (held / didn't happen / not logged) for last week, then the clients that need attention |
 | *(admin channel)* **Call didn't happen** | When a call is logged as not held | ⚠️ Jake Of All Tradez — Fri 2 Oct's weekly call didn't happen: Rescheduled |
 
 ### Email — via Resend, one button each, the button opens the right page in HQ
