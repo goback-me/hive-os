@@ -145,7 +145,7 @@ export default function AddClientModal({
                   <Field label="Client email" hint="For “leads waiting on your update” emails. Leave blank and those emails are paused for this client until it's added.">
                     <input name="email" type="email" style={inputStyle} className="px-3 py-2 rounded-lg outline-none" placeholder="owner@client.com.au" />
                   </Field>
-                  <Field label="Slack channel ID" hint="Their channel's ID (channel name → About → bottom). Posts sales, live transfers, weekly updates and the 8am digest. Blank = no Slack posts.">
+                  <Field label="Slack channel ID" hint="Their channel's ID (channel name → About → bottom). Posts sales, live transfers, call summaries and the Monday weekly summary. Blank = no Slack posts.">
                     <input name="slackChannelId" style={inputStyle} className="px-3 py-2 rounded-lg outline-none" placeholder="C0123ABCD" />
                   </Field>
                   <Field label="Google Drive folder" hint="Shows as a “Google Drive” button on their page.">

@@ -6,15 +6,16 @@ import { getNeedsAction } from "./needs-action";
 import { getClientFunnel } from "./lead-sync";
 import { biggestDrop } from "./funnel";
 import { resolveReportRange } from "./date-range";
-import { parseSlackEvents, queueSlack, slackConfigured } from "./slack";
+import { adminChannel, parseSlackEvents, queueSlack, slackConfigured } from "./slack";
 import { ensureTask } from "./clickup";
 import { weekStart } from "./weekly";
 import { terms } from "./client-terms";
 
-// Once-a-day work, run by the cron from 8am Sydney: each client's Slack
-// digest, the agency's portfolio digest, and the weekly ClickUp tasks. Every
-// item has a dedupe key for the day/week, so the 5-minute cron sends each
-// once no matter how often it runs after 8.
+// Run by the cron every day from 8am Sydney. Mondays: each client's weekly
+// Slack digest (last week's numbers) and the main channel's weekly summary.
+// Every day: the weekly ClickUp tasks (made once a week each). Every item
+// has a dedupe key for its week, so the 5-minute cron sends each once.
+// What's on is ticked per client (Slack) and in Settings (lib/automations.ts).
 
 const DIGEST_HOUR = 8;
 const appUrl = () => process.env.NEXTAUTH_URL || "";
@@ -39,33 +40,41 @@ async function nextStepFor(clientId: string, needs: Awaited<ReturnType<typeof ge
 export async function runDailyJobs(now = new Date()) {
   if (sydneyHour(now) < DIGEST_HOUR) return { skipped: "before 8am Sydney" };
   const today = sydneyDay(now);
-  const yesterday = addDaysKey(today, -1);
+  const week = weekStart(now);
+  const weekKey = sydneyDay(week);
+  const lastWeekKey = addDaysKey(weekKey, -7);
+  const lastWeek = { from: startOfDay(lastWeekKey), to: startOfDay(weekKey) };
+  const fmtDay = (day: string) => new Date(`${day}T00:00:00Z`).toLocaleDateString("en-AU", { day: "numeric", month: "short", timeZone: "UTC" });
+  const weekLabel = `${fmtDay(lastWeekKey)} – ${fmtDay(addDaysKey(weekKey, -1))}`;
   const out = { clientDigests: 0, adminDigest: false, tasks: 0 };
   const clients = await prisma.client.findMany({
     where: { archivedAt: null, status: { not: "CHURNED" } },
     select: { id: true, name: true, slug: true, slackChannelId: true, slackEvents: true, clientType: true, clickupListId: true },
+    orderBy: { name: "asc" },
   });
+  const kpiCache = new Map<string, Awaited<ReturnType<typeof getRangeKpis>>>();
+  const weekKpis = async (id: string) => kpiCache.get(id) ?? kpiCache.set(id, await getRangeKpis(id, lastWeek, now)).get(id)!;
+  const n = (v: number, one: string, many: string) => `${v} ${v === 1 ? one : many}`;
 
-  // ── Client digests: yesterday's numbers + what needs doing ──
-  if (await slackConfigured()) {
+  // ── Mondays: client digests — last week's numbers + what needs doing ──
+  if (today === weekKey && (await slackConfigured())) {
     for (const c of clients) {
-      if (!c.slackChannelId || !parseSlackEvents(c.slackEvents).dailyDigest) continue;
-      const key = `client_digest:${c.id}:${today}`;
+      if (!c.slackChannelId || !parseSlackEvents(c.slackEvents).weeklyDigest) continue;
+      const key = `client_weekly:${c.id}:${weekKey}`;
       if (await prisma.slackPostLog.findUnique({ where: { dedupeKey: key } })) continue;
       const [k, awaiting, danger, step] = await Promise.all([
-        getRangeKpis(c.id, { from: startOfDay(yesterday), to: startOfDay(today) }, now),
+        weekKpis(c.id),
         prisma.lead.count({ where: { clientId: c.id, deletedAt: null, awaitingClientUpdate: true } }),
         prisma.dataAlert.findMany({ where: { clientId: c.id, status: "OPEN", severity: "DANGER" }, select: { title: true, fixHint: true } }),
         prisma.contactLog.findFirst({ where: { clientId: c.id, nextStep: { not: null } }, orderBy: { contactedAt: "desc" }, select: { nextStep: true, nextStepDue: true } }),
       ]);
       // Plain sentences — this goes to the client's own channel.
       const t = terms(c.clientType);
-      const n = (v: number, one: string, many: string) => `${v} ${v === 1 ? one : many}`;
       const quiet = !k.leads && !k.liveTransfers && !k.quotes && !k.sales;
       const lines = [
-        `:sunrise: *Good morning! Here's how yesterday went for ${c.name}:*`,
+        `:calendar: *Here's how last week (${weekLabel}) went for ${c.name}:*`,
         ...(quiet
-          ? ["• A quiet day — no new leads, transfers, quotes or wins."]
+          ? ["• A quiet week — no new leads, transfers, quotes or wins."]
           : [
               `• ${n(k.leads, "new lead", "new leads")}`,
               `• ${n(k.liveTransfers, "live transfer", "live transfers")}`,
@@ -80,14 +89,23 @@ export async function runDailyJobs(now = new Date()) {
       if (await queueSlack({ clientId: c.id, channel: c.slackChannelId, kind: "client_digest", dedupeKey: key, text: lines.join("\n") })) out.clientDigests++;
     }
 
-    // ── Agency digest: only the clients with something wrong ──
-    const adminChannel = process.env.SLACK_ADMIN_CHANNEL;
-    const adminKey = `admin_digest:${today}`;
-    if (adminChannel && !(await prisma.slackPostLog.findUnique({ where: { dedupeKey: adminKey } }))) {
+    // ── Mondays: main channel — every client's week, then who needs attention ──
+    const mainChannel = await adminChannel();
+    const adminKey = `admin_weekly:${weekKey}`;
+    if (mainChannel && !(await prisma.slackPostLog.findUnique({ where: { dedupeKey: adminKey } }))) {
       const [{ rows }, needs] = await Promise.all([getPortfolio({ preset: "this_month" }, now), getNeedsAction()]);
-      const overdue = new Set(needs.filter((n) => n.type === "client_updates_overdue").map((n) => n.clientId));
+      const numbers: string[] = [];
+      for (const c of clients) {
+        const k = await weekKpis(c.id);
+        const t = terms(c.clientType);
+        const stats = !k.leads && !k.liveTransfers && !k.quotes && !k.sales
+          ? "quiet week"
+          : [n(k.leads, "lead", "leads"), n(k.liveTransfers, "transfer", "transfers"), n(k.quotes, t.quote.toLowerCase(), t.quotes.toLowerCase()), `${n(k.sales, t.sale.toLowerCase(), t.sales.toLowerCase())}${k.revenue ? ` ($${Math.round(k.revenue).toLocaleString("en-US")})` : ""}`].join(" · ");
+        numbers.push(`• *<${appUrl()}/clients/${c.slug}|${c.name}>* — ${stats}`);
+      }
+      const overdue = new Set(needs.filter((x) => x.type === "client_updates_overdue").map((x) => x.clientId));
       const flagged = rows.filter((r) => r.health !== "green" || r.dangerAlerts > 0 || overdue.has(r.clientId));
-      const lines: string[] = [];
+      const attention: string[] = [];
       for (const r of flagged) {
         const issues = [
           r.dangerAlerts ? `${r.dangerAlerts} serious data problem${r.dangerAlerts === 1 ? "" : "s"}` : null,
@@ -95,16 +113,20 @@ export async function runDailyJobs(now = new Date()) {
           r.needsAction ? `${r.needsAction} to action` : null,
         ].filter(Boolean);
         const step = await nextStepFor(r.clientId, needs, now);
-        lines.push(`${r.health === "red" ? ":red_circle:" : ":large_orange_circle:"} *<${appUrl()}/clients/${r.slug}|${r.name}>* — ${issues.join(", ") || "needs attention"}${step ? `\n      → ${step}` : ""}`);
+        attention.push(`${r.health === "red" ? ":red_circle:" : ":large_orange_circle:"} *<${appUrl()}/clients/${r.slug}|${r.name}>* — ${issues.join(", ") || "needs attention"}${step ? `\n      → ${step}` : ""}`);
       }
-      const text = lines.length ? `:clipboard: *Portfolio — ${lines.length} client${lines.length === 1 ? "" : "s"} need attention*\n${lines.join("\n")}` : ":white_check_mark: All clients on track.";
-      out.adminDigest = await queueSlack({ channel: adminChannel, kind: "admin_digest", dedupeKey: adminKey, text });
+      const text = [
+        `:bar_chart: *Last week (${weekLabel})*`,
+        ...numbers,
+        "",
+        attention.length ? `:clipboard: *${attention.length} client${attention.length === 1 ? "" : "s"} need attention*` : ":white_check_mark: All clients on track.",
+        ...attention,
+      ].join("\n");
+      out.adminDigest = await queueSlack({ channel: mainChannel, kind: "admin_digest", dedupeKey: adminKey, text });
     }
   }
 
   // ── Weekly ClickUp tasks ──
-  const week = weekStart(now);
-  const weekKey = sydneyDay(week);
   const friday = startOfDay(addDaysKey(weekKey, 4));
   const fridayFive = new Date(friday.getTime() + 17 * 3_600_000);
   const needs = await getNeedsAction();

@@ -80,7 +80,7 @@ comments). `deploy.sh` won't proceed while the placeholder password is there.
 | `APP_URL` | Optional | Base URL for email links; defaults to `NEXTAUTH_URL` |
 | `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET` | Optional | api.slack.com → your app → Basic Information. Under OAuth & Permissions add bot scopes `chat:write` + `chat:write.public` and redirect URL `https://<your domain>/api/slack/callback`, then use **Add to Slack** in Settings → Integrations |
 | `SLACK_BOT_TOKEN` | Optional | Fallback when Slack isn't connected in Settings: a bot token with `chat:write`, invited to every client channel and the admin channel |
-| `SLACK_ADMIN_CHANNEL` | Optional | Channel ID for the daily 8am portfolio digest |
+| `SLACK_ADMIN_CHANNEL` | Optional | Default main channel ID (Monday weekly summary, missed calls, referrals) — Settings → Automations overrides it |
 
 **ClickUp** isn't an env var: an admin enters the API key + Team ID in the
 app under Settings → Integrations, then picks each client's list on its page.
@@ -112,7 +112,7 @@ On the VPS, `crontab -e` and add (adjust the path to the repo):
 ```
 
 The VPS clock's timezone doesn't matter — the app checks Sydney time itself
-(8am digests, month freezes). Check it's running: `tail -f /var/log/hive-cron.log`.
+(Monday Slack summaries, month freezes). Check it's running: `tail -f /var/log/hive-cron.log`.
 If you still have the old n8n workflow calling this URL, turn it off — two
 callers would just do the work twice.
 

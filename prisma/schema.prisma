@@ -232,6 +232,12 @@ model IntegrationSettings {
   // Slack bot token from "Add to Slack" (app/api/slack/*), encrypted at rest.
   slackBotToken  String?
   slackTeamName  String?
+  // Which main-channel Slack posts / automatic ClickUp tasks are on
+  // (lib/automations.ts). null/missing keys = the defaults there.
+  automations    Json?
+  // The main Slack channel for every client (Settings → Automations);
+  // null = the SLACK_ADMIN_CHANNEL env.
+  slackAdminChannel String?
   updatedAt      DateTime @updatedAt
 }
 
@@ -865,6 +871,27 @@ model AdSpendDaily {
   @@index([clientId, date])
 }
 
+// ── Meta ad history archive, for case studies (lib/meta-archive.ts) ──────
+// Per campaign per day, pulled on connect and topped up by the cron while
+// connected. Disconnecting only clears the token on Client — these rows stay.
+// Nothing in reporting reads this table.
+model MetaAdInsight {
+  id           String   @id @default(cuid())
+  clientId     String
+  client       Client   @relation(fields: [clientId], references: [id])
+  adAccountId  String // "act_…" — a client can reconnect a different account
+  campaignId   String
+  campaignName String
+  date         String // "2026-09-29" — the ad account's day
+  spend        Decimal  @db.Decimal(10, 2)
+  impressions  Int      @default(0)
+  clicks       Int      @default(0)
+  syncedAt     DateTime @default(now())
+
+  @@unique([adAccountId, campaignId, date])
+  @@index([clientId, date])
+}
+
 // ── Revenue, synced from Stripe or manual entry (Hive OS) ────────────────
 model RevenueMonthly {
   id       String   @id @default(cuid())
@@ -1059,6 +1086,7 @@ model Client {
   monthlyKpis    MonthlyKpi[]
   contactLogs    ContactLog[]
   adSpendDaily   AdSpendDaily[]
+  metaAdInsights MetaAdInsight[]
   revenueMonthly RevenueMonthly[]
   leads          Lead[]
   leadReminders  LeadReminder[]

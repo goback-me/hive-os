@@ -17,9 +17,10 @@ import { getMonthToDateVsLast, rebuildHistory } from "@/lib/kpi";
 import { reportsOnHold } from "@/lib/report-hold";
 import { sendActionEmail } from "@/lib/email";
 import { runHealthChecks } from "@/lib/data-health";
-import { kickSlack, parseSlackEvents, queueLeadEvent, queueSlack, queueTestMessage } from "@/lib/slack";
+import { adminChannel, kickSlack, parseSlackEvents, queueLeadEvent, queueSlack, queueTestMessage } from "@/lib/slack";
 import { NOT_HELD_REASONS, WEEKDAYS, applySlotChange, dropFutureCalls, callDateLabel, clientCallEmail, ensureNextCall, isCallTime, moveCall, parseCallWhen, rescheduleCall, sendCallInvite, splitSteps } from "@/lib/am-calls";
 import { createClientFolder, ensureTask } from "@/lib/clickup";
+import { AUTOMATIONS } from "@/lib/automations";
 import { sydneyLocalToDate } from "@/lib/sheet-parse";
 
 function slugify(name: string) {
@@ -122,7 +123,7 @@ export async function submitClientReferral(clientId: string, input: { name: stri
   const link = await getOrCreateClientReferralLink(clientId, client.name);
   const note = [phone && `Phone: ${phone}`, email && `Email: ${email}`, input.note.trim()].filter(Boolean).join(" · ");
   await prisma.referral.create({ data: { name, source: `Referred by ${client.name}${user.role === "CLIENT" ? "" : ` (added by ${user.name})`}`, note: note || null, stage: "INTRODUCED", referralLinkId: link.id } });
-  const admin = process.env.SLACK_ADMIN_CHANNEL;
+  const admin = await adminChannel();
   if (admin) {
     await queueSlack({ channel: admin, clientId, kind: "referral", dedupeKey: `referral:${clientId}:${name}:${Date.now()}`, text: `:handshake: *${client.name}* referred *${name}* — ${note || "no details"}. It's in the referral pipeline.` }).catch(() => {});
     kickSlack();
@@ -668,7 +669,7 @@ export async function logCallNotHeld(callId: string, reasonKey: string, text: st
   if (!(reasonKey in NOT_HELD_REASONS)) throw new Error("Say why the call didn't happen");
   const reason = [NOT_HELD_REASONS[reasonKey as keyof typeof NOT_HELD_REASONS], text.trim()].filter(Boolean).join(" — ");
   await prisma.amCall.update({ where: { id: callId }, data: { status: "NOT_HELD", notHeldReason: reason, loggedAt: new Date(), submittedBy: user.name } });
-  const admin = process.env.SLACK_ADMIN_CHANNEL;
+  const admin = await adminChannel();
   if (admin) {
     await queueSlack({ channel: admin, clientId: call.clientId, kind: "meeting_missed", dedupeKey: `meeting_missed:${callId}`, text: `:warning: *${call.client.name}* — the ${callDateLabel(call.scheduledAt)} call didn't happen: ${reason} (${user.name})` }).catch(() => {});
     kickSlack();
@@ -836,6 +837,16 @@ export async function saveIntegrationSettings(formData: FormData) {
     update: { clickupApiKey, clickupTeamId, crmType, crmApiKeyOrUrl },
     create: { id: "singleton", clickupApiKey, clickupTeamId, crmType, crmApiKeyOrUrl },
   });
+  revalidatePath("/settings");
+}
+
+// Settings → Automations: the main Slack channel and the ticks (lib/automations.ts). An unticked box isn't
+// in the form at all, so missing = off.
+export async function saveAutomations(formData: FormData) {
+  await requireCoach();
+  const automations = Object.fromEntries(Object.keys(AUTOMATIONS).map((k) => [k, formData.get(k) === "on"]));
+  const slackAdminChannel = String(formData.get("slackAdminChannel") || "").trim() || null;
+  await prisma.integrationSettings.upsert({ where: { id: "singleton" }, update: { automations, slackAdminChannel }, create: { id: "singleton", automations, slackAdminChannel } });
   revalidatePath("/settings");
 }
 
@@ -1147,6 +1158,7 @@ export async function deleteClientPermanently(clientId: string) {
     prisma.contract.deleteMany({ where: { clientId } }),
     prisma.contactLog.deleteMany({ where: { clientId } }),
     prisma.adSpendDaily.deleteMany({ where: { clientId } }),
+    prisma.metaAdInsight.deleteMany({ where: { clientId } }),
     prisma.revenueMonthly.deleteMany({ where: { clientId } }),
     prisma.session.deleteMany({ where: { clientId } }),
     prisma.progressNote.deleteMany({ where: { clientId } }),

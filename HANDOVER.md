@@ -144,7 +144,7 @@ Generate the secrets with `openssl rand -hex 32` (run it once per secret).
 | `CRON_SECRET` | ✅ | `openssl rand -hex 32` |
 | `SLACK_BOT_TOKEN` | For Slack | `xoxb-…` from 3c |
 | `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET` | For "Add to Slack" | From 3c |
-| `SLACK_ADMIN_CHANNEL` | Optional | Channel ID for the agency-wide 8am digest and "call didn't happen" notes |
+| `SLACK_ADMIN_CHANNEL` | Optional | Default main channel ID (Monday weekly summary, "call didn't happen", referrals) — Settings → Automations overrides it |
 | `RESEND_API_KEY` | For email | `re_…` from 3d |
 | `EMAIL_FROM` | For email | `Hive HQ <updates@notify.hivesocial.agency>` |
 | `ACTION_TOKEN_SECRET` | For email | `openssl rand -hex 32`. Signs the email buttons' links |
@@ -262,15 +262,17 @@ blocks the rest. It shows up as a warning in the bell instead.
 
 ### Slack — to the client's channel (each one can be switched off per client)
 
+Client-channel posts are ticked per client (Client Details → Integrations). Admin-channel posts and the automatic ClickUp tasks are ticked in **Settings → Automations**.
+
 | Message | When | Example |
 |---|---|---|
 | **New sale** | A lead is marked Won with a value | 🎉 **New job won for Jake Of All Tradez!** Kate — **$30,000**, 58 days after they first enquired. |
 | **New live transfer** | A lead is live-transferred | 📞 **New live transfer for Jake Of All Tradez.** Laura Carter was just put through to you on the phone. |
 | **Weekly update** | A coach publishes the weekly update | 📝 **Here's this week's update for Jake Of All Tradez** — What went well / What's getting in the way / What happens next, + link |
-| **Daily digest** | Every day from 8am Sydney | 🌅 **Good morning! Here's how yesterday went for …** new leads, live transfers, quotes, jobs won, leads waiting on an update, next step |
-| **Waiting on an update** | With the reminder email (from 9am) | ⏳ **7 leads waiting on an update**, with the list and a link |
+| **Weekly summary** | Mondays from 8am Sydney | 📅 **Here's how last week (13 Oct – 19 Oct) went for …** new leads, live transfers, quotes, jobs won, leads waiting on an update, next step |
+| **Waiting on an update** | With the reminder email (from 9am), at most once a week | ⏳ **7 leads waiting on an update**, with the list and a link |
 | **Weekly call summary** | When an agent logs a call as held | 📞 **Weekly call — Fri 2 Oct** summary, issues, next steps |
-| *(admin channel)* **Portfolio digest** | Daily from 8am, if `SLACK_ADMIN_CHANNEL` is set | Clients that need attention |
+| *(admin channel)* **Weekly summary** | Mondays from 8am, if a main channel is set (Settings → Automations) | Every client's numbers for last week, then the clients that need attention |
 | *(admin channel)* **Call didn't happen** | When a call is logged as not held | ⚠️ Jake Of All Tradez — Fri 2 Oct's weekly call didn't happen: Rescheduled |
 
 ### Email — via Resend, one button each, the button opens the right page in HQ
@@ -292,10 +294,9 @@ Every task title starts with **[Client name]**. The description opens with
 | Task | When | Closes |
 |---|---|---|
 | **[Client] Fix data — …** (e.g. Google connection isn't working) | After a sync finds a serious data problem | By itself, when fixed |
-| **[Client] Chase client — 7 leads waiting on their update** | With the reminder, at most once a week | By hand |
-| **[Client] Write and publish this week's update (due Friday 5pm)** | Every week from 8am Monday | By hand |
+| **[Client] Chase client — 7 leads waiting on their update** | With the reminder, at most once a week — off by default | By hand |
+| **[Client] Write and publish this week's update (due Friday 5pm)** | Every week from 8am Monday — off by default | By hand |
 | **[Client] Account review — client at risk** | Weekly, only when the client is red on the portfolio | By hand |
-| **[Client] Log the weekly call — Fri 2 Oct** | Monday 9am after the call, assigned to the call agent; a reminder comment on Wednesday | By itself, when logged |
 
 ---
 

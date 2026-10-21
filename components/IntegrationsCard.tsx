@@ -3,12 +3,13 @@
 import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
-type Events = { sales: boolean; liveTransfers: boolean; weeklyUpdates: boolean; dailyDigest: boolean };
+type Events = { sales: boolean; liveTransfers: boolean; weeklyUpdates: boolean; weeklyDigest: boolean; updateReminders: boolean };
 const EVENT_LABELS: Record<keyof Events, string> = {
   sales: "New sale",
   liveTransfers: "New live transfer",
-  weeklyUpdates: "Weekly call summary",
-  dailyDigest: "Daily 8am digest",
+  weeklyUpdates: "Call summary",
+  weeklyDigest: "Weekly summary (Monday 8am)",
+  updateReminders: "Leads waiting on their update (weekly)",
 };
 type Result = { ok: true } | { error: string };
 
@@ -107,6 +108,7 @@ export default function IntegrationsCard({
           <span className="text-xs" style={{ color: "var(--text-muted)" }}>Slack channel ID</span>
           <input value={form.slackChannelId} onChange={(e) => setForm({ ...form, slackChannelId: e.target.value })} placeholder="C0123ABCD" className="w-full px-2 py-1.5 rounded-lg text-sm outline-none mt-0.5" style={input} />
         </label>
+        <p className="text-xs" style={{ color: "var(--text-muted)" }}>Post to this channel:</p>
         {(Object.keys(EVENT_LABELS) as (keyof Events)[]).map((k) => (
           <label key={k} className="flex items-center gap-2 text-xs cursor-pointer" style={{ color: "var(--text-secondary)" }}>
             <input type="checkbox" checked={form.slackEvents[k]} onChange={(e) => setForm({ ...form, slackEvents: { ...form.slackEvents, [k]: e.target.checked } })} className="accent-[var(--primary)]" />

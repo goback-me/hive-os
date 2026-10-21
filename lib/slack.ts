@@ -1,6 +1,7 @@
 import { prisma } from "./prisma";
 import { decryptToken } from "./crypto";
 import { terms } from "./client-terms";
+import { automationOn } from "./automations";
 
 // Slack, via a bot token (chat.postMessage). Everything is queued in
 // SlackPostLog first and sent by deliverSlackPosts — from the cron, and
@@ -8,13 +9,22 @@ import { terms } from "./client-terms";
 // change. Each post's dedupeKey makes it happen once.
 //
 // Token: the one saved by "Add to Slack" (Settings → Integrations), else the
-// SLACK_BOT_TOKEN env. SLACK_ADMIN_CHANNEL = the agency's digest channel.
+// SLACK_BOT_TOKEN env. The main channel: Settings → Automations, else the
+// SLACK_ADMIN_CHANNEL env.
 
-export type SlackEvents = { sales: boolean; liveTransfers: boolean; weeklyUpdates: boolean; dailyDigest: boolean };
+// What goes to a client's own channel — ticked per client. (Main-channel
+// posts are ticked agency-wide, lib/automations.ts.)
+export type SlackEvents = { sales: boolean; liveTransfers: boolean; weeklyUpdates: boolean; weeklyDigest: boolean; updateReminders: boolean };
 export function parseSlackEvents(raw: unknown): SlackEvents {
   const o = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
-  const on = (k: keyof SlackEvents) => (typeof o[k] === "boolean" ? (o[k] as boolean) : true);
-  return { sales: on("sales"), liveTransfers: on("liveTransfers"), weeklyUpdates: on("weeklyUpdates"), dailyDigest: on("dailyDigest") };
+  const on = (k: string) => (typeof o[k] === "boolean" ? (o[k] as boolean) : true);
+  return {
+    sales: on("sales"),
+    liveTransfers: on("liveTransfers"),
+    weeklyUpdates: on("weeklyUpdates"),
+    weeklyDigest: typeof o.weeklyDigest === "boolean" ? o.weeklyDigest : on("dailyDigest"), // was the daily digest
+    updateReminders: on("updateReminders"),
+  };
 }
 
 async function slackToken() {
@@ -23,14 +33,20 @@ async function slackToken() {
 }
 export const slackConfigured = async () => !!(await slackToken());
 
+export async function adminChannel() {
+  const s = await prisma.integrationSettings.findUnique({ where: { id: "singleton" }, select: { slackAdminChannel: true } });
+  return s?.slackAdminChannel || process.env.SLACK_ADMIN_CHANNEL || null;
+}
+
 // "Add to Slack" OAuth (app/api/slack/*). Slack only accepts https redirect URLs.
 export const SLACK_OAUTH_STATE_COOKIE = "slack_oauth_state";
 export const slackRedirectUri = () => `${process.env.NEXTAUTH_URL || "http://localhost:3000"}/api/slack/callback`;
 const appUrl = () => process.env.NEXTAUTH_URL || "";
 
-// Queue one post (no-op if it was already queued under this key).
+// Queue one post (no-op if it was already queued under this key, or its
+// main-channel tick is off).
 export async function queueSlack(post: { clientId?: string | null; channel: string; kind: string; dedupeKey: string; text: string }) {
-  if (!post.channel || !(await slackConfigured())) return false;
+  if (!post.channel || !(await slackConfigured()) || !(await automationOn(post.kind))) return false;
   const created = await prisma.slackPostLog.createMany({ data: [{ ...post, clientId: post.clientId ?? null }], skipDuplicates: true });
   return created.count > 0;
 }

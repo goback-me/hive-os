@@ -3,7 +3,7 @@ import { prisma } from "./prisma";
 import { HANDOVER_STAGES, STAGE_LABELS, type LeadStageValue } from "./lead-status";
 import { milestoneSql } from "./milestones";
 import { sydneyDay, sydneyHour, weekStart } from "./sheet-parse";
-import { queueSlack } from "./slack";
+import { parseSlackEvents, queueSlack } from "./slack";
 import { ensureTask } from "./clickup";
 import { getClientCycle, type CycleStep } from "./buying-cycle";
 import { appUrl, emailConfigured, sendActionEmail, type EmailRow } from "./email";
@@ -209,13 +209,12 @@ export async function raiseReminders(now = new Date()) {
   // One message per client, listing every lead past its first reminder (not
   // just the ones that fell due today), longest-waiting first.
   const dueClients = new Set(due.map((p) => p.c.clientId));
-  const today = sydneyDay(now);
   const weekKey = sydneyDay(weekStart(now));
   let emailed = 0;
   for (const clientId of dueClients) {
     const client = await prisma.client.findUnique({
       where: { id: clientId },
-      select: { name: true, slug: true, email: true, slackChannelId: true, users: { where: { role: "CLIENT" }, select: { email: true } } },
+      select: { name: true, slug: true, email: true, slackChannelId: true, slackEvents: true, users: { where: { role: "CLIENT" }, select: { email: true } } },
     });
     if (!client) continue;
     const mine = planned.filter((p) => p.c.clientId === clientId && p.outstanding).sort((a, b) => a.anchor.getTime() - b.anchor.getTime());
@@ -248,8 +247,9 @@ export async function raiseReminders(now = new Date()) {
         console.error(`Reminder email for ${clientId} failed:`, err); // the in-app task still shows
       }
     }
-    if (client.slackChannelId) {
-      await queueSlack({ clientId, channel: client.slackChannelId, kind: "client_update_reminder", dedupeKey: `client_update_reminder:${clientId}:${today}`, text: [`:hourglass_flowing_sand: *${n} waiting on an update*`, ...lines, `<${link}|Update them in Hive HQ>`].join("\n") }).catch((e) => console.error("Slack queue failed:", e));
+    // Once a week in their channel (the email still goes when leads fall due).
+    if (client.slackChannelId && parseSlackEvents(client.slackEvents).updateReminders) {
+      await queueSlack({ clientId, channel: client.slackChannelId, kind: "client_update_reminder", dedupeKey: `client_update_reminder:${clientId}:${weekKey}`, text: [`:hourglass_flowing_sand: *${n} waiting on an update*`, ...lines, `<${link}|Update them in Hive HQ>`].join("\n") }).catch((e) => console.error("Slack queue failed:", e));
     }
     await ensureTask(clientId, { kind: "chase_client", dedupeKey: `chase:${clientId}:${weekKey}`, title: `Chase client — ${n} waiting on their update`, why: "We handed these leads over and the client hasn't told us what happened. Ask them to update each lead (link below) — their reminder email has the same link.", description: `${lines.join("\n")}\n\n${link}` });
   }

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { encryptToken } from "@/lib/crypto";
 import { requireCoach } from "@/lib/auth";
+import { archiveMetaInsights } from "@/lib/meta-archive";
 
 // Saves a client's Meta ad account ID + access token. The token is encrypted
 // before it touches Postgres — same AES-256-GCM scheme used for Google tokens.
@@ -35,6 +36,10 @@ export async function POST(req: NextRequest) {
       metaAccessToken: encryptToken(accessToken),
     },
   });
+
+  // Pull the account's history into the case-study archive in the
+  // background — a full backfill can take a while; the cron retries on failure.
+  void archiveMetaInsights(clientId).catch((err) => console.error("Meta archive failed:", err));
 
   return NextResponse.json({ ok: true });
 }

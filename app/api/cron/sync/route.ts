@@ -10,6 +10,7 @@ import { runDailyJobs } from "@/lib/daily-jobs";
 import { deliverSlackPosts } from "@/lib/slack";
 import { recalcDueCycles } from "@/lib/buying-cycle";
 import { ACTIVE_CLIENT, runCallJobs } from "@/lib/am-calls";
+import { archiveMetaInsights } from "@/lib/meta-archive";
 
 // Called by the VPS crontab every 5 min (see DEPLOYMENT.md). Public in middleware.ts —
 // the x-cron-secret header is the only auth. Clients sync one at a time
@@ -62,6 +63,20 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  // Case-study archive of every connected Meta account (lib/meta-archive.ts),
+  // at most every 6 hours per account. Also catches a backfill that failed on
+  // connect.
+  const metaArchive: { client: string; rows?: number; error?: string }[] = [];
+  const metaClients = await prisma.client.findMany({ where: { metaAccessToken: { not: null } }, select: { id: true, slug: true } });
+  for (const c of metaClients) {
+    try {
+      const r = await archiveMetaInsights(c.id, { minHours: 6 });
+      if (r) metaArchive.push({ client: c.slug, rows: r.rows });
+    } catch (err) {
+      metaArchive.push({ client: c.slug, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
   // HQ → sheet status write-back (max 50 cells a minute). Gets what's left
   // of the run's time; anything still queued goes on the next run.
   const writeBack = await processWriteBacks({ maxMs: 120_000 }).catch((err) => ({ error: err instanceof Error ? err.message : String(err) }));
@@ -87,5 +102,5 @@ export async function GET(req: NextRequest) {
   const daily = await runDailyJobs().catch((err) => ({ error: err instanceof Error ? err.message : String(err) }));
   const slack = await deliverSlackPosts().catch((err) => ({ error: err instanceof Error ? err.message : String(err) }));
 
-  return NextResponse.json({ synced: results.filter((r) => r.ok).length, failed: results.filter((r) => !r.ok).length, results, frozen, writeBack, cycles, reminders, meetings, daily, slack });
+  return NextResponse.json({ synced: results.filter((r) => r.ok).length, failed: results.filter((r) => !r.ok).length, results, frozen, metaArchive, writeBack, cycles, reminders, meetings, daily, slack });
 }

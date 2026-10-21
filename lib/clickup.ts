@@ -1,4 +1,5 @@
 import { prisma } from "./prisma";
+import { automationOn } from "./automations";
 
 // ClickUp tasks for the account team, created in each client's ClickUp list
 // (Client.clickupListId) with the API key + team saved under Settings →
@@ -140,9 +141,11 @@ export function taskText(client: { name: string; slug: string }, t: Pick<Task, "
 }
 
 // Create a task once per dedupeKey (a failed attempt is retried next time).
+// Skipped when its kind is ticked off in Settings (lib/automations.ts).
 export async function ensureTask(clientId: string, t: Task): Promise<string | null> {
   const existing = await prisma.clickUpTaskLog.findUnique({ where: { dedupeKey: t.dedupeKey } });
   if (existing && existing.status !== "FAILED") return existing.taskId;
+  if (!(await automationOn(t.kind))) return null;
   const [c, client] = await Promise.all([config(), prisma.client.findUnique({ where: { id: clientId }, select: { name: true, slug: true, clickupListId: true, clickupAssigneeIds: true } })]);
   // Who it's for: the task's own (e.g. the call agent), else the client's default assignees.
   const assignees = t.assignees?.length ? t.assignees : client?.clickupAssigneeIds ?? [];

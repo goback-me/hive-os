@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
-import { saveIntegrationSettings, disconnectSlack, createOnboardingStepTemplate, createModule, createClient } from "@/lib/actions";
+import { saveIntegrationSettings, saveAutomations, disconnectSlack, createOnboardingStepTemplate, createModule, createClient } from "@/lib/actions";
 import { requireCoach } from "@/lib/auth";
+import { AUTOMATIONS, parseAutomations, type AutomationKey } from "@/lib/automations";
 import { listClickUpMembers } from "@/lib/clickup";
 import UsersPanel from "./UsersPanel";
 import AddLessonForm from "@/components/AddLessonForm";
@@ -28,6 +29,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: { s
     clientName: u.client?.name ?? null,
     clickupUserId: u.clickupUserId,
   }));
+  const automations = parseAutomations(integration?.automations);
   // ClickUp members for the team-member mapping; null when ClickUp isn't set up (or is down).
   const clickupMembers = await listClickUpMembers().catch(() => null);
 
@@ -96,8 +98,40 @@ export default async function SettingsPage({ searchParams }: { searchParams: { s
           </button>
         </form>
         <p className="text-xs mt-3" style={{ color: "var(--text-muted)" }}>
-          The ClickUp key + Team ID power the automatic tasks (data problems, chasing client updates, account reviews, weekly updates) — pick each client&apos;s list in its Client Details → Integrations. The CRM fields aren&apos;t used yet.
+          The ClickUp key + Team ID power the automatic tasks below — pick each client&apos;s list in its Client Details → Integrations. The CRM fields aren&apos;t used yet.
         </p>
+      </section>
+
+      <section className="card rounded-2xl p-6">
+        <h3 className="font-heading font-bold text-lg mb-1" style={{ color: "var(--text-primary)" }}>Automations</h3>
+        <p className="text-sm mb-4" style={{ color: "var(--text-secondary)" }}>
+          Tick what HQ sends on its own. What goes to each client&apos;s own Slack channel is ticked on the client, in Client Details → Integrations.
+        </p>
+        <form action={saveAutomations} className="space-y-4">
+          <div className="max-w-sm">
+            <Field label="Main Slack channel ID (for all clients)" name="slackAdminChannel" defaultValue={integration?.slackAdminChannel ?? ""} placeholder={process.env.SLACK_ADMIN_CHANNEL || "C0123ABCD"} />
+            <p className="text-xs mt-1" style={{ color: "var(--text-muted)" }}>
+              Channel name → About → bottom. Invite the Hive HQ app to the channel.
+              {!integration?.slackAdminChannel && (process.env.SLACK_ADMIN_CHANNEL ? " Blank = the server default shown." : " Blank = no main-channel posts.")}
+            </p>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {Array.from(new Set(Object.values(AUTOMATIONS).map((a) => a.group))).map((group) => (
+              <fieldset key={group} className="space-y-2">
+                <legend className="text-xs font-semibold mb-1" style={{ color: "var(--text-secondary)" }}>{group}</legend>
+                {(Object.keys(AUTOMATIONS) as AutomationKey[]).filter((k) => AUTOMATIONS[k].group === group).map((k) => (
+                  <label key={k} className="flex items-center gap-2 text-sm cursor-pointer" style={{ color: "var(--text-primary)" }}>
+                    <input type="checkbox" name={k} defaultChecked={automations[k]} className="accent-[var(--primary)]" />
+                    {AUTOMATIONS[k].label}
+                  </label>
+                ))}
+              </fieldset>
+            ))}
+          </div>
+          <button type="submit" className="px-4 py-2 rounded-lg text-sm font-bold btn-cta" style={{ background: "var(--secondary)", color: "#fff" }}>
+            Save automations
+          </button>
+        </form>
       </section>
 
       <section className="card rounded-2xl p-6">

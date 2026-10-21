@@ -39,7 +39,7 @@ const META_HISTORY_DAYS = 37 * 30;
 
 // Per-campaign spend for an inclusive Sydney day window (`since`/`until`
 // both omitted = the account's full history). `daily` breaks it down by day.
-async function fetchCampaignInsights(adAccountId: string, encryptedAccessToken: string, since?: string, until?: string, daily = false): Promise<MetaCampaignSpend[]> {
+export async function fetchCampaignInsights(adAccountId: string, encryptedAccessToken: string, since?: string, until?: string, daily = false): Promise<MetaCampaignSpend[]> {
   const accessToken = decryptToken(encryptedAccessToken);
   const fields = "campaign_id,campaign_name,spend,impressions,clicks";
   const dateParam =
