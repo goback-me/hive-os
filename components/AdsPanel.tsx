@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { StartDateWarning } from "@/components/StartDateField";
 import DateRangePicker, { useReportRange } from "@/components/DateRangePicker";
 import SalesPanel from "@/components/SalesPanel";
+import QuotesPanel from "@/components/QuotesPanel";
 import ProfitRoiPanel from "@/components/ProfitRoiPanel";
 import HiddenBadge from "@/components/HiddenBadge";
 import { reportRangeLabel, reportRangeQuery } from "@/lib/date-range";
@@ -120,6 +121,9 @@ export default function AdsPanel({ clientId, isCoach, onSetReporting, maxFrom }:
 
           {/* Jobs won — same panel as Leads → Sales, on the same range: after the campaign table, before the campaign ticks + Meta connection. */}
           <SalesPanel clientId={clientId} rangeQuery={rangeQuery} rangeLabel={rangeLabel} isCoach={isCoach} reloadKey={0} />
+
+          {/* Quotes — same panel as Leads → Quotes, right after Sales, opened on the open (outstanding) quotes. */}
+          <QuotesPanel clientId={clientId} rangeQuery={rangeQuery} rangeLabel={rangeLabel} reloadKey={0} initialFilter="open" />
 
           {isCoach && data.campaigns && (
             <div className="card rounded-2xl p-5">

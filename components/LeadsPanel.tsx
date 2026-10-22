@@ -22,6 +22,7 @@ import type { SyncSummary } from "@/lib/lead-sync";
 import type { FunnelResponse } from "@/lib/funnel";
 import FunnelPanel from "@/components/FunnelPanel";
 import SalesPanel from "@/components/SalesPanel";
+import QuotesPanel from "@/components/QuotesPanel";
 import { reportRangeLabel, reportRangeQuery, type ReportRange } from "@/lib/date-range";
 import DateRangePicker, { useReportRange } from "@/components/DateRangePicker";
 import LeadCompareChart from "@/components/LeadCompareChart";
@@ -122,7 +123,7 @@ export default function LeadsPanel({
 }) {
   const isCoach = viewerRole === "COACH";
 
-  const [activeSubTab, setActiveSubTab] = useState<"leads" | "breakdown" | "sales">("leads");
+  const [activeSubTab, setActiveSubTab] = useState<"leads" | "breakdown" | "sales" | "quotes">("leads");
 
   // One range for the whole tab, kept in the URL (see DateRangePicker).
   const [dateRange, setDateRange] = useReportRange();
@@ -145,6 +146,11 @@ export default function LeadsPanel({
   const [needsFixingCount, setNeedsFixingCount] = useState<number | null>(null);
   // Handed to the client and waiting on their update.
   const [awaitingFilter, setAwaitingFilter] = useState(false);
+  // Search box: name / email / phone / campaign, server-side across every
+  // page. `search` follows the box after a short pause so typing doesn't
+  // fire a request per keystroke.
+  const [searchInput, setSearchInput] = useState("");
+  const [search, setSearch] = useState("");
   const [awaitingCount, setAwaitingCount] = useState(0);
   // A client sees all their leads (paged); the team starts on a preview.
   const [showAll, setShowAll] = useState(!isCoach);
@@ -182,6 +188,7 @@ export default function LeadsPanel({
     if (sheetStatusFilter) params.set("sheetStatus", sheetStatusFilter);
     if (needsFixing) params.set("needsFixing", "1");
     if (awaitingFilter) params.set("awaiting", "1");
+    if (search) params.set("q", search);
     fetch(`/api/leads?${params.toString()}`)
       .then((r) => r.json())
       .then((data) => {
@@ -228,7 +235,14 @@ export default function LeadsPanel({
   useEffect(() => {
     loadLeads();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, pageSize, statusFilter, sheetStatusFilter, needsFixing, awaitingFilter, hasSheet, rangeQuery, reloadKey]);
+  }, [page, pageSize, statusFilter, sheetStatusFilter, needsFixing, awaitingFilter, search, hasSheet, rangeQuery, reloadKey]);
+
+  useEffect(() => {
+    const q = searchInput.trim();
+    if (q === search) return;
+    const t = setTimeout(() => { setSearch(q); setPage(1); }, 300);
+    return () => clearTimeout(t);
+  }, [searchInput, search]);
 
   // The funnel (incl. a live Meta spend call) only loads when the Campaign
   // performance tab is actually open.
@@ -356,6 +370,7 @@ export default function LeadsPanel({
         <SubTabButton active={activeSubTab === "leads"} label="Leads" icon="person_search" onClick={() => setActiveSubTab("leads")} />
         {!reportsHold && <SubTabButton active={activeSubTab === "breakdown"} label="Breakdown" icon="filter_alt" onClick={() => setActiveSubTab("breakdown")} />}
         {!reportsHold && <SubTabButton active={activeSubTab === "sales"} label="Sales" icon="handshake" onClick={() => setActiveSubTab("sales")} />}
+        {!reportsHold && <SubTabButton active={activeSubTab === "quotes"} label="Quotes" icon="request_quote" onClick={() => setActiveSubTab("quotes")} />}
       </div>
 
       {activeSubTab === "breakdown" && (
@@ -366,6 +381,8 @@ export default function LeadsPanel({
       )}
 
       {activeSubTab === "sales" && <SalesPanel clientId={clientId} rangeQuery={rangeQuery} rangeLabel={rangeLabel} isCoach={isCoach} reloadKey={reloadKey} />}
+
+      {activeSubTab === "quotes" && <QuotesPanel clientId={clientId} rangeQuery={rangeQuery} rangeLabel={rangeLabel} reloadKey={reloadKey} />}
 
       {/* TODO pending Aizal Loom spec — top of the Leads tab, don't redesign yet. */}
       {activeSubTab === "leads" && (reportsHold ? <HoldNote /> : <LeadWinsCard clientId={clientId} rangeQuery={rangeQuery} reloadKey={reloadKey} />)}
@@ -381,6 +398,24 @@ export default function LeadsPanel({
             ) : (
               <span className="skeleton h-4 w-24" />
             )}
+            <div className="relative w-full sm:w-72">
+              <span className="material-symbols-outlined text-[18px] absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: "var(--text-muted)" }}>search</span>
+              <input
+                type="search"
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
+                onKeyDown={(e) => e.key === "Escape" && setSearchInput("")}
+                placeholder="Search name, email, phone, campaign"
+                aria-label="Search leads"
+                className="w-full pl-9 pr-8 py-2 rounded-lg text-sm outline-none"
+                style={{ background: "var(--surface-hover)", color: "var(--text-primary)", border: "1px solid var(--border)" }}
+              />
+              {searchInput && (
+                <button onClick={() => setSearchInput("")} aria-label="Clear search" className="absolute right-2 top-1/2 -translate-y-1/2 flex" style={{ color: "var(--text-muted)" }}>
+                  <span className="material-symbols-outlined text-[18px]">close</span>
+                </button>
+              )}
+            </div>
           </div>
 
           {!leadsLoaded && (
@@ -458,7 +493,7 @@ export default function LeadsPanel({
             <SkeletonRows />
           ) : leads.length === 0 ? (
             <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
-              {total === 0 ? "No leads yet." : "No leads match this filter."}
+              {search ? `No leads match “${search}”.` : total === 0 ? "No leads yet." : "No leads match this filter."}
             </p>
           ) : (
             <>

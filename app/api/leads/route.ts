@@ -43,6 +43,22 @@ export async function GET(req: NextRequest) {
       ? { sheetStatus: sheetStatusParam }
       : undefined;
 
+  // Search box (?q=): name, email, phone or campaign contains it, any case.
+  // Phones are matched on digits too, so "0412 345" finds "0412345678".
+  const q = req.nextUrl.searchParams.get("q")?.trim().slice(0, 100) ?? "";
+  const digits = q.replace(/\D/g, "");
+  const searchWhere = q
+    ? {
+        OR: [
+          { name: { contains: q, mode: "insensitive" as const } },
+          { email: { contains: q, mode: "insensitive" as const } },
+          { phone: { contains: q } },
+          { campaign: { contains: q, mode: "insensitive" as const } },
+          ...(digits.length >= 3 && digits !== q ? [{ phone: { contains: digits } }] : []),
+        ],
+      }
+    : {};
+
   const { from, to } = rangeFromParams(req.nextUrl.searchParams).range;
   const createdAt = from || to ? { ...(from ? { gte: from } : {}), ...(to ? { lt: to } : {}) } : undefined;
 
@@ -67,13 +83,13 @@ export async function GET(req: NextRequest) {
     ...(stage ? { stage } : {}),
     ...(createdAt ? { createdAt } : {}),
     ...sheetStatusWhere,
-    AND: [campaignWhere ?? {}, needsFixing ? needsWhere : {}],
+    AND: [campaignWhere ?? {}, needsFixing ? needsWhere : {}, searchWhere],
     ...(awaiting ? { awaitingClientUpdate: true } : {}),
   };
   // Same filter minus `stage`/`sheetStatus` — powers each tab's own count
   // regardless of which tab is currently selected.
-  const whereForStatusCounts = { clientId, deletedAt: null, ...(createdAt ? { createdAt } : {}), ...campaignWhere, ...sheetStatusWhere };
-  const whereForSheetStatusCounts = { clientId, deletedAt: null, ...(createdAt ? { createdAt } : {}), ...campaignWhere, ...(stage ? { stage } : {}) };
+  const whereForStatusCounts = { clientId, deletedAt: null, ...(createdAt ? { createdAt } : {}), ...campaignWhere, ...sheetStatusWhere, AND: [searchWhere] };
+  const whereForSheetStatusCounts = { clientId, deletedAt: null, ...(createdAt ? { createdAt } : {}), ...campaignWhere, ...(stage ? { stage } : {}), AND: [searchWhere] };
 
   const [total, leads, statusGroups, sheetStatusGroups, needsFixingCount, awaitingCount] = await Promise.all([
     prisma.lead.count({ where }),
@@ -88,9 +104,9 @@ export async function GET(req: NextRequest) {
     prisma.lead.groupBy({ by: ["stage"], where: whereForStatusCounts, _count: true }),
     prisma.lead.groupBy({ by: ["sheetStatus"], where: whereForSheetStatusCounts, _count: true }),
     user.role === "COACH"
-      ? prisma.lead.count({ where: { clientId, deletedAt: null, ...(createdAt ? { createdAt } : {}), AND: [campaignWhere ?? {}, needsWhere] } })
+      ? prisma.lead.count({ where: { clientId, deletedAt: null, ...(createdAt ? { createdAt } : {}), AND: [campaignWhere ?? {}, needsWhere, searchWhere] } })
       : Promise.resolve(null),
-    prisma.lead.count({ where: { clientId, deletedAt: null, ...(createdAt ? { createdAt } : {}), awaitingClientUpdate: true, AND: [campaignWhere ?? {}] } }),
+    prisma.lead.count({ where: { clientId, deletedAt: null, ...(createdAt ? { createdAt } : {}), awaitingClientUpdate: true, AND: [campaignWhere ?? {}, searchWhere] } }),
   ]);
 
   // An HQ status change still being written to the sheet.
