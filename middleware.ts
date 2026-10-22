@@ -1,6 +1,7 @@
 import { clerkMiddleware, createRouteMatcher, clerkClient } from "@clerk/nextjs/server";
-import { NextResponse } from "next/server";
+import { NextResponse, type NextFetchEvent, type NextRequest } from "next/server";
 import { signInReturnUrl } from "@/lib/access";
+import { devAuthBypass } from "@/lib/dev-auth";
 
 // Routes that don't require a signed-in session at all.
 const isPublicRoute = createRouteMatcher([
@@ -29,7 +30,7 @@ const isCoachOnlyRoute = createRouteMatcher([
 // page) — never a client's.
 const isTeamRoute = createRouteMatcher(["/my-calls(.*)", "/account-management(.*)", "/accounts(.*)"]);
 
-export default clerkMiddleware(async (auth, req) => {
+const clerkHandler = clerkMiddleware(async (auth, req) => {
   if (isPublicRoute(req)) return NextResponse.next();
 
   const { userId, sessionClaims, redirectToSignIn } = await auth();
@@ -101,6 +102,16 @@ export default clerkMiddleware(async (auth, req) => {
 
   return NextResponse.next();
 });
+
+// Local dev with DEV_SKIP_AUTH=1: Clerk is skipped altogether (keyless
+// mode never calls the handler above anyway), everyone is an admin
+// (lib/dev-auth.ts) and the login page just forwards to the dashboard.
+export default function middleware(req: NextRequest, event: NextFetchEvent) {
+  if (devAuthBypass()) {
+    return req.nextUrl.pathname.startsWith("/login") ? NextResponse.redirect(new URL("/dashboard", req.url)) : NextResponse.next();
+  }
+  return clerkHandler(req, event);
+}
 
 export const config = {
   matcher: ["/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)"],

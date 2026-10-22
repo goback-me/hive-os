@@ -4,6 +4,7 @@ import { auth } from "@clerk/nextjs/server";
 import { getClerkAdminClient } from "@/lib/clerk-admin";
 import { prisma } from "@/lib/prisma";
 import { canAccessClient } from "@/lib/access";
+import { DEV_USER, devAuthBypass } from "@/lib/dev-auth";
 
 export type CurrentUser = {
   id: string; // Clerk user id — app-side User.id is looked up separately where needed (e.g. Settings)
@@ -34,6 +35,7 @@ export type CurrentUser = {
 // visitors away, this is the last-line guard for pages/actions it
 // doesn't cover. `cache()` dedupes this within a single request.
 export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
+  if (devAuthBypass()) return DEV_USER;
   const { userId, sessionClaims } = await auth();
   if (!userId) return null;
 
