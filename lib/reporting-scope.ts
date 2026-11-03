@@ -1,6 +1,6 @@
 import { prisma } from "./prisma";
 import { sydneyDay } from "./sheet-parse";
-import { getCachedCampaignInsights, getCachedMetaCampaignList, getMetaCampaignInsights, getMetaCampaignList } from "./meta-ads";
+import { getCachedCampaignInsights, getCachedMetaCampaignList, getMetaCampaignInsights, getMetaCampaignList, metaDays, type MetaCampaignInfo } from "./meta-ads";
 
 // What counts in a client's reports: only leads, sales and spend on/after
 // Client.startDate (their onboarding date), and only spend from "our"
@@ -27,8 +27,11 @@ export type ReportingScope = {
   clientId: string;
   startDate: Date | null;
   source: "meta" | "manual"; // where `campaigns` came from
+  // Meta campaigns from the saved history (lib/meta-archive.ts) — Meta is
+  // disconnected, or its live list failed. Spend then comes from there too.
+  archived: boolean;
   includedCampaignIds: string[];
-  campaigns: ScopeCampaign[]; // Meta's list when connected, else the manual rows
+  campaigns: ScopeCampaign[]; // Meta's list when connected, else the saved Meta list, else the manual rows
   manual: ScopeCampaign[]; // manual rows — the spend fallback if a Meta call fails
   manualSpend: Map<string, number>; // AdCampaign id → all-time spend
   metaError: string | null;
@@ -54,15 +57,25 @@ export async function getReportingScope(clientId: string, { cached = true }: Opt
   const manual = manualRows.map((r) => entry(r.id, r.name, r.status, r.createdAt, r.includedInReporting, startDate));
   const manualSpend = new Map(manualRows.map((r) => [r.id, Number(r.spend)]));
 
+  const overrides = new Map(rows.filter((r) => r.metaCampaignId).map((r) => [r.metaCampaignId!, r.includedInReporting]));
+  const toEntries = (list: MetaCampaignInfo[]) => list.map((c) => entry(c.id, c.name, c.status, c.startedAt, overrides.get(c.id) ?? null, startDate));
   let campaigns: ScopeCampaign[] | null = null;
+  let archived = false;
   let metaError: string | null = null;
   if (client?.metaAdAccountId && client.metaAccessToken) {
     try {
-      const list = await (cached ? getCachedMetaCampaignList : getMetaCampaignList)(client.metaAdAccountId, client.metaAccessToken);
-      const overrides = new Map(rows.filter((r) => r.metaCampaignId).map((r) => [r.metaCampaignId!, r.includedInReporting]));
-      campaigns = list.map((c) => entry(c.id, c.name, c.status, c.startedAt, overrides.get(c.id) ?? null, startDate));
+      campaigns = toEntries(await (cached ? getCachedMetaCampaignList : getMetaCampaignList)(client.metaAdAccountId, client.metaAccessToken));
     } catch (e) {
       metaError = e instanceof Error ? e.message : "Meta API request failed";
+    }
+  }
+  // Not connected (or Meta failing) but its history was saved: report from
+  // that, so past spend and cost-per figures survive a disconnect.
+  if (!campaigns) {
+    const saved = await archivedCampaignList(clientId);
+    if (saved.length) {
+      campaigns = toEntries(saved);
+      archived = true;
     }
   }
 
@@ -71,6 +84,7 @@ export async function getReportingScope(clientId: string, { cached = true }: Opt
     clientId,
     startDate,
     source: campaigns ? "meta" : "manual",
+    archived,
     includedCampaignIds: list.filter((c) => c.included).map((c) => c.id),
     campaigns: list,
     manual,
@@ -87,6 +101,57 @@ export function clampRange(range: Range, startDate: Date | null): Range {
 }
 
 const isEmpty = (r: Range) => !!(r.from && r.to && r.from >= r.to);
+
+// ── The saved Meta history (lib/meta-archive.ts) ────────────────────────
+// Every campaign seen across the client's archived ad accounts: the saved
+// campaign list, plus any campaign that only appears in the insight rows
+// (archived before the list was saved) — its first day with activity stands
+// in for its start.
+async function archivedCampaignList(clientId: string): Promise<MetaCampaignInfo[]> {
+  const [listed, seen] = await Promise.all([
+    prisma.metaArchivedCampaign.findMany({ where: { clientId }, select: { campaignId: true, name: true, status: true, startedAt: true } }),
+    prisma.$queryRaw<{ campaignId: string; name: string; first: string }[]>`
+      SELECT "campaignId", (array_agg("campaignName" ORDER BY date DESC))[1] AS name, MIN(date) AS first
+      FROM "MetaAdInsight" WHERE "clientId" = ${clientId} GROUP BY "campaignId"
+    `,
+  ]);
+  const out = new Map<string, MetaCampaignInfo>(listed.map((c) => [c.campaignId, { id: c.campaignId, name: c.name, status: c.status, startedAt: c.startedAt }]));
+  for (const s of seen) if (!out.has(s.campaignId)) out.set(s.campaignId, { id: s.campaignId, name: s.name, status: "UNKNOWN", startedAt: s.first });
+  return Array.from(out.values());
+}
+
+// Saved spend for a range, per campaign — the same Sydney-day bounds as a
+// live Meta call (metaDays). null = nothing was ever archived for the client.
+export async function archivedCampaignSpend(clientId: string, range: Range) {
+  const any = await prisma.metaAdInsight.findFirst({ where: { clientId }, select: { id: true } });
+  if (!any) return null;
+  const { since, until } = metaDays(range);
+  const rows = await prisma.metaAdInsight.groupBy({
+    by: ["campaignId", "campaignName"],
+    where: { clientId, date: { ...(since ? { gte: since } : {}), ...(until ? { lte: until } : {}) } },
+    _sum: { spend: true },
+  });
+  return rows.map((r) => ({ campaignId: r.campaignId, campaignName: r.campaignName, spend: Number(r._sum.spend ?? 0) }));
+}
+
+// Last day the saved history covers — shown next to archived figures.
+export async function archivedThrough(clientId: string): Promise<string | null> {
+  return (await prisma.metaAdInsight.aggregate({ where: { clientId }, _max: { date: true } }))._max.date ?? null;
+}
+
+// Included campaigns' spend → {total, by lower-cased campaign name}.
+function sumIncluded(scope: ReportingScope, rows: { campaignId: string; campaignName: string; spend: number }[]): ScopedSpend {
+  const included = new Set(scope.includedCampaignIds);
+  const byName = new Map<string, number>();
+  let total = 0;
+  for (const row of rows) {
+    if (!included.has(row.campaignId)) continue;
+    const k = row.campaignName.toLowerCase().trim();
+    byName.set(k, (byName.get(k) ?? 0) + row.spend);
+    total += row.spend;
+  }
+  return { source: "meta", total, byName };
+}
 
 async function metaCreds(clientId: string) {
   const c = await prisma.client.findUnique({ where: { id: clientId }, select: { metaAdAccountId: true, metaAccessToken: true } });
@@ -111,23 +176,18 @@ export async function scopedSpend(scope: ReportingScope, range: Range, { cached 
 
   if (scope.source === "meta") {
     if (isEmpty(r)) return { source: "meta", total: 0, byName: new Map() };
-    const creds = await metaCreds(scope.clientId);
-    try {
-      if (!creds) throw new Error("Meta disconnected");
-      const rows = await (cached ? getCachedCampaignInsights : getMetaCampaignInsights)(creds.account, creds.token, r);
-      const included = new Set(scope.includedCampaignIds);
-      const byName = new Map<string, number>();
-      let total = 0;
-      for (const row of rows) {
-        if (!included.has(row.campaignId)) continue;
-        const k = row.campaignName.toLowerCase().trim();
-        byName.set(k, (byName.get(k) ?? 0) + row.spend);
-        total += row.spend;
+    if (!scope.archived) {
+      const creds = await metaCreds(scope.clientId);
+      try {
+        if (!creds) throw new Error("Meta disconnected");
+        return sumIncluded(scope, await (cached ? getCachedCampaignInsights : getMetaCampaignInsights)(creds.account, creds.token, r));
+      } catch (e) {
+        if (strict) throw e; // expired token etc. — fall back like before
       }
-      return { source: "meta", total, byName };
-    } catch (e) {
-      if (strict) throw e; // expired token etc. — fall back like before
     }
+    // Disconnected, or the live call failed: the saved Meta history.
+    const saved = await archivedCampaignSpend(scope.clientId, r);
+    if (saved) return sumIncluded(scope, saved);
   }
 
   const daily = await prisma.adSpendDaily.aggregate({
@@ -155,16 +215,25 @@ export async function dailySpend(scope: ReportingScope, range: Range, { cached =
   if (isEmpty(r)) return { source: null, days };
 
   if (scope.source === "meta") {
-    const creds = await metaCreds(scope.clientId);
+    const included = new Set(scope.includedCampaignIds);
+    const creds = scope.archived ? null : await metaCreds(scope.clientId);
     if (creds) {
       try {
         const rows = await (cached ? getCachedCampaignInsights : getMetaCampaignInsights)(creds.account, creds.token, r, true);
-        const included = new Set(scope.includedCampaignIds);
         for (const row of rows) if (included.has(row.campaignId) && row.date) add(row.date, row.spend);
         return { source: "meta", days };
       } catch {
-        // fall through to the stored sources
+        // fall through to the saved history, then the stored sources
       }
+    }
+    if (await prisma.metaAdInsight.findFirst({ where: { clientId: scope.clientId }, select: { id: true } })) {
+      const { since, until } = metaDays(r);
+      const saved = await prisma.metaAdInsight.findMany({
+        where: { clientId: scope.clientId, date: { ...(since ? { gte: since } : {}), ...(until ? { lte: until } : {}) } },
+        select: { campaignId: true, date: true, spend: true },
+      });
+      for (const row of saved) if (included.has(row.campaignId)) add(row.date, Number(row.spend));
+      return { source: "meta", days };
     }
   }
 

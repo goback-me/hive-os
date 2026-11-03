@@ -168,7 +168,8 @@ export async function getSheetValues(
   sheetName: string,
   opts: { unformatted?: boolean } = {}
 ) {
-  const range = encodeURIComponent(`${sheetName}`);
+  // Quoted, so a tab named like a cell ("Q1") still means the whole tab.
+  const range = encodeURIComponent(`'${sheetName.replace(/'/g, "''")}'`);
   const query = opts.unformatted ? "?valueRenderOption=UNFORMATTED_VALUE&dateTimeRenderOption=SERIAL_NUMBER" : "";
   const res = await googleFetch(accessToken,
     `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${range}${query}`,
@@ -224,12 +225,17 @@ export function columnLetter(i: number): string {
 
 // ── Sheets: a tab's numeric id (the #gid in its URL) ─────────────────
 export async function getSheetTabId(accessToken: string, spreadsheetId: string, sheetName: string): Promise<number | null> {
+  return (await getSheetTabIds(accessToken, spreadsheetId)).get(sheetName) ?? null;
+}
+
+// Every tab's title → numeric id.
+export async function getSheetTabIds(accessToken: string, spreadsheetId: string): Promise<Map<string, number>> {
   const res = await googleFetch(accessToken, `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=sheets.properties(sheetId,title)`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   if (!res.ok) throw new Error(`Sheets metadata fetch failed: ${await res.text()}`);
-  const tab = ((await res.json()).sheets ?? []).find((s: { properties: { title: string } }) => s.properties.title === sheetName);
-  return tab ? (tab.properties.sheetId as number) : null;
+  const sheets: { properties: { title: string; sheetId: number } }[] = (await res.json()).sheets ?? [];
+  return new Map(sheets.map((s) => [s.properties.title, s.properties.sheetId]));
 }
 
 // ── Sheets: delete one row (1-based, as numbered in Sheets) ──────────

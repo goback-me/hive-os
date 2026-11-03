@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
-import { deleteSheetRow, getAdminGoogleConnection, getSheetTabId, getSheetValues, getValidAccessToken, hasWriteScope } from "@/lib/google-sheets";
+import { deleteSheetRow, getAdminGoogleConnection, getSheetTabIds, getSheetValues, getValidAccessToken, hasWriteScope } from "@/lib/google-sheets";
+import { sheetTabs } from "@/lib/sheet-tabs";
 import { findColumn, normalizeEmail, normalizeName, normalizePhone } from "@/lib/sheet-parse";
 import { syncLeadsFromSheet } from "@/lib/lead-sync";
 import type { DuplicateRow } from "@/lib/reconcile";
@@ -9,8 +10,9 @@ import type { DuplicateRow } from "@/lib/reconcile";
 // The "Sheet and HQ don't match" alert's Fix panel (components/DuplicateRowsFix.tsx):
 // GET  the duplicate rows from the latest sync, with links into the sheet
 // POST { sync: true }          sync now and re-check
-// POST { row, name, email, phone }  delete that sheet row — only if it still
-//      holds that lead (rows shift when the sheet is edited) — then sync.
+// POST { row, tab?, name, email, phone }  delete that sheet row (on `tab`,
+//      default the primary tab) — only if it still holds that lead (rows
+//      shift when the sheet is edited) — then sync.
 // Coaches / admins only.
 
 async function load(alertId: string) {
@@ -26,15 +28,19 @@ async function load(alertId: string) {
 async function state(alertId: string) {
   const d = await load(alertId);
   if (!d?.sheet) return null;
-  const tabId = await getValidAccessToken()
-    .then((t) => getSheetTabId(t, d.sheet!.spreadsheetId, d.sheet!.sheetName))
-    .catch(() => null);
+  const ids = await getValidAccessToken()
+    .then((t) => getSheetTabIds(t, d.sheet!.spreadsheetId))
+    .catch(() => new Map<string, number>());
+  const base = `https://docs.google.com/spreadsheets/d/${d.sheet.spreadsheetId}/edit`;
+  const url = (tab: string) => (ids.has(tab) ? `${base}#gid=${ids.get(tab)}` : base);
   return {
     ok: !!d.latest?.ok,
     // null = synced before duplicates were recorded — a sync lists them
     duplicates: (d.latest?.sheetCounts as { duplicates?: DuplicateRow[] } | null)?.duplicates ?? null,
-    sheetUrl: `https://docs.google.com/spreadsheets/d/${d.sheet.spreadsheetId}/edit${tabId != null ? `#gid=${tabId}` : ""}`,
-    canDelete: hasWriteScope(await getAdminGoogleConnection()) && tabId != null,
+    sheetUrl: url(d.sheet.sheetName),
+    // A link per assigned tab, for a duplicate row's own tab (DuplicateRow.tab).
+    tabUrls: Object.fromEntries(sheetTabs(d.sheet).map((t) => [t, url(t)])),
+    canDelete: hasWriteScope(await getAdminGoogleConnection()) && ids.has(d.sheet.sheetName),
   };
 }
 
@@ -51,7 +57,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   if (!(await coach())) return NextResponse.json({ error: "Not authorized" }, { status: 403 });
-  const body = (await req.json().catch(() => ({}))) as { sync?: boolean; row?: number; name?: string; email?: string; phone?: string };
+  const body = (await req.json().catch(() => ({}))) as { sync?: boolean; row?: number; tab?: string; name?: string; email?: string; phone?: string };
   const d = await load(params.id);
   if (!d?.sheet) return NextResponse.json({ error: "No sheet for this alert" }, { status: 404 });
 
@@ -60,12 +66,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       const row = Number(body.row);
       if (!Number.isInteger(row) || row < 2) return NextResponse.json({ error: "Bad row" }, { status: 400 });
       if (!hasWriteScope(await getAdminGoogleConnection())) return NextResponse.json({ error: "Google needs reconnecting with write access (Leads page)" }, { status: 400 });
+      const tab = body.tab ?? d.sheet.sheetName;
+      if (!sheetTabs(d.sheet).includes(tab)) return NextResponse.json({ error: `Tab "${tab}" isn't assigned to this client` }, { status: 400 });
       const token = await getValidAccessToken();
-      const tabId = await getSheetTabId(token, d.sheet.spreadsheetId, d.sheet.sheetName);
-      if (tabId == null) return NextResponse.json({ error: `Tab "${d.sheet.sheetName}" not found in the sheet` }, { status: 400 });
+      const tabId = (await getSheetTabIds(token, d.sheet.spreadsheetId)).get(tab);
+      if (tabId == null) return NextResponse.json({ error: `Tab "${tab}" not found in the sheet` }, { status: 400 });
 
       // The row must still be this lead — the sheet may have changed since the sync.
-      const { headers, rows } = await getSheetValues(token, d.sheet.spreadsheetId, d.sheet.sheetName);
+      const { headers, rows } = await getSheetValues(token, d.sheet.spreadsheetId, tab);
       const cells = rows[row - 2] ?? [];
       const cell = (idx: number) => (idx === -1 ? "" : cells[idx] ?? "");
       const nameIdx = findColumn(headers, ["name", "full name"], ["campaign", "ad", "adset", "ad set", "business"]);

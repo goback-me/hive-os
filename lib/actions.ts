@@ -1159,6 +1159,7 @@ export async function deleteClientPermanently(clientId: string) {
     prisma.contactLog.deleteMany({ where: { clientId } }),
     prisma.adSpendDaily.deleteMany({ where: { clientId } }),
     prisma.metaAdInsight.deleteMany({ where: { clientId } }),
+    prisma.metaArchivedCampaign.deleteMany({ where: { clientId } }),
     prisma.revenueMonthly.deleteMany({ where: { clientId } }),
     prisma.session.deleteMany({ where: { clientId } }),
     prisma.progressNote.deleteMany({ where: { clientId } }),

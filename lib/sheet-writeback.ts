@@ -4,6 +4,7 @@ import { batchUpdateValues, columnLetter, getAdminGoogleConnection, getSheetValu
 import { HANDOVER_STAGES, encodeTarget, targetLabel, type DqPhaseValue, type LeadStageValue, type StageTarget } from "./lead-status";
 import { classifyHive, classifyProspect, normalizeStatusText, parseMapping, resolveStatus } from "./status-classifier";
 import { findColumn, findHeaderIndex, normalizeEmail, normalizeName, normalizePhone } from "./sheet-parse";
+import { sheetTabs } from "./sheet-tabs";
 
 // Two-way status sync, HQ → sheet. A stage changed in HQ (and the status
 // automation below) becomes WriteBackJob rows — one cell each — written by
@@ -209,7 +210,7 @@ export async function processWriteBacks({ maxMs = 15_000 }: { maxMs?: number } =
     if (!due.length) break;
     const claimId = randomUUID();
     await prisma.writeBackJob.updateMany({ where: { id: { in: due.map((d) => d.id) }, status: "PENDING" }, data: { status: "RUNNING", claimId, runAfter: now } });
-    const jobs = await prisma.writeBackJob.findMany({ where: { claimId, status: "RUNNING" }, include: { lead: { select: { name: true, email: true, phone: true } } } });
+    const jobs = await prisma.writeBackJob.findMany({ where: { claimId, status: "RUNNING" }, include: { lead: { select: { name: true, email: true, phone: true, sheetTab: true } } } });
 
     const byClient = new Map<string, typeof jobs>();
     for (const j of jobs) byClient.set(j.clientId, [...(byClient.get(j.clientId) ?? []), j]);
@@ -223,7 +224,55 @@ export async function processWriteBacks({ maxMs = 15_000 }: { maxMs?: number } =
   return result;
 }
 
-type Job = { id: string; leadId: string; column: string; value: string; attempts: number; lead: { name: string | null; email: string | null; phone: string | null } };
+type Job = { id: string; leadId: string; column: string; value: string; attempts: number; lead: { name: string | null; email: string | null; phone: string | null; sheetTab: string | null } };
+
+// One tab, read for write-back: its own headers (columns can sit in different
+// places on each tab), the columns HQ may write there, and row lookups.
+type TabIndex = {
+  tab: string;
+  headers: string[];
+  allowed: Set<string>;
+  byEmail: Map<string, number>;
+  byPhone: Map<string, number>;
+  byName: Map<string, number>;
+};
+
+function indexTab(tab: string, headers: string[], rows: string[][], sheet: { statusColumn: string | null; resultStatusColumn: string | null }): TabIndex {
+  // Only these columns may ever be written.
+  const allowed = new Set(
+    [sheet.statusColumn, sheet.resultStatusColumn, headers[findColumn(headers, QUOTE_KEYWORDS)], headers[findColumn(headers, REVENUE_KEYWORDS)]]
+      .filter((h): h is string => !!h)
+      .map((h) => headers[findHeaderIndex(headers, h)])
+      .filter(Boolean)
+  );
+  const nameIdx = findColumn(headers, ["name", "full name"], ["campaign", "ad", "adset", "ad set", "business"]);
+  const phoneIdx = findColumn(headers, ["phone"]);
+  const emailIdx = findColumn(headers, ["email"]);
+  const index = (idx: number, norm: (v: string) => string) => {
+    const m = new Map<string, number>();
+    if (idx !== -1) rows.forEach((r, i) => {
+      const k = norm(r[idx] ?? "");
+      if (k && !m.has(k)) m.set(k, i);
+    });
+    return m;
+  };
+  return { tab, headers, allowed, byEmail: index(emailIdx, normalizeEmail), byPhone: index(phoneIdx, normalizePhone), byName: index(nameIdx, normalizeName) };
+}
+
+// The lead's row: its own tab first (Lead.sheetTab), then the others, each by
+// email → phone → name. Exported for lib/sheet-writeback.check.ts.
+export function findLeadRow(tabs: TabIndex[], lead: Job["lead"]): { t: TabIndex; row: number } | null {
+  const e = normalizeEmail(lead.email);
+  const p = normalizePhone(lead.phone);
+  const n = normalizeName(lead.name);
+  const ordered = [...tabs.filter((t) => t.tab === lead.sheetTab), ...tabs.filter((t) => t.tab !== lead.sheetTab)];
+  for (const t of ordered) {
+    const row = [e ? t.byEmail.get(e) : undefined, p ? t.byPhone.get(p) : undefined, n ? t.byName.get(n) : undefined].find((r) => r !== undefined);
+    if (row !== undefined) return { t, row };
+  }
+  return null;
+}
+export const _test = { indexTab };
 
 async function fail(jobs: Job[], error: string) {
   if (!jobs.length) return;
@@ -245,57 +294,36 @@ async function writeClientJobs(clientId: string, jobs: Job[]) {
   if (!hasWriteScope(conn)) return failAll("Google needs reconnecting with write access (Leads page)");
   if (!sheet) return failAll("No sheet assigned to this client");
 
-  let headers: string[], rows: string[][], token: string;
+  // Every assigned tab — a lead can be on any of them.
+  let tabs: TabIndex[], token: string;
   try {
     token = await getValidAccessToken();
-    ({ headers, rows } = await getSheetValues(token, sheet.spreadsheetId, sheet.sheetName));
+    const names = sheetTabs(sheet);
+    const values = await Promise.all(names.map((t) => getSheetValues(token, sheet.spreadsheetId, t)));
+    tabs = names.map((t, i) => indexTab(t, values[i].headers, values[i].rows, sheet));
   } catch (e) {
     return failAll(e instanceof Error ? e.message : "Couldn't read the sheet");
   }
 
-  // Only these columns may ever be written.
-  const allowed = new Set(
-    [sheet.statusColumn, sheet.resultStatusColumn, headers[findColumn(headers, QUOTE_KEYWORDS)], headers[findColumn(headers, REVENUE_KEYWORDS)]]
-      .filter((h): h is string => !!h)
-      .map((h) => headers[findHeaderIndex(headers, h)])
-      .filter(Boolean)
-  );
-  const nameIdx = findColumn(headers, ["name", "full name"], ["campaign", "ad", "adset", "ad set", "business"]);
-  const phoneIdx = findColumn(headers, ["phone"]);
-  const emailIdx = findColumn(headers, ["email"]);
-  const index = (idx: number, norm: (v: string) => string) => {
-    const m = new Map<string, number>();
-    if (idx !== -1) rows.forEach((r, i) => {
-      const k = norm(r[idx] ?? "");
-      if (k && !m.has(k)) m.set(k, i);
-    });
-    return m;
-  };
-  const byEmail = index(emailIdx, normalizeEmail);
-  const byPhone = index(phoneIdx, normalizePhone);
-  const byName = index(nameIdx, normalizeName);
-  const tab = `'${sheet.sheetName.replace(/'/g, "''")}'`;
-
   const ready: Job[] = [];
   const data: { range: string; values: string[][] }[] = [];
   for (const j of jobs) {
-    const colIdx = findHeaderIndex(headers, j.column);
-    if (colIdx === -1 || !allowed.has(headers[colIdx])) {
-      await fail([j], colIdx === -1 ? `Column "${j.column}" not found in the sheet` : `Column "${j.column}" isn't one HQ may write`);
+    const found = findLeadRow(tabs, j.lead);
+    if (!found) {
+      await fail([j], `Lead's row not found in the sheet${tabs.length > 1 ? "'s tabs" : ""} (matched by email, phone, then name)`);
       out.failed++;
       continue;
     }
-    const e = normalizeEmail(j.lead.email);
-    const p = normalizePhone(j.lead.phone);
-    const n = normalizeName(j.lead.name);
-    const row = [e ? byEmail.get(e) : undefined, p ? byPhone.get(p) : undefined, n ? byName.get(n) : undefined].find((r) => r !== undefined);
-    if (row === undefined) {
-      await fail([j], "Lead's row not found in the sheet (matched by email, phone, then name)");
+    const { t, row } = found;
+    const colIdx = findHeaderIndex(t.headers, j.column);
+    const where = tabs.length > 1 ? ` on tab "${t.tab}"` : " in the sheet";
+    if (colIdx === -1 || !t.allowed.has(t.headers[colIdx])) {
+      await fail([j], colIdx === -1 ? `Column "${j.column}" not found${where}` : `Column "${j.column}" isn't one HQ may write`);
       out.failed++;
       continue;
     }
     ready.push(j);
-    data.push({ range: `${tab}!${columnLetter(colIdx)}${row + 2}`, values: [[j.value]] });
+    data.push({ range: `'${t.tab.replace(/'/g, "''")}'!${columnLetter(colIdx)}${row + 2}`, values: [[j.value]] });
   }
   if (!ready.length) return out;
 

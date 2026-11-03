@@ -25,6 +25,7 @@ type Props = {
   spreadsheetId: string | null;
   spreadsheetName: string | null;
   sheetName: string | null;
+  sheetNames?: string[]; // every assigned tab, primary first (lib/sheet-tabs.ts)
 };
 
 export default function LeadsSheetPanel({
@@ -33,13 +34,17 @@ export default function LeadsSheetPanel({
   spreadsheetId,
   spreadsheetName,
   sheetName,
+  sheetNames,
 }: Props) {
   const router = useRouter();
   const [step, setStep] = useState<"picking-sheet" | "picking-tab" | "ready">(
     spreadsheetId && sheetName ? "ready" : "picking-sheet"
   );
+  const initialTabs = sheetNames?.length ? sheetNames : sheetName ? [sheetName] : [];
   // What's currently assigned (updated after assign/remove without a reload).
-  const [assigned, setAssigned] = useState(spreadsheetId && sheetName ? { spreadsheetId, sheetName } : null);
+  const [assigned, setAssigned] = useState(spreadsheetId && sheetName ? { spreadsheetId, sheetNames: initialTabs } : null);
+  // Tabs ticked in the picker, in the order ticked — the first is the primary.
+  const [selectedTabs, setSelectedTabs] = useState<string[]>([]);
   const [notice, setNotice] = useState<{ text: string; ok: boolean } | null>(null);
   const [files, setFiles] = useState<DriveFile[] | null>(null);
   const [sheetSearch, setSheetSearch] = useState("");
@@ -48,7 +53,7 @@ export default function LeadsSheetPanel({
   const [loadingList, setLoadingList] = useState(false);
 
   const [currentSpreadsheetName, setCurrentSpreadsheetName] = useState(spreadsheetName);
-  const [currentSheetName, setCurrentSheetName] = useState(sheetName);
+  const [currentSheetNames, setCurrentSheetNames] = useState<string[]>(initialTabs);
 
   // Column names only (no data) — used to render the picker checkboxes.
   const [allColumns, setAllColumns] = useState<string[]>([]);
@@ -100,7 +105,7 @@ export default function LeadsSheetPanel({
         setWriteOptions({ status: data.statusOptions ?? [], result: data.resultStatusOptions ?? [] });
         setWriteMapping({ status: data.writeMapping?.status ?? {}, result: data.writeMapping?.result ?? {} });
         setCurrentSpreadsheetName(data.spreadsheetName);
-        setCurrentSheetName(data.sheetName);
+        setCurrentSheetNames(data.sheetNames?.length ? data.sheetNames : [data.sheetName]);
       })
       .catch((e) => setError(e.message));
   }
@@ -153,16 +158,28 @@ export default function LeadsSheetPanel({
       .then((data) => {
         if (data.error) throw new Error(data.error);
         setTabs(data.tabs);
+        // Re-opening the assigned spreadsheet starts from its current tabs.
+        setSelectedTabs(assigned?.spreadsheetId === file.id ? assigned.sheetNames.filter((t) => data.tabs.includes(t)) : []);
         setStep("picking-tab");
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoadingList(false));
   }
 
-  function pickTab(tab: string) {
-    if (!pickedFile) return;
-    const switching = assigned && (assigned.spreadsheetId !== pickedFile.id || assigned.sheetName !== tab);
+  function toggleTab(tab: string) {
+    setSelectedTabs((cur) => (cur.includes(tab) ? cur.filter((t) => t !== tab) : [...cur, tab]));
+  }
+
+  function connectTabs() {
+    const tabsToSave = selectedTabs;
+    if (!pickedFile || !tabsToSave.length) return;
+    // Mirrors app/api/google/select: a new spreadsheet, or no tab in common,
+    // replaces the old leads; dropping a tab hides only that tab's leads.
+    const sameFile = assigned?.spreadsheetId === pickedFile.id;
+    const switching = assigned && (!sameFile || !assigned.sheetNames.some((t) => tabsToSave.includes(t)));
+    const dropped = sameFile && !switching ? assigned!.sheetNames.filter((t) => !tabsToSave.includes(t)) : [];
     if (switching && !confirm("Switch this client to a different sheet? Leads synced from the current sheet will be hidden (they come back, notes and history intact, if the same people appear in the new sheet).")) return;
+    if (dropped.length && !confirm(`Stop syncing ${dropped.map((t) => `"${t}"`).join(", ")}? Leads from ${dropped.length === 1 ? "that tab" : "those tabs"} will be hidden (they come back, notes and history intact, if the tab is added again).`)) return;
     setLoadingList(true);
     setError(null);
     fetch("/api/google/select", {
@@ -172,13 +189,14 @@ export default function LeadsSheetPanel({
         clientId,
         spreadsheetId: pickedFile.id,
         spreadsheetName: pickedFile.name,
-        sheetName: tab,
+        sheetNames: tabsToSave,
       }),
     })
       .then((r) => r.json())
       .then((data) => {
         if (data.error) throw new Error(data.error);
-        setAssigned({ spreadsheetId: pickedFile.id, sheetName: tab });
+        setAssigned({ spreadsheetId: pickedFile.id, sheetNames: tabsToSave });
+        setCurrentSheetNames(tabsToSave);
         setNotice(
           data.syncError
             ? { ok: false, text: `Sheet connected, but syncing leads failed: ${data.syncError}` }
@@ -366,26 +384,43 @@ export default function LeadsSheetPanel({
     return (
       <div className="card rounded-2xl p-5 max-w-[32rem] mx-auto">
         <div className="flex items-center justify-between mb-3">
-          <h4 className="font-heading font-bold text-sm" style={{ color: "var(--text-primary)" }}>Pick a tab in "{pickedFile?.name}"</h4>
+          <h4 className="font-heading font-bold text-sm" style={{ color: "var(--text-primary)" }}>Pick the lead tabs in "{pickedFile?.name}"</h4>
           <button onClick={() => { setError(null); setStep("picking-sheet"); }} className="text-xs font-semibold flex items-center gap-1" style={{ color: "var(--text-secondary)" }}>
             <span className="material-symbols-outlined text-[14px]">arrow_back</span>
             Back
           </button>
         </div>
         {error && <p className="text-xs mb-3" style={{ color: "var(--danger)" }}>{error}</p>}
+        <p className="text-xs mb-3" style={{ color: "var(--text-secondary)" }}>
+          Tick every tab that holds this client&apos;s leads — they sync as one list. The first one ticked is the main tab: its status dropdowns are used for write-back.
+        </p>
         <div className="flex flex-wrap gap-2">
-          {(tabs ?? []).map((t) => (
-            <button
-              key={t}
-              onClick={() => pickTab(t)}
-              disabled={loadingList}
-              className="px-3 py-2 rounded-lg text-xs font-bold disabled:opacity-50"
-              style={{ background: "var(--surface-hover)", color: "var(--text-primary)" }}
-            >
-              {t}
-            </button>
-          ))}
+          {(tabs ?? []).map((t) => {
+            const on = selectedTabs.includes(t);
+            return (
+              <button
+                key={t}
+                onClick={() => toggleTab(t)}
+                disabled={loadingList}
+                aria-pressed={on}
+                className="px-3 py-2 rounded-lg text-xs font-bold disabled:opacity-50 flex items-center gap-1.5"
+                style={on ? { background: "var(--primary-tint)", color: "var(--primary)", border: "1px solid var(--primary)" } : { background: "var(--surface-hover)", color: "var(--text-primary)", border: "1px solid transparent" }}
+              >
+                <span className="material-symbols-outlined text-[14px]">{on ? "check_box" : "check_box_outline_blank"}</span>
+                {t}
+                {selectedTabs[0] === t && <span className="text-[10px] font-semibold opacity-80">· main</span>}
+              </button>
+            );
+          })}
         </div>
+        <button
+          onClick={connectTabs}
+          disabled={loadingList || !selectedTabs.length}
+          className="mt-4 px-4 py-2 rounded-lg text-xs font-bold disabled:opacity-40"
+          style={{ background: "var(--primary)", color: "#fff" }}
+        >
+          {loadingList ? "Connecting…" : selectedTabs.length > 1 ? `Connect ${selectedTabs.length} tabs` : "Connect tab"}
+        </button>
       </div>
     );
   }
@@ -405,7 +440,7 @@ export default function LeadsSheetPanel({
         <div>
           <h4 className="font-heading font-bold text-sm" style={{ color: "var(--text-primary)" }}>{currentSpreadsheetName ?? "Assigned sheet"}</h4>
           <p className="text-xs" style={{ color: "var(--text-secondary)" }}>
-            Tab: {currentSheetName} · {filteredRows.length} of {rows.length} leads
+            {currentSheetNames.length > 1 ? `Tabs: ${currentSheetNames.join(", ")}` : `Tab: ${currentSheetNames[0] ?? ""}`} · {filteredRows.length} of {rows.length} leads
           </p>
         </div>
         <div className="flex gap-2">
@@ -423,6 +458,17 @@ export default function LeadsSheetPanel({
             <span className="material-symbols-outlined text-[16px]">view_column</span>
             Columns
           </button>
+          {assigned && (
+            <button
+              onClick={() => pickFile({ id: assigned.spreadsheetId, name: currentSpreadsheetName ?? "Assigned sheet", modifiedTime: "" })}
+              disabled={loadingList}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold disabled:opacity-50"
+              style={ghostBtn}
+            >
+              <span className="material-symbols-outlined text-[16px]">tab</span>
+              Edit tabs
+            </button>
+          )}
           <button onClick={() => setStep("picking-sheet")} className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold" style={ghostBtn}>
             <span className="material-symbols-outlined text-[16px]">swap_horiz</span>
             Change sheet

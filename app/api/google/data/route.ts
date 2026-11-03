@@ -1,12 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getValidAccessToken, getSheetValues } from "@/lib/google-sheets";
+import { getValidAccessToken } from "@/lib/google-sheets";
+import { getCombinedSheetValues, sheetTabs } from "@/lib/sheet-tabs";
 import { requireUser, canAccessClient } from "@/lib/auth";
 import { findHeaderIndex, normalizeStatus } from "@/lib/sheet-parse";
 
 // Fetches live rows for a client's assigned sheet. Only visibleColumns are
 // ever included in the response — hidden column data never leaves the
 // server, even though the header NAME is known (for the column picker UI).
+const TAB_HEADER = "Tab";
+
 export async function GET(req: NextRequest) {
   const clientId = req.nextUrl.searchParams.get("clientId");
   if (!clientId) return NextResponse.json({ error: "clientId is required" }, { status: 400 });
@@ -23,11 +26,9 @@ export async function GET(req: NextRequest) {
 
   try {
     const accessToken = await getValidAccessToken();
-    const { headers: liveHeaders, rows: liveRows } = await getSheetValues(
-      accessToken,
-      sheet.spreadsheetId,
-      sheet.sheetName
-    );
+    // Every assigned tab as one list (lib/sheet-tabs.ts).
+    const tabs = sheetTabs(sheet);
+    const { headers: liveHeaders, rows: liveRows, rowTabs } = await getCombinedSheetValues(accessToken, sheet.spreadsheetId, tabs);
 
     // Keep the cached column list fresh if the sheet's headers changed —
     // this never affects what THIS response sends, only future picker loads.
@@ -54,8 +55,10 @@ export async function GET(req: NextRequest) {
 
     // Server-side filter: build the response using ONLY visible columns.
     const visibleIndexes = liveHeaders.map((h, i) => (visibleColumns.includes(h) ? i : -1)).filter((i) => i !== -1);
-    const headers = visibleIndexes.map((i) => liveHeaders[i]);
-    const rows = liveRows.map((r) => visibleIndexes.map((i) => r[i]));
+    // Several tabs: a leading "Tab" column says which one each row is on.
+    const multiTab = tabs.length > 1;
+    const headers = [...(multiTab ? [TAB_HEADER] : []), ...visibleIndexes.map((i) => liveHeaders[i])];
+    const rows = liveRows.map((r, ri) => [...(multiTab ? [rowTabs[ri]] : []), ...visibleIndexes.map((i) => r[i])]);
 
     // Grouped by normalized value (the mapping key) — "DQ " and "dq" are one
     // entry. `labels` keeps the first raw spelling seen, for display.

@@ -5,6 +5,7 @@ import LeadsSheetPanel from "@/components/LeadsSheetPanel";
 import AddClientSheetButton from "@/components/AddClientSheetButton";
 import { canAccessClient, requireUser } from "@/lib/auth";
 import { hasWriteScope } from "@/lib/google-sheets";
+import { sheetTabs } from "@/lib/sheet-tabs";
 
 export const dynamic = "force-dynamic";
 
@@ -86,6 +87,7 @@ export default async function LeadsPage({
         spreadsheetId={sheet?.spreadsheetId ?? null}
         spreadsheetName={sheet?.spreadsheetName ?? null}
         sheetName={sheet?.sheetName ?? null}
+        sheetNames={sheet ? sheetTabs(sheet) : []}
       />
     </div>
   );

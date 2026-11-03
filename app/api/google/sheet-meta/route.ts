@@ -5,6 +5,7 @@ import { parseMapping } from "@/lib/status-classifier";
 import { TARGET_OPTIONS, encodeTarget, parseTarget, type LeadStageValue, type StageTarget } from "@/lib/lead-status";
 import { planStageWrite } from "@/lib/sheet-writeback";
 import { DATE_OPT_IN_KEYWORDS, findColumn } from "@/lib/sheet-parse";
+import { sheetTabs } from "@/lib/sheet-tabs";
 
 // Returns the cached column names (all of them, including hidden ones) so
 // the column picker can render checkboxes — no row data here, just names.
@@ -25,6 +26,7 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     spreadsheetName: sheet.spreadsheetName,
     sheetName: sheet.sheetName,
+    sheetNames: sheetTabs(sheet),
     allColumns: sheet.allColumns,
     visibleColumns: sheet.visibleColumns,
     statusColumn: sheet.statusColumn,

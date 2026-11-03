@@ -72,7 +72,20 @@ export default function AdsPanel({ clientId, isCoach, onSetReporting, maxFrom }:
           {error && <span className="text-xs" style={{ color: "var(--danger)" }}>{error}</span>}
           {loading && <span className="material-symbols-outlined text-[18px] animate-spin" style={{ color: "var(--text-muted)" }}>progress_activity</span>}
         </div>
-        <DateRangePicker value={range} onChange={setRange} maxFrom={maxFrom} />
+        <div className="flex items-center gap-2 flex-wrap">
+          {isCoach && (
+            <a
+              href={`/api/clients/case-study?clientId=${encodeURIComponent(clientId)}`}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold"
+              style={{ border: "1px solid var(--border)", color: "var(--text-primary)" }}
+              title="Month-by-month spend, leads, sales, revenue and cost per result since the start date (CSV)"
+            >
+              <span className="material-symbols-outlined text-[16px]">download</span>
+              Case study data
+            </a>
+          )}
+          <DateRangePicker value={range} onChange={setRange} maxFrom={maxFrom} />
+        </div>
       </div>
       {isCoach && data && !data.startDate && <StartDateWarning />}
 
@@ -83,6 +96,12 @@ export default function AdsPanel({ clientId, isCoach, onSetReporting, maxFrom }:
         <div className="card rounded-2xl p-5"><span className="skeleton h-4 w-40 block mb-4" /><span className="skeleton h-24 w-full block" /></div>
       ) : (
         <div className="space-y-5 transition-opacity" style={{ opacity: loading ? 0.6 : 1 }}>
+          {isCoach && data.archived && (
+            <p className="text-xs rounded-lg px-3 py-2" style={{ background: "var(--surface-hover)", color: "var(--text-secondary)" }}>
+              Meta isn&apos;t connected right now — spend comes from the saved Meta history
+              {data.archivedThrough ? ` (covers up to ${new Date(`${data.archivedThrough}T00:00:00`).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" })})` : ""}.
+            </p>
+          )}
           <div className={`grid grid-cols-2 gap-4 ${showCost ? "lg:grid-cols-5" : "lg:grid-cols-3"}`}>
             {showCost && <Card label="Ad spend" value={money(data.cards.spend)} sub={data.spendAllTime ? "All-time (manual campaigns have no dates)" : rangeLabel} badge={costBadge} />}
             <Card label="Total leads" value={data.cards.leads.toLocaleString()} sub={rangeLabel} />

@@ -27,9 +27,11 @@ export type Diff = { metric: string; sheet: number; hq: number };
 // the same email+phone+name) took it, and HQ shows only that row — keptRow.
 // Row numbers as in the sheet (header = row 1). Shown by the reconcile
 // alert's Fix panel (components/DuplicateRowsFix.tsx).
+// With several tabs, `tab` / `keptTab` say which tab each row is on, and
+// row numbers are within that tab.
 export type RowCells = { name: string; email: string; phone: string; hive: string; prospect: string };
-export type DuplicateRow = RowCells & { row: number; keptRow: number; kept: RowCells; match: "email" | "phone" | "name" };
-type RowOnLead = RowCells & { lead: string };
+export type DuplicateRow = RowCells & { row: number; keptRow: number; kept: RowCells; match: "email" | "phone" | "name"; tab?: string; keptTab?: string };
+type RowOnLead = RowCells & { lead: string; tab?: string; sheetRow?: number };
 
 // rows: row index → the lead it landed on; owners: the row index each lead
 // ended up showing.
@@ -39,11 +41,11 @@ export function duplicateRows(rows: Map<number, RowOnLead>, owners: Set<number>)
   for (const [i, r] of Array.from(rows)) {
     const k = ownerOf.get(r.lead);
     if (owners.has(i) || k === undefined) continue;
-    const { lead: _a, ...cells } = r;
-    const { lead: _b, ...kept } = rows.get(k)!;
+    const { lead: _a, tab, sheetRow, ...cells } = r;
+    const { lead: _b, tab: keptTab, sheetRow: keptSheetRow, ...kept } = rows.get(k)!;
     const same = (a: string, b: string, norm: (v: string) => string) => !!norm(a) && norm(a) === norm(b);
     const match = same(r.email, kept.email, normalizeEmail) ? "email" : same(r.phone, kept.phone, normalizePhone) ? "phone" : "name";
-    out.push({ row: i + 2, keptRow: k + 2, kept, match, ...cells });
+    out.push({ row: sheetRow ?? i + 2, keptRow: keptSheetRow ?? k + 2, kept, match, ...cells, ...(tab ? { tab } : {}), ...(keptTab ? { keptTab } : {}) });
   }
   return out;
 }

@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from "crypto";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { getAdminGoogleConnection, getDropdownOptions, getValidAccessToken, getSheetValues, hasWriteScope } from "@/lib/google-sheets";
+import { getAdminGoogleConnection, getDropdownOptions, getValidAccessToken, hasWriteScope } from "@/lib/google-sheets";
+import { getCombinedSheetValues, sheetTabs } from "@/lib/sheet-tabs";
 import { automationWrites, queueWrites, type CellWrite } from "@/lib/sheet-writeback";
 import { countValues, duplicateRows, reconcile, type DuplicateRow, type RowCells, type SideCounts } from "@/lib/reconcile";
 import { runHealthChecks } from "@/lib/data-health";
@@ -291,7 +292,8 @@ async function runSync(
   slackEvents: { leadId: string; kind: "sale" | "live_transfer" }[];
 }> {
   const accessToken = await getValidAccessToken();
-  const { headers, rows, cells } = await getSheetValues(accessToken, sheet.spreadsheetId, sheet.sheetName, { unformatted: true });
+  // Every assigned tab, as one list of rows (lib/sheet-tabs.ts).
+  const { headers, rows, cells, rowTabs, rowNumbers } = await getCombinedSheetValues(accessToken, sheet.spreadsheetId, sheetTabs(sheet), { unformatted: true });
 
   // Client's own mapping first, then the keyword classifier (resolveStatus).
   const statusMapping = parseMapping(sheet.statusMapping);
@@ -361,7 +363,7 @@ async function runSync(
   const sheetRows: { hive: string; prospect: string; won: boolean; value: number | null }[] = [];
   const badOptIn: string[] = []; // lead id, or externalKey for a new lead
   const creates = new Map<string, { row: number; data: Record<string, unknown>; events: PlannedEvent[]; noteJob?: NoteJob; dqNotes?: string[] }>(); // externalKey -> new lead
-  const rowLead = new Map<number, RowCells & { lead: string }>(); // row index -> the lead it landed on
+  const rowLead = new Map<number, RowCells & { lead: string; tab?: string; sheetRow?: number }>(); // row index -> the lead it landed on (+ its tab and row there)
   let identifiedRows = 0;
 
   rows.forEach((row, rowIdx) => {
@@ -402,7 +404,12 @@ async function runSync(
     const rawKnown = !!existing?.sheetStatusUpdatedAt;
     const sheetChanged =
       rawKnown && ((existing!.hiveStatusRaw ?? "") !== rawStatus.trim() || (existing!.prospectStatusRaw ?? "") !== rawResultStatus.trim());
-    const sheetTime = !existing || !rawKnown ? new Date(0) : sheetChanged ? existing.lastSyncedAt ?? new Date(0) : existing.sheetStatusUpdatedAt;
+    // The earliest an edit seen now can have been made is the client's
+    // previous successful sync (when the old text was last read) — NOT the
+    // lead's own lastSyncedAt, which only moves when the lead changes, so a
+    // quiet lead's fresh sheet edit used to be dated weeks back and lose to
+    // any HQ change made since.
+    const sheetTime = !existing || !rawKnown ? new Date(0) : sheetChanged ? sheet.lastSyncedAt ?? existing.lastSyncedAt ?? new Date(0) : existing.sheetStatusUpdatedAt;
     const hqWins = !!existing?.hqStatusUpdatedAt && (!sheetTime || existing.hqStatusUpdatedAt > sheetTime);
 
     // Status automation: fill in what's missing in the two status cells.
@@ -419,9 +426,11 @@ async function runSync(
 
     // The deal's value is stored whatever the stage, so quoted leads show
     // their quote. It only counts as REVENUE once the lead is Won — that
-    // filter lives in lib/revenue.ts. Quote Value takes priority over
-    // Revenue Generated when both are set.
-    const value = parseMoney(quoteIdx !== -1 ? row[quoteIdx] : undefined) ?? parseMoney(revenueIdx !== -1 ? row[revenueIdx] : undefined);
+    // filter lives in lib/revenue.ts. Revenue Generated (the actual job
+    // value — what HQ's Won write-back fills in) takes priority; Quote Value
+    // is the fallback when no revenue has been entered.
+    const revenueValue = parseMoney(revenueIdx !== -1 ? row[revenueIdx] : undefined);
+    const value = revenueValue ?? parseMoney(quoteIdx !== -1 ? row[quoteIdx] : undefined);
 
     // The real-world date this lead came in — NOT when our app happened to
     // sync it. Without this, a bulk first-time sync of months-old leads
@@ -431,7 +440,7 @@ async function runSync(
     const dateOptIn = dateOptInIdx !== -1 ? parseSheetDate(cells[rowIdx][dateOptInIdx]) : null;
     if (dateOptInIdx !== -1 && !dateOptIn) badOptIn.push(existing?.id ?? externalKey);
     sheetRows.push({ hive: rawStatus, prospect: rawResultStatus, won: final.stage === "WON" && !hqWins, value });
-    rowLead.set(rowIdx, { lead: existing?.id ?? `new:${externalKey}`, name, email, phone, hive: rawStatus.trim(), prospect: rawResultStatus.trim() });
+    rowLead.set(rowIdx, { lead: existing?.id ?? `new:${externalKey}`, name, email, phone, hive: rawStatus.trim(), prospect: rawResultStatus.trim(), tab: rowTabs[rowIdx], sheetRow: rowNumbers[rowIdx] });
     const attempts = attemptsIdx !== -1 ? parseInt(row[attemptsIdx], 10) : NaN;
 
     // Feedback/notes cell → dated events, only when the cell changed since the
@@ -461,6 +470,7 @@ async function runSync(
 
     const baseData: Record<string, unknown> = {
       externalKey,
+      sheetTab: rowTabs[rowIdx],
       sheetStage: final.stage,
       name: name || null,
       phone: phone || null,
@@ -489,12 +499,14 @@ async function runSync(
       claimed.set(existing.id, rowIdx);
       if (hqWins) {
         // HQ's stage stands; a sheet change it beat is logged as overridden.
-        // A value typed in with the HQ change survives until the sheet has
-        // one of its own.
+        // A value typed in with the HQ change survives until the sheet has a
+        // Revenue Generated of its own — a Quote Value alone never replaces
+        // it (the revenue write-back may still be on its way).
         const { value: _sheetValue, ...keepValue } = baseData;
+        const keepHqValue = value == null || (existing.value != null && revenueValue == null);
         pending.set(existing.id, {
           lead: existing,
-          data: value == null ? keepValue : baseData,
+          data: keepHqValue ? keepValue : baseData,
           value,
           events: [],
           noteJob,
@@ -600,7 +612,7 @@ async function runSync(
   // client's leads.
   if (activeLeads.length > 0 && (identifiedRows === 0 || (staleIds.length > 5 && staleIds.length > activeLeads.length * 0.2))) {
     const removing = identifiedRows === 0 ? activeLeads.length : staleIds.length;
-    throw new Error(`Sync aborted: would remove ${removing} of ${activeLeads.length} leads — check the sheet/tab`);
+    throw new Error(`Sync aborted: would remove ${removing} of ${activeLeads.length} leads — check the sheet/tabs`);
   }
 
   const updates = Array.from(pending.values()).filter((u) => u.events.length > 0 || u.noteJob || leadChanged(u.lead, u.data));

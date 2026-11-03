@@ -1,7 +1,7 @@
 import { prisma } from "./prisma";
 import { liveAtSql, milestoneSql, quoteAtSql, wonAtSql } from "./milestones";
 import { getMetaAllCampaigns } from "./meta-ads";
-import { clampRange, getReportingScope, type Range, type ScopeCampaign } from "./reporting-scope";
+import { archivedCampaignSpend, archivedThrough, clampRange, getReportingScope, type Range, type ScopeCampaign } from "./reporting-scope";
 import type { ReportVisibility } from "./report-visibility";
 import type { ClientTypeValue } from "./client-terms";
 
@@ -32,6 +32,10 @@ export type CampaignRow = {
 
 export type AdsReport = {
   source: "meta" | "manual";
+  // Meta spend from the saved history (lib/meta-archive.ts) — covers up to
+  // `archivedThrough` (a "YYYY-MM-DD" ad-account day).
+  archived: boolean;
+  archivedThrough: string | null;
   spendAllTime: boolean; // manual campaigns: their spend has no dates
   startDate: string | null;
   cards: { spend: number | null; leads: number; costPerLead: number | null; quotes: number; sales: number };
@@ -99,16 +103,29 @@ export async function getAdsReport(clientId: string, requested: Range, viewer: {
     prisma.client.findUnique({ where: { id: clientId }, select: { metaAdAccountId: true, metaAccessToken: true } }),
   ]);
 
-  // Spend per campaign for the period — Meta's live numbers, else the manual
-  // rows (all-time, no dates).
+  // Spend per campaign for the period — Meta's live numbers, else the saved
+  // Meta history (disconnected / Meta failing), else the manual rows
+  // (all-time, no dates).
   let source: AdsReport["source"] = "manual";
+  let archived = false;
   let campaigns: (ScopeCampaign & { spend: number })[] = scope.manual.map((c) => ({ ...c, spend: scope.manualSpend.get(c.id) ?? 0 }));
-  if (scope.source === "meta" && client?.metaAdAccountId && client.metaAccessToken) {
-    const meta = await getMetaAllCampaigns(client.metaAdAccountId, client.metaAccessToken, empty ? undefined : range).catch(() => null);
-    if (meta) {
+  if (scope.source === "meta") {
+    let spend: Map<string, number> | null = null;
+    if (!scope.archived && client?.metaAdAccountId && client.metaAccessToken) {
+      const meta = await getMetaAllCampaigns(client.metaAdAccountId, client.metaAccessToken, empty ? undefined : range).catch(() => null);
+      if (meta) spend = new Map(meta.map((c) => [c.id, c.spend]));
+    }
+    if (!spend) {
+      const saved = await archivedCampaignSpend(clientId, range);
+      if (saved) {
+        spend = new Map<string, number>();
+        for (const s of saved) spend.set(s.campaignId, (spend.get(s.campaignId) ?? 0) + s.spend);
+        archived = true;
+      }
+    }
+    if (spend) {
       source = "meta";
-      const spend = new Map(meta.map((c) => [c.id, empty ? 0 : c.spend]));
-      campaigns = scope.campaigns.map((c) => ({ ...c, spend: spend.get(c.id) ?? 0 }));
+      campaigns = scope.campaigns.map((c) => ({ ...c, spend: empty ? 0 : spend!.get(c.id) ?? 0 }));
     }
   }
 
@@ -159,6 +176,8 @@ export async function getAdsReport(clientId: string, requested: Range, viewer: {
 
   return {
     source,
+    archived,
+    archivedThrough: archived ? await archivedThrough(clientId) : null,
     spendAllTime: source === "manual",
     startDate: scope.startDate?.toISOString() ?? null,
     cards: {
