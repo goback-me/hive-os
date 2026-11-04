@@ -55,6 +55,8 @@ assert.equal(at(reminderPlan("CONSULT_BOOKED", t0, cycle, new Date(t0.getTime() 
 p = reminderPlan("CONSULT_ATTENDED", t0, cycle);
 assert.deepEqual([at(p.first), p.everyDays, at(p.staleAt)], [8, 4, 16]);
 assert.equal(at(nextReminderAt(p, new Date(t0.getTime() + 8 * DAY))), 12);
+// A learned median of 0 must not make the lead due again every cron run.
+assert.equal(reminderPlan("CONSULT_ATTENDED", t0, { ...cycle, attendedToQuote: 0 }).everyDays, 1);
 
 // QUOTE_SENT: at the median, then every max(7, median / 2).
 p = reminderPlan("QUOTE_SENT", t0, cycle);

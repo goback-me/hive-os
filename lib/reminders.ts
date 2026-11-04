@@ -51,7 +51,9 @@ export function reminderPlan(step: ReminderStep, anchor: Date, cycle: Record<Cyc
     }
     case "CONSULT_ATTENDED": {
       const m = cycle.attendedToQuote;
-      return { first: plus(anchor, m), everyDays: m / 2, staleAt: plus(anchor, 2 * m) };
+      // Floor of 1 day: a learned median of 0 (quoted the day they attended)
+      // made the lead due again on every cron run — an email every 5 minutes.
+      return { first: plus(anchor, m), everyDays: Math.max(1, m / 2), staleAt: plus(anchor, 2 * m) };
     }
     case "QUOTE_SENT": {
       const m = cycle.quoteToClose;
@@ -223,7 +225,10 @@ export async function raiseReminders(now = new Date()) {
     const link = `${appUrl()}${path}`;
     const n = `${mine.length} lead${mine.length === 1 ? "" : "s"}`;
 
-    if (emailConfigured()) {
+    // At most one reminder email per client per week (in-app list and the
+    // weekly Slack/ClickUp still update in between).
+    const emailedThisWeek = await prisma.emailLog.count({ where: { clientId, type: "client_update", sentAt: { gt: new Date(now.getTime() - REMINDER_DAYS * DAY) } } });
+    if (emailConfigured() && !emailedThisWeek) {
       try {
         // The leads in this email are pinned at the top of the page it opens.
         const sent = await sendActionEmail({
