@@ -118,11 +118,15 @@ async function syncClient(clientId: string): Promise<SyncSummary> {
 
   try {
     sheet = await refreshDropdownOptions(sheet);
+    // When the sheet was read — a sheet edit seen by the NEXT sync is dated
+    // from here (not from when this sync finished), so an HQ change made
+    // while this sync was running still counts as newer.
+    const readAt = new Date();
     const { summary, unmapped, automation, recon, slackEvents } = await runSync(clientId, sheet);
     await refreshHandoverAt({ clientId });
     await prisma.clientSheet.update({
       where: { clientId },
-      data: { lastSyncedAt: new Date(), lastSyncError: null, unmappedStatuses: unmapped },
+      data: { lastSyncedAt: readAt, lastSyncError: null, unmappedStatuses: unmapped },
     });
     // Only once Google can write — otherwise every sync would queue jobs
     // doomed to fail (the admin sees a reconnect banner instead).
@@ -730,13 +734,20 @@ async function runSync(
   );
 
   // All-or-nothing: a sync that fails halfway leaves the previous state intact.
+  const changedMidSync = new Set<string>(); // leads HQ changed while this sync ran — left alone
   await prisma.$transaction(
     async (tx) => {
       for (const batch of chunks(newLeads)) {
         await tx.lead.createMany({ data: batch.map((c) => ({ ...c.data, lastSyncedAt: now })) as Prisma.LeadCreateManyInput[] });
       }
-      for (const batch of chunks(updates)) {
-        await Promise.all(batch.map((u) => tx.lead.update({ where: { id: u.lead.id }, data: { ...u.data, lastSyncedAt: now } })));
+      for (let batch of chunks(updates)) {
+        // Only if HQ hasn't changed the lead since this sync read it — a change
+        // made in HQ mid-sync is never overwritten with the older sheet read;
+        // the next sync weighs it properly.
+        const counts = await Promise.all(
+          batch.map((u) => tx.lead.updateMany({ where: { id: u.lead.id, hqStatusUpdatedAt: u.lead.hqStatusUpdatedAt }, data: { ...u.data, lastSyncedAt: now } }))
+        );
+        batch = batch.filter((u, i) => counts[i].count > 0 || (changedMidSync.add(u.lead.id), false));
         // A re-sync moving an existing lead to a new stage IS a real change
         // worth an audit entry — a new lead's first stage is just ingestion.
         // A sheet change that lost to a newer HQ change is logged too.
@@ -750,13 +761,14 @@ async function runSync(
         ];
         if (activity.length) await tx.leadActivity.createMany({ data: activity });
       }
-      for (const batch of chunks(events)) {
+      const kept = <T extends { leadId: string }>(rows: T[]) => rows.filter((r) => !changedMidSync.has(r.leadId));
+      for (const batch of chunks(kept(events))) {
         await tx.leadStageEvent.createMany({ data: batch });
       }
-      for (const batch of chunks(reparsed.map((r) => r.leadId))) {
+      for (const batch of chunks(kept(reparsed).map((r) => r.leadId))) {
         await tx.leadNoteEvent.deleteMany({ where: { leadId: { in: batch } } });
       }
-      for (const batch of chunks(noteRows)) {
+      for (const batch of chunks(kept(noteRows))) {
         await tx.leadNoteEvent.createMany({ data: batch });
       }
       for (const batch of chunks(staleIds)) {

@@ -607,6 +607,7 @@ model CallReminder {
 enum CallFrequency {
   WEEKLY
   FORTNIGHTLY
+  NONE // no regular call — nothing is auto-booked; a call logged with a "next call" date still books that one
 }
 
 // Every action email sent (lib/email.tsx). actionToken is the signed link's

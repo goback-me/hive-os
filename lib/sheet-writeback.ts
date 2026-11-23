@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import { prisma } from "./prisma";
 import { batchUpdateValues, columnLetter, getAdminGoogleConnection, getSheetValues, getValidAccessToken, hasWriteScope } from "./google-sheets";
-import { HANDOVER_STAGES, encodeTarget, targetLabel, type DqPhaseValue, type LeadStageValue, type StageTarget } from "./lead-status";
+import { HANDOVER_STAGES, STAGE_LABELS, encodeTarget, targetLabel, type DqPhaseValue, type LeadStageValue, type StageTarget } from "./lead-status";
 import { classifyHive, classifyProspect, normalizeStatusText, parseMapping, resolveStatus } from "./status-classifier";
 import { findColumn, findHeaderIndex, normalizeEmail, normalizeName, normalizePhone } from "./sheet-parse";
 import { sheetTabs } from "./sheet-tabs";
@@ -78,8 +78,10 @@ function readsAs(value: string, column: Column, sheet: SheetConfig) {
 }
 
 // The value to write for a stage in one column: the coach's override, else
-// the first dropdown option that reads back as this exact stage (+ reason),
-// else the first with the same stage; free-text columns get PLAIN_TEXT.
+// the sheet's own word for it — among the dropdown options that read back as
+// this exact stage (+ reason), the one named like the stage ("CONSULT BOOKED"
+// over "PRE CONSULT" for Consult Booked), else the first of them, else the
+// first with the same stage; free-text columns get PLAIN_TEXT.
 // null = the dropdown has nothing for it.
 export function writeValueFor(t: StageTarget & { stage: LeadStageValue }, column: Column, sheet: SheetConfig): string | null {
   const overrides = (sheet.writeMapping as Record<Column, Record<string, string>> | null)?.[column] ?? {};
@@ -87,7 +89,9 @@ export function writeValueFor(t: StageTarget & { stage: LeadStageValue }, column
   const override = overrides[encodeTarget(t)];
   if (override && (!options.length || options.includes(override))) return override;
   if (!options.length) return plainText(t);
-  return options.find((o) => sameTarget(readsAs(o, column, sheet), t)) ?? options.find((o) => readsAs(o, column, sheet)?.stage === t.stage) ?? null;
+  const exact = options.filter((o) => sameTarget(readsAs(o, column, sheet), t));
+  const names = [STAGE_LABELS[t.stage], PLAIN_TEXT[t.stage], plainText(t)].map(normalizeStatusText);
+  return exact.find((o) => names.includes(normalizeStatusText(o))) ?? exact[0] ?? options.find((o) => readsAs(o, column, sheet)?.stage === t.stage) ?? null;
 }
 
 // Which column a stage goes to (outreach → HIVE STATUS, outcome → Prospect

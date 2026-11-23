@@ -39,7 +39,7 @@ export const WEEKDAY_LABELS: Record<Weekday, string> = {
 export const OUTCOME_LABELS: Record<ClientMood, string> = { GOOD: "Good", NEUTRAL: "Neutral", AT_RISK: "At risk" };
 export const STATUS_LABELS: Record<MeetingStatus, string> = { PENDING: "Upcoming", HELD: "Held", RESCHEDULED: "Rescheduled", NOT_HELD: "Didn't happen" };
 export const NOT_HELD_REASONS = { NO_SHOW: "Client no-show", AM_UNAVAILABLE: "AM unavailable", OTHER: "Other" } as const;
-export const FREQUENCY_LABELS: Record<CallFrequency, string> = { WEEKLY: "Every", FORTNIGHTLY: "Every 2nd" };
+export const FREQUENCY_LABELS: Record<CallFrequency, string> = { WEEKLY: "Every", FORTNIGHTLY: "Every 2nd", NONE: "No regular call" };
 
 // ── Dates (Sydney) ─────────────────────────────────────────────────────────
 
@@ -51,7 +51,7 @@ export const callWhenLabel = (d: Date) => `${callDateLabel(d)}, ${callTimeLabel(
 export const isCallTime = (t: string) => /^([01]\d|2[0-3]):[0-5]\d$/.test(t);
 // "Every Mon 10:00" / "Every 2nd Mon 10:00".
 export const slotLabel = (c: { callDay: Weekday; callTime: string; callFrequency: CallFrequency }) =>
-  `${FREQUENCY_LABELS[c.callFrequency]} ${WEEKDAY_LABELS[c.callDay].slice(0, 3)} ${c.callTime}`;
+  c.callFrequency === "NONE" ? FREQUENCY_LABELS.NONE : `${FREQUENCY_LABELS[c.callFrequency]} ${WEEKDAY_LABELS[c.callDay].slice(0, 3)} ${c.callTime}`;
 
 // "YYYY-MM-DDTHH:MM" (or just the date → defaultTime), Sydney → the instant.
 export function parseCallWhen(s: string, defaultTime = "10:00") {
@@ -227,6 +227,8 @@ export async function ensureNextCall(clientId: string, opts: { now?: Date; prefe
   const preferred = opts.preferred && opts.preferred > now ? opts.preferred : null;
   const future = await prisma.amCall.findFirst({ where: { clientId, status: "PENDING", scheduledAt: { gt: now } }, orderBy: { scheduledAt: "asc" } });
   if (future) return preferred && preferred.getTime() !== future.scheduledAt.getTime() ? moveCall(future.id, preferred) : future;
+  // No regular call: only a date someone picked books one.
+  if (client.callFrequency === "NONE" && !preferred) return null;
   const last = await prisma.amCall.findFirst({ where: { clientId, status: { in: ["HELD", "NOT_HELD", "PENDING"] } }, orderBy: { scheduledAt: "desc" }, select: { scheduledAt: true } });
   // ponytail: no lock — the cron and a save racing could each book one; the extra shows up as a second upcoming call.
   const call = await prisma.amCall.create({ data: { clientId, callPersonId: client.accountManagerId, scheduledAt: preferred ?? defaultNextCall(client, last?.scheduledAt ?? null, now) } });
@@ -248,6 +250,12 @@ export async function applySlotChange(clientId: string, now = new Date()) {
   const client = await prisma.client.findUnique({ where: { id: clientId }, select: { accountManagerId: true, callDay: true, callTime: true, callFrequency: true } });
   const future = await prisma.amCall.findFirst({ where: { clientId, status: "PENDING", scheduledAt: { gt: now } }, orderBy: { scheduledAt: "asc" } });
   if (!client?.accountManagerId) return null;
+  // Switched to no regular call: the auto-booked calls nobody logged go —
+  // with their invites' reminders and "not logged" alerts.
+  if (client.callFrequency === "NONE") {
+    await prisma.amCall.deleteMany({ where: { clientId, status: "PENDING" } });
+    return null;
+  }
   if (!future) return ensureNextCall(clientId, { now });
   const last = await prisma.amCall.findFirst({ where: { clientId, status: { in: ["HELD", "NOT_HELD"] } }, orderBy: { scheduledAt: "desc" }, select: { scheduledAt: true } });
   const at = defaultNextCall(client, last?.scheduledAt ?? null, now);

@@ -519,7 +519,7 @@ export async function saveCallSlot(clientId: string, slot: { accountManagerId: s
   await requireCoach();
   if (!WEEKDAYS.includes(slot.callDay as Weekday)) throw new Error("Invalid day");
   if (!isCallTime(slot.callTime)) throw new Error("Time is HH:MM, e.g. 10:00");
-  if (!["WEEKLY", "FORTNIGHTLY"].includes(slot.callFrequency)) throw new Error("Invalid frequency");
+  if (!["WEEKLY", "FORTNIGHTLY", "NONE"].includes(slot.callFrequency)) throw new Error("Invalid frequency");
   if (slot.accountManagerId) {
     const am = await prisma.user.findUnique({ where: { id: slot.accountManagerId }, select: { role: true } });
     if (!am || am.role === "CLIENT") throw new Error("Pick a team member");
@@ -1019,7 +1019,7 @@ export async function createClient(_prev: CreateClientState, formData: FormData)
   const accountManagerId = text("accountManagerId") || null;
   const callDay = (WEEKDAYS.includes(text("callDay") as Weekday) ? text("callDay") : "FRIDAY") as Weekday;
   const callTime = isCallTime(text("callTime")) ? text("callTime") : "10:00";
-  const callFrequency = (text("callFrequency") === "FORTNIGHTLY" ? "FORTNIGHTLY" : "WEEKLY") as CallFrequency;
+  const callFrequency = (["FORTNIGHTLY", "NONE"].includes(text("callFrequency")) ? text("callFrequency") : "WEEKLY") as CallFrequency;
   const clickupMode = text("clickupMode");
   const clickupAssigneeIds = formData.getAll("clickupAssigneeIds").map(String).filter((id) => /^\d+$/.test(id));
 

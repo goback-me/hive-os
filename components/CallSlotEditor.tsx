@@ -58,6 +58,7 @@ export default function CallSlotEditor({
       <select value={slot.callFrequency} onChange={(e) => save({ callFrequency: e.target.value })} className={cls} style={style} aria-label="How often">
         <option value="WEEKLY">Every</option>
         <option value="FORTNIGHTLY">Every 2nd</option>
+        <option value="NONE">No regular call</option>
       </select>
       <select value={slot.callDay} onChange={(e) => save({ callDay: e.target.value })} className={cls} style={style} aria-label="Call day">
         {DAYS.map((d) => <option key={d} value={d}>{dayLabel(d)}</option>)}

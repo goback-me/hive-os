@@ -153,7 +153,7 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
     prisma.progressNote.findMany({ where: { clientId: client.id }, orderBy: { createdAt: "desc" }, take: 5 }),
     prisma.clientSheet.findUnique({ where: { clientId: client.id } }),
     // The Dashboard tab's "N leads need an update" badge.
-    prisma.lead.count({ where: updatePanelWhere(client.id) }),
+    prisma.lead.count({ where: updatePanelWhere(client.id, viewer.role === "CLIENT") }),
     // Coaches: the buying cycle card (lib/buying-cycle.ts).
     isCoach ? getClientCycle(client.id) : null,
     // Coaches: who can be the account manager. Team: the recent calls.

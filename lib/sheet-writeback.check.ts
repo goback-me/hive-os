@@ -77,4 +77,10 @@ assert.deepEqual(automationWrites({ raw: "LIVE TRANSFER", stage: "HANDOVER_LIVE"
 // Free-text column → the literal text.
 assert.deepEqual(automationWrites({ raw: "LIVE TRANSFER", stage: "HANDOVER_LIVE" }, "", base), [{ column: "Prospect Status", value: "PENDING UPDATE" }]);
 
+// The sheet's own word: Bangalow's dropdown lists "PRE CONSULT" before
+// "CONSULT BOOKED" — both read as Consult Booked; the one named like the stage wins.
+const bangalow = { ...base, resultStatusOptions: ["DISQUALIFIED", "PRE CONSULT", "CONSULT BOOKED", "CONSULT CANCELLED", "QUOTED", "SOLD", "N/A", "PENDING UPDATE"] };
+assert.equal(writeValueFor({ stage: "CONSULT_BOOKED" }, "result", bangalow), "CONSULT BOOKED");
+assert.equal(writeValueFor({ stage: "QUOTE_SENT" }, "result", bangalow), "QUOTED");
+
 console.log("sheet-writeback: all checks passed");

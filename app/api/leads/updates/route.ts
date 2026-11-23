@@ -18,7 +18,7 @@ export async function GET(req: NextRequest) {
   }
 
   const leads = await prisma.lead.findMany({
-    where: updatePanelWhere(clientId),
+    where: updatePanelWhere(clientId, user.role === "CLIENT"),
     select: {
       id: true,
       name: true,

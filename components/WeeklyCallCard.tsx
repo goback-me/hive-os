@@ -67,7 +67,7 @@ export default function WeeklyCallCard({
           </select>
         </>
       ) : (
-        <p className="text-xs" style={{ color: "var(--text-secondary)" }}>{slot.callFrequency === "FORTNIGHTLY" ? "Every 2nd" : "Every"} {slot.callDay.charAt(0) + slot.callDay.slice(1, 3).toLowerCase()} {slot.callTime}</p>
+        <p className="text-xs" style={{ color: "var(--text-secondary)" }}>{slot.callFrequency === "NONE" ? "No regular call" : `${slot.callFrequency === "FORTNIGHTLY" ? "Every 2nd" : "Every"} ${slot.callDay.charAt(0) + slot.callDay.slice(1, 3).toLowerCase()} ${slot.callTime}`}</p>
       )}
       {calls.length ? (
         <div className="space-y-1">

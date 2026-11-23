@@ -209,6 +209,7 @@ export default function AddClientModal({
                         <select name="callFrequency" defaultValue="WEEKLY" style={inputStyle} className="px-2 py-2 rounded-lg outline-none" aria-label="How often">
                           <option value="WEEKLY">Every</option>
                           <option value="FORTNIGHTLY">Every 2nd</option>
+                          <option value="NONE">No regular call</option>
                         </select>
                         <select name="callDay" defaultValue="FRIDAY" style={inputStyle} className="px-2 py-2 rounded-lg outline-none" aria-label="Call day">
                           {DAYS.map((d) => <option key={d} value={d}>{d.charAt(0) + d.slice(1, 3).toLowerCase()}</option>)}

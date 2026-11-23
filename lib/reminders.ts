@@ -21,11 +21,12 @@ import { appUrl, emailConfigured, sendActionEmail, type EmailRow } from "./email
 //                              max(7, median / 2) days
 // At 2× the step's median (14 days for awaiting) the lead is staleInStage:
 // "Likely lost? Close it out" on the Update panel + CLIENT_UPDATE_OVERDUE.
-// Each run sends ONE combined message per client — the in-app task
-// (LeadReminder rows, shown on the "Update your leads" panel), an email
-// (Resend, when RESEND_API_KEY + EMAIL_FROM are set) and a post to the
-// client's Slack channel — plus a "Chase client" ClickUp task for our team,
-// at most once per client per week. LeadReminder (one row per lead per step
+// Each run, per client: the in-app task (LeadReminder rows, shown on the
+// "Update your leads" panel), emails (Resend, when RESEND_API_KEY +
+// EMAIL_FROM are set) — the client only about leads still waiting on them;
+// the booked / attended / quoted follow-ups to the account manager and
+// admins — and a post to the client's Slack channel, plus a "Chase client"
+// ClickUp task for our team, each at most once per client per week. LeadReminder (one row per lead per step
 // sent) is what stops a reminder going out twice.
 
 export const REMINDER_DAYS = 7;
@@ -99,11 +100,15 @@ export async function overdueLeads(clientId: string, now = new Date()) {
 }
 
 // The "Update your leads" panel's leads (and the Dashboard tab's count):
-// awaiting from day 1, plus booked / attended / quoted once reminded or stale.
-export const updatePanelWhere = (clientId: string): Prisma.LeadWhereInput => ({
+// awaiting from day 1, plus — for the team only — booked / attended / quoted
+// once reminded or stale (those follow-ups are the account manager's and
+// admins', not the client's).
+export const updatePanelWhere = (clientId: string, forClient = false): Prisma.LeadWhereInput => ({
   clientId,
   deletedAt: null,
-  OR: [{ awaitingClientUpdate: true }, { staleInStage: true }, ...STAGE_STEPS.map((s) => ({ stage: s as LeadStageValue, reminders: { some: { reason: s } } }))],
+  OR: forClient
+    ? [{ awaitingClientUpdate: true }]
+    : [{ awaitingClientUpdate: true }, { staleInStage: true }, ...STAGE_STEPS.map((s) => ({ stage: s as LeadStageValue, reminders: { some: { reason: s } } }))],
 });
 
 export const handoverLabel = (stage: LeadStageValue | null) => (stage && HANDOVER_STAGES.includes(stage) ? STAGE_LABELS[stage] : "Handed over");
@@ -212,11 +217,12 @@ export async function raiseReminders(now = new Date()) {
   // just the ones that fell due today), longest-waiting first.
   const dueClients = new Set(due.map((p) => p.c.clientId));
   const weekKey = sydneyDay(weekStart(now));
+  const admins = (await prisma.user.findMany({ where: { role: "ADMIN" }, select: { email: true } })).map((u) => u.email);
   let emailed = 0;
   for (const clientId of dueClients) {
     const client = await prisma.client.findUnique({
       where: { id: clientId },
-      select: { name: true, slug: true, email: true, slackChannelId: true, slackEvents: true, users: { where: { role: "CLIENT" }, select: { email: true } } },
+      select: { name: true, slug: true, email: true, slackChannelId: true, slackEvents: true, users: { where: { role: "CLIENT" }, select: { email: true } }, accountManager: { select: { email: true } } },
     });
     if (!client) continue;
     const mine = planned.filter((p) => p.c.clientId === clientId && p.outstanding).sort((a, b) => a.anchor.getTime() - b.anchor.getTime());
@@ -225,33 +231,47 @@ export async function raiseReminders(now = new Date()) {
     const link = `${appUrl()}${path}`;
     const n = `${mine.length} lead${mine.length === 1 ? "" : "s"}`;
 
-    // At most one reminder email per client per week (in-app list and the
-    // weekly Slack/ClickUp still update in between).
-    const emailedThisWeek = await prisma.emailLog.count({ where: { clientId, type: "client_update", sentAt: { gt: new Date(now.getTime() - REMINDER_DAYS * DAY) } } });
-    if (emailConfigured() && !emailedThisWeek) {
+    // The client is emailed only about leads waiting on them (handed over, no
+    // update yet). The follow-ups on leads they did update — did the consult
+    // go ahead? won or lost? — go to the account manager and admins instead.
+    // Each at most once a week; the in-app lists and weekly Slack/ClickUp
+    // still update in between.
+    const waiting = mine.filter((p) => p.c.awaiting);
+    const followUps = mine.filter((p) => !p.c.awaiting);
+    const count = (ps: typeof mine) => `${ps.length} lead${ps.length === 1 ? "" : "s"}`;
+    const sentThisWeek = (type: string) => prisma.emailLog.count({ where: { clientId, type, sentAt: { gt: new Date(now.getTime() - REMINDER_DAYS * DAY) } } });
+    const email = async (ps: typeof mine, mail: Omit<Parameters<typeof sendActionEmail>[0], "clientId" | "refIds" | "rows">) => {
+      if (!emailConfigured() || !ps.length || (await sentThisWeek(mail.type))) return;
       try {
-        // The leads in this email are pinned at the top of the page it opens.
-        const sent = await sendActionEmail({
-          to: client.users.length ? client.users.map((u) => u.email) : client.email ? [client.email] : [],
-          type: "client_update",
-          clientId,
-          refIds: mine.map((p) => p.c.id),
-          path,
-          subject: `${client.name}: ${n} waiting on your update`,
-          heading: `${n} ${mine.length === 1 ? "is" : "are"} waiting on your update`,
-          intro: `Hi ${client.name} — we handed these leads over to you. Let us know what happened with each one so we can keep your results accurate. It takes a few seconds per lead.`,
-          rows: mine.map((p) => emailRow(p.c, p.anchor, p.stale, now)),
-          footnote: "You're getting this because Hive Social passes leads to you and tracks how they turn out in Hive HQ.",
-          button: "Update your leads",
-        });
-        if (sent) {
+        if (await sendActionEmail({ ...mail, clientId, refIds: ps.map((p) => p.c.id), rows: ps.map((p) => emailRow(p.c, p.anchor, p.stale, now)) })) {
           emailed++;
-          await prisma.leadReminder.updateMany({ where: { clientId, leadId: { in: due.map((p) => p.c.id) }, emailedAt: null }, data: { emailedAt: now } });
+          await prisma.leadReminder.updateMany({ where: { clientId, leadId: { in: ps.map((p) => p.c.id) }, emailedAt: null }, data: { emailedAt: now } });
         }
       } catch (err) {
-        console.error(`Reminder email for ${clientId} failed:`, err); // the in-app task still shows
+        console.error(`${mail.type} email for ${clientId} failed:`, err); // the in-app lists still show
       }
-    }
+    };
+    // The leads in this email are pinned at the top of the page it opens.
+    await email(waiting, {
+      to: client.users.length ? client.users.map((u) => u.email) : client.email ? [client.email] : [],
+      type: "client_update",
+      path,
+      subject: `${client.name}: ${count(waiting)} waiting on your update`,
+      heading: `${count(waiting)} ${waiting.length === 1 ? "is" : "are"} waiting on your update`,
+      intro: `Hi ${client.name} — we handed these leads over to you. Let us know what happened with each one so we can keep your results accurate. It takes a few seconds per lead.`,
+      footnote: "You're getting this because Hive Social passes leads to you and tracks how they turn out in Hive HQ.",
+      button: "Update your leads",
+    });
+    await email(followUps, {
+      to: Array.from(new Set([client.accountManager?.email, ...admins].filter((e): e is string => !!e))),
+      type: "team_followup",
+      path: `/clients/${client.slug}?tab=leads`,
+      subject: `[${client.name}] ${count(followUps)} to follow up`,
+      heading: `${count(followUps)} at ${client.name} need a follow-up`,
+      intro: "The client already updated these leads, and it's now past when the next step usually happens. Check with them (or on your call) and set what happened. The client isn't emailed about these.",
+      footnote: `You're getting this as ${client.name}'s account manager or an admin in Hive HQ.`,
+      button: "Open their leads",
+    });
     // Once a week in their channel (the email still goes when leads fall due).
     if (client.slackChannelId && parseSlackEvents(client.slackEvents).updateReminders) {
       await queueSlack({ clientId, channel: client.slackChannelId, kind: "client_update_reminder", dedupeKey: `client_update_reminder:${clientId}:${weekKey}`, text: [`:hourglass_flowing_sand: *${n} waiting on an update*`, ...lines, `<${link}|Update them in Hive HQ>`].join("\n") }).catch((e) => console.error("Slack queue failed:", e));
