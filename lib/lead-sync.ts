@@ -176,6 +176,34 @@ function chunks<T>(arr: T[]): T[][] {
 
 type ExistingLead = Awaited<ReturnType<typeof prisma.lead.findMany>>[number];
 
+// Row → existing lead: email, then phone, then name (normalized keys). Every
+// lead per key is kept, in a fixed order (active first, then by id), so two
+// rows sharing a phone or name each take the next unclaimed lead — the same
+// one every sync. (One lead per key let the second row miss, create a new
+// lead and soft-delete another on every sync — tens of thousands of junk
+// leads.) A duplicate row with the same email lands on the same lead.
+// Exported for lib/lead-sync.check.ts.
+export function leadMatcher<L extends Pick<ExistingLead, "id" | "email" | "phone" | "name" | "deletedAt">>(leads: L[]) {
+  const ordered = [...leads].sort((a, b) => Number(!!a.deletedAt) - Number(!!b.deletedAt) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const byEmail = new Map<string, L>();
+  const byPhone = new Map<string, L[]>();
+  const byName = new Map<string, L[]>();
+  const add = (m: Map<string, L[]>, k: string, l: L) => (m.get(k) ?? m.set(k, []).get(k)!).push(l);
+  for (const l of ordered) {
+    const e = normalizeEmail(l.email);
+    const p = normalizePhone(l.phone);
+    const n = normalizeName(l.name);
+    if (e && !byEmail.has(e)) byEmail.set(e, l);
+    if (p) add(byPhone, p, l);
+    if (n) add(byName, n, l);
+  }
+  // claimed: lead id → the row index that took it.
+  return (e: string, p: string, n: string, rowIdx: number, claimed: Map<string, number>): L | undefined => {
+    const free = (ls: L[] | undefined) => ls?.find((l) => !claimed.has(l.id) || claimed.get(l.id) === rowIdx);
+    return (e ? byEmail.get(e) : undefined) || free(p ? byPhone.get(p) : undefined) || free(n ? byName.get(n) : undefined);
+  };
+}
+
 // Nothing to write if every synced field already matches — keeps a 5-minute
 // cron from rewriting thousands of identical rows.
 function leadChanged(existing: ExistingLead, data: Record<string, unknown>) {
@@ -336,19 +364,7 @@ async function runSync(
     eventStagesByLead.get(e.leadId)!.add(e.stage);
   }
 
-  const byEmail = new Map<string, ExistingLead>();
-  const byPhone = new Map<string, ExistingLead>();
-  const byName = new Map<string, ExistingLead>();
-  // Soft-deleted first so an active lead with the same identity overwrites it.
-  const ordered = [...existingLeads].sort((a, b) => Number(!!b.deletedAt) - Number(!!a.deletedAt));
-  for (const l of ordered) {
-    const e = normalizeEmail(l.email);
-    const p = normalizePhone(l.phone);
-    const n = normalizeName(l.name);
-    if (e) byEmail.set(e, l);
-    if (p) byPhone.set(p, l);
-    if (n) byName.set(n, l);
-  }
+  const match = leadMatcher(existingLeads);
 
   // Match order: email, then phone, then name. A lead already matched by one
   // row can't be claimed by a different row via the weaker phone/name
@@ -357,7 +373,10 @@ async function runSync(
   // same name when neither has a matching email/phone. Fine at our volumes.
   const claimed = new Map<string, number>(); // leadId -> row index that claimed it
   const pending = new Map<string, PendingUpdate>();
-  const automation: { key: string; writes: CellWrite[] }[] = []; // key = lead id, or externalKey for a new lead
+  // key = lead id, or externalKey for a new lead. One entry per lead: a later
+  // duplicate row replaces an earlier one — the row the lead shows, and the
+  // one write-back targets (Lead.sheetRow).
+  const automation = new Map<string, CellWrite[]>();
   const slackEvents: { leadId: string; kind: "sale" | "live_transfer" }[] = [];
   // For reconciliation: every identified row as the sheet has it.
   const sheetRows: { hive: string; prospect: string; won: boolean; value: number | null }[] = [];
@@ -380,8 +399,7 @@ async function runSync(
     const e = normalizeEmail(email);
     const p = normalizePhone(phone);
     const n = normalizeName(name);
-    const free = (l: ExistingLead | undefined) => (l && (!claimed.has(l.id) || claimed.get(l.id) === rowIdx) ? l : undefined);
-    const existing = (e && byEmail.get(e)) || free(p ? byPhone.get(p) : undefined) || free(n ? byName.get(n) : undefined) || undefined;
+    const existing = match(e, p, n, rowIdx, claimed);
 
     // Hive/outreach column + Prospect/result column → one stage (the
     // higher-ranked wins, see combineTargets). Values nothing recognises are
@@ -413,7 +431,7 @@ async function runSync(
     const hqWins = !!existing?.hqStatusUpdatedAt && (!sheetTime || existing.hqStatusUpdatedAt > sheetTime);
 
     // Status automation: fill in what's missing in the two status cells.
-    automation.push({ key: existing?.id ?? externalKey, writes: automationWrites({ raw: rawStatus, stage: statusTarget?.stage ?? null }, rawResultStatus, sheet) });
+    automation.set(existing?.id ?? externalKey, automationWrites({ raw: rawStatus, stage: statusTarget?.stage ?? null }, rawResultStatus, sheet));
 
     // Does the client owe us an update (lib/lead-status.ts)? When HQ's change
     // wins, that's the stage the lead is actually at.
@@ -471,6 +489,7 @@ async function runSync(
     const baseData: Record<string, unknown> = {
       externalKey,
       sheetTab: rowTabs[rowIdx],
+      sheetRow: rowNumbers[rowIdx],
       sheetStage: final.stage,
       name: name || null,
       phone: phone || null,
@@ -689,9 +708,9 @@ async function runSync(
     },
     summary: { total: rows.length, leads: identifiedRows, created: creates.size, updated: updates.length - restored, removed: staleIds.length, restored },
     unmapped,
-    automation: automation
-      .filter((a) => a.writes.length)
-      .map((a) => ({ leadId: creates.get(a.key)?.data.id as string | undefined ?? a.key, writes: a.writes })),
+    automation: Array.from(automation)
+      .filter(([, writes]) => writes.length)
+      .map(([key, writes]) => ({ leadId: (creates.get(key)?.data.id as string | undefined) ?? key, writes })),
   };
 }
 

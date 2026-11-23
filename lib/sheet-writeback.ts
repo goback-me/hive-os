@@ -210,7 +210,7 @@ export async function processWriteBacks({ maxMs = 15_000 }: { maxMs?: number } =
     if (!due.length) break;
     const claimId = randomUUID();
     await prisma.writeBackJob.updateMany({ where: { id: { in: due.map((d) => d.id) }, status: "PENDING" }, data: { status: "RUNNING", claimId, runAfter: now } });
-    const jobs = await prisma.writeBackJob.findMany({ where: { claimId, status: "RUNNING" }, include: { lead: { select: { name: true, email: true, phone: true, sheetTab: true } } } });
+    const jobs = await prisma.writeBackJob.findMany({ where: { claimId, status: "RUNNING" }, include: { lead: { select: { name: true, email: true, phone: true, sheetTab: true, sheetRow: true } } } });
 
     const byClient = new Map<string, typeof jobs>();
     for (const j of jobs) byClient.set(j.clientId, [...(byClient.get(j.clientId) ?? []), j]);
@@ -224,7 +224,7 @@ export async function processWriteBacks({ maxMs = 15_000 }: { maxMs?: number } =
   return result;
 }
 
-type Job = { id: string; leadId: string; column: string; value: string; attempts: number; lead: { name: string | null; email: string | null; phone: string | null; sheetTab: string | null } };
+type Job = { id: string; leadId: string; column: string; value: string; attempts: number; lead: { name: string | null; email: string | null; phone: string | null; sheetTab: string | null; sheetRow?: number | null } };
 
 // One tab, read for write-back: its own headers (columns can sit in different
 // places on each tab), the columns HQ may write there, and row lookups.
@@ -235,6 +235,7 @@ type TabIndex = {
   byEmail: Map<string, number>;
   byPhone: Map<string, number>;
   byName: Map<string, number>;
+  ids: { e: string; p: string; n: string }[]; // per row, normalized
 };
 
 function indexTab(tab: string, headers: string[], rows: string[][], sheet: { statusColumn: string | null; resultStatusColumn: string | null }): TabIndex {
@@ -256,15 +257,26 @@ function indexTab(tab: string, headers: string[], rows: string[][], sheet: { sta
     });
     return m;
   };
-  return { tab, headers, allowed, byEmail: index(emailIdx, normalizeEmail), byPhone: index(phoneIdx, normalizePhone), byName: index(nameIdx, normalizeName) };
+  const ids = rows.map((r) => ({
+    e: emailIdx === -1 ? "" : normalizeEmail(r[emailIdx] ?? ""),
+    p: phoneIdx === -1 ? "" : normalizePhone(r[phoneIdx] ?? ""),
+    n: nameIdx === -1 ? "" : normalizeName(r[nameIdx] ?? ""),
+  }));
+  return { tab, headers, allowed, byEmail: index(emailIdx, normalizeEmail), byPhone: index(phoneIdx, normalizePhone), byName: index(nameIdx, normalizeName), ids };
 }
 
-// The lead's row: its own tab first (Lead.sheetTab), then the others, each by
-// email → phone → name. Exported for lib/sheet-writeback.check.ts.
+// The lead's row: the exact row the sync last read it from (Lead.sheetTab +
+// sheetRow) while that row still holds this lead — with duplicate rows, the
+// first match by email could be a different row from the one HQ reads. Else
+// (rows moved) its own tab first, then the others, each by email → phone →
+// name. Exported for lib/sheet-tabs.check.ts.
 export function findLeadRow(tabs: TabIndex[], lead: Job["lead"]): { t: TabIndex; row: number } | null {
   const e = normalizeEmail(lead.email);
   const p = normalizePhone(lead.phone);
   const n = normalizeName(lead.name);
+  const own = lead.sheetRow ? tabs.find((t) => t.tab === lead.sheetTab) : undefined;
+  const id = own?.ids[lead.sheetRow! - 2];
+  if (own && id && (e ? id.e === e : p ? id.p === p : !!n && id.n === n)) return { t: own, row: lead.sheetRow! - 2 };
   const ordered = [...tabs.filter((t) => t.tab === lead.sheetTab), ...tabs.filter((t) => t.tab !== lead.sheetTab)];
   for (const t of ordered) {
     const row = [e ? t.byEmail.get(e) : undefined, p ? t.byPhone.get(p) : undefined, n ? t.byName.get(n) : undefined].find((r) => r !== undefined);

@@ -53,6 +53,14 @@ assert.equal(findLeadRow([jan, feb], lead("d@x.com", "Gone"))?.t.tab, "Jan");
 assert.equal(findLeadRow([jan, feb], lead("nobody@x.com", "Jan")), null);
 assert.ok(feb.allowed.has("HIVE STATUS"));
 
+// Duplicate rows: the row the sync last read the lead from (sheetRow) wins
+// over the first match — while that row still holds the lead.
+const dupTab = _test.indexTab("Jan", ["Name", "Phone", "HIVE STATUS"], [["Mel", "0411330629", "X"], ["Amy", "0400000000", ""], ["Mel", "0411330629", ""]], sheet);
+const mel = (sheetRow: number | null) => ({ name: "Mel", phone: "0411330629", email: null, sheetTab: "Jan", sheetRow });
+assert.equal(findLeadRow([dupTab], mel(4))?.row, 2); // sheet row 4 = index 2
+assert.equal(findLeadRow([dupTab], mel(null))?.row, 0); // no hint → first match
+assert.equal(findLeadRow([dupTab], mel(3))?.row, 0); // row 3 is Amy now (rows moved) → look it up
+
 // Duplicates across tabs report each row's own tab and row number.
 const cells = (email: string) => ({ name: "", email, phone: "", hive: "", prospect: "" });
 const dups = duplicateRows(
