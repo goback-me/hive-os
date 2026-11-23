@@ -26,6 +26,7 @@ type Detail = {
     callAttempts: number | null;
     value: number | null;
     returnedCount: number;
+    earlierEnquiries: string[];
     sheetStatus: string | null;
     sheetWriteError: string | null;
     raw: Record<string, string> | null;
@@ -174,6 +175,20 @@ export default function LeadDetailDrawer({ leadId, onClose }: { leadId: string; 
                   </div>
                 ))}
               </dl>
+
+              {/* The same person came in before (same email or phone) — this lead is their latest row. */}
+              {l.earlierEnquiries?.length > 0 && (
+                <div className="rounded-lg px-3 py-2.5" style={{ background: "var(--tag-amber-bg)", color: "var(--tag-amber-fg)" }}>
+                  <p className="text-xs font-bold mb-1">
+                    Enquired before · {l.earlierEnquiries.length} earlier time{l.earlierEnquiries.length === 1 ? "" : "s"}
+                  </p>
+                  <ul className="text-xs space-y-0.5">
+                    {l.earlierEnquiries.map((e, i) => (
+                      <li key={i}>{e}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
 
               <div>
                 <p className={label} style={{ color: "var(--text-secondary)" }}>MILESTONES</p>

@@ -48,6 +48,7 @@ export async function GET(req: NextRequest) {
       callAttempts: lead.callAttempts,
       value: lead.value == null ? null : Number(lead.value),
       returnedCount: lead.returnedCount,
+      earlierEnquiries: lead.earlierEnquiries,
       sheetStatus: lead.sheetStatus,
       sheetWriteError: lead.sheetWriteError,
       raw: isTeam ? (lead.raw as Record<string, string> | null) : null,

@@ -176,6 +176,35 @@ function chunks<T>(arr: T[]): T[][] {
 
 type ExistingLead = Awaited<ReturnType<typeof prisma.lead.findMany>>[number];
 
+// Rows sharing an email or a phone are the same person (also through a
+// chain: A and B share an email, B and C a phone). Each row → the row that
+// stands for its person: the latest by opt-in date when every row in the
+// group has one, else the one furthest down the sheet. The other rows are
+// earlier enquiries — skipped by the sync, listed on the lead. Rows sharing
+// only a name stay separate people. Pure: lib/lead-sync.check.ts.
+export function latestRowPerPerson(people: { e: string; p: string; at: number | null }[]): number[] {
+  const parent = people.map((_, i) => i);
+  const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+  const firstWith = new Map<string, number>();
+  people.forEach(({ e, p }, i) => {
+    for (const k of [e && `e:${e}`, p && `p:${p}`]) {
+      if (!k) continue;
+      const j = firstWith.get(k);
+      if (j === undefined) firstWith.set(k, i);
+      else parent[find(i)] = find(j);
+    }
+  });
+  const groups = new Map<number, number[]>();
+  people.forEach((_, i) => groups.set(find(i), [...(groups.get(find(i)) ?? []), i]));
+  const owner = new Array<number>(people.length);
+  for (const g of Array.from(groups.values())) {
+    const dated = g.every((i) => people[i].at != null);
+    const latest = g.reduce((a, b) => (dated ? (people[b].at! >= people[a].at! ? b : a) : b));
+    for (const i of g) owner[i] = latest;
+  }
+  return owner;
+}
+
 // Row → existing lead: email, then phone, then name (normalized keys). Every
 // lead per key is kept, in a fixed order (active first, then by id), so two
 // rows sharing a phone or name each take the next unclaimed lead — the same
@@ -217,6 +246,8 @@ function leadChanged(existing: ExistingLead, data: Record<string, unknown>) {
       if (Object.keys(a).length !== Object.keys(b).length || Object.keys(b).some((key) => a[key] !== b[key])) return true;
     } else if (k === "value") {
       if ((cur == null ? null : Number(cur)) !== (v == null ? null : Number(v))) return true;
+    } else if (Array.isArray(v)) {
+      if (JSON.stringify(cur ?? []) !== JSON.stringify(v)) return true;
     } else if (cur instanceof Date || v instanceof Date) {
       if ((cur as Date | null)?.getTime() !== (v as Date | null)?.getTime()) return true;
     } else if ((cur ?? null) !== (v ?? null)) return true;
@@ -385,6 +416,21 @@ async function runSync(
   const rowLead = new Map<number, RowCells & { lead: string; tab?: string; sheetRow?: number }>(); // row index -> the lead it landed on (+ its tab and row there)
   let identifiedRows = 0;
 
+  // Duplicates: one lead per person, from their latest row; the earlier rows
+  // are skipped and listed on it (latestRowPerPerson).
+  const rowDate = (i: number) => (dateOptInIdx !== -1 ? parseSheetDate(cells[i][dateOptInIdx]) : null);
+  const latestRow = latestRowPerPerson(
+    rows.map((r, i) => ({ e: emailIdx !== -1 ? normalizeEmail(r[emailIdx]) : "", p: phoneIdx !== -1 ? normalizePhone(r[phoneIdx]) : "", at: rowDate(i)?.getTime() ?? null }))
+  );
+  const earlierOf = new Map<number, number[]>(); // latest row → its earlier rows
+  latestRow.forEach((o, i) => o !== i && earlierOf.set(o, [...(earlierOf.get(o) ?? []), i]));
+  const multiTab = new Set(rowTabs).size > 1;
+  const enquiry = (i: number) => {
+    const d = rowDate(i);
+    const status = [statusColIdx, resultStatusColIdx].map((c) => (c !== -1 ? rows[i][c]?.trim() : "")).filter(Boolean).join(" / ");
+    return [d ? formatSheetDate(d) : "Date unknown", status || "No status", multiTab ? rowTabs[i] : ""].filter(Boolean).join(" · ");
+  };
+
   rows.forEach((row, rowIdx) => {
     const name = nameIdx !== -1 ? row[nameIdx].trim() : "";
     // A mobile stored as a number comes back without its leading 0.
@@ -394,6 +440,7 @@ async function runSync(
     // Every row needs SOME identity to match across syncs — skip fully blank rows.
     if (!(email || phone || name)) return;
     identifiedRows++;
+    if (latestRow[rowIdx] !== rowIdx) return; // an earlier enquiry — its latest row is the lead
     const externalKey = normalizeName(`${email}|${phone}|${name}`);
 
     const e = normalizeEmail(email);
@@ -507,6 +554,8 @@ async function runSync(
       sheetStatus: rawResultStatus.trim() || rawStatus.trim() || null,
       hiveStatusRaw: rawStatus.trim() || null,
       prospectStatusRaw: rawResultStatus.trim() || null,
+      // Earlier rows for the same person, oldest first: "12/03/2026 · CHASE UP / LOST".
+      earlierEnquiries: (earlierOf.get(rowIdx) ?? []).sort((a, b) => (rowDate(a)?.getTime() ?? a) - (rowDate(b)?.getTime() ?? b)).map(enquiry),
       awaitingClientUpdate: awaitingClient,
       sheetStatusUpdatedAt: sheetTime,
       value,
@@ -690,17 +739,29 @@ async function runSync(
     { timeout: 120_000, maxWait: 10_000 }
   );
 
+  // Earlier enquiries still show in the duplicate-rows list, against the lead
+  // their latest row became.
+  const cell = (r: string[], idx: number) => (idx !== -1 ? r[idx]?.trim() ?? "" : "");
+  for (const [owner, earlier] of Array.from(earlierOf)) {
+    const kept = rowLead.get(owner);
+    if (!kept) continue;
+    for (const i of earlier) {
+      const r = rows[i];
+      rowLead.set(i, { lead: kept.lead, name: cell(r, nameIdx), email: cell(r, emailIdx), phone: cell(r, phoneIdx), hive: cell(r, statusColIdx), prospect: cell(r, resultStatusColIdx), tab: rowTabs[i], sheetRow: rowNumbers[i] });
+    }
+  }
+
   const idOf = (key: string) => (creates.get(key)?.data.id as string | undefined) ?? key;
   return {
     slackEvents,
     recon: {
       sheet: {
-        rows: identifiedRows,
+        rows: sheetRows.length, // earlier enquiries left out — HQ has one lead per person
         hive: countValues(sheetRows.map((r) => r.hive)),
         prospect: countValues(sheetRows.map((r) => r.prospect)),
         won: sheetRows.filter((r) => r.won).length,
         wonValue: sheetRows.reduce((sum, r) => sum + (r.won ? r.value ?? 0 : 0), 0),
-        unmatched: identifiedRows - claimed.size - creates.size,
+        unmatched: sheetRows.length - claimed.size - creates.size,
       },
       seenIds: [...Array.from(claimed.keys()), ...Array.from(creates.values()).map((c) => c.data.id as string)],
       badOptInLeadIds: badOptIn.map(idOf),

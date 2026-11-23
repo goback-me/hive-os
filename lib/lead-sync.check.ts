@@ -1,6 +1,6 @@
 // Run: npx tsx lib/lead-sync.check.ts — throws on the first failure.
 import assert from "node:assert/strict";
-import { leadMatcher } from "./lead-sync";
+import { latestRowPerPerson, leadMatcher } from "./lead-sync";
 import { normalizeEmail, normalizeName, normalizePhone } from "./sheet-parse";
 
 const P = normalizePhone("0411330629");
@@ -37,6 +37,24 @@ for (const leads of [
 {
   const match = leadMatcher([lead("a", null, "m@x.com")]);
   assert.equal(match(normalizeEmail("m@x.com"), "", "", 5, new Map([["a", 0]]))?.id, "a");
+}
+
+// Duplicates: one person per shared email or phone (chained), latest row wins.
+{
+  const d = (day: number) => Date.UTC(2026, 0, day);
+  // Rows 0 and 2 share an email; 2 and 3 a phone → one person; row 3 is newest.
+  // Row 1 shares only a name with nobody (no keys) → its own person.
+  const people = [
+    { e: "a@x.com", p: "", at: d(1) },
+    { e: "", p: "", at: d(9) },
+    { e: "a@x.com", p: "61400000001", at: d(5) },
+    { e: "b@x.com", p: "61400000001", at: d(7) },
+  ];
+  assert.deepEqual(latestRowPerPerson(people), [3, 1, 3, 3]);
+  // An older row lower down the sheet still loses to the newer date.
+  assert.deepEqual(latestRowPerPerson([{ e: "m@x.com", p: "", at: d(9) }, { e: "m@x.com", p: "", at: d(2) }]), [0, 0]);
+  // A missing date anywhere in the group → the row furthest down wins.
+  assert.deepEqual(latestRowPerPerson([{ e: "m@x.com", p: "", at: d(9) }, { e: "m@x.com", p: "", at: null }]), [1, 1]);
 }
 
 console.log("lead-sync: all checks passed");
