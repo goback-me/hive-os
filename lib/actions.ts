@@ -845,11 +845,13 @@ export async function saveIntegrationSettings(formData: FormData) {
   await requireCoach();
   const clickupApiKey = String(formData.get("clickupApiKey") || "").trim();
   const clickupTeamId = String(formData.get("clickupTeamId") || "").trim();
+  const crmType = String(formData.get("crmType") || "").trim();
+  const crmApiKeyOrUrl = String(formData.get("crmApiKeyOrUrl") || "").trim();
 
   await prisma.integrationSettings.upsert({
     where: { id: "singleton" },
-    update: { clickupApiKey, clickupTeamId },
-    create: { id: "singleton", clickupApiKey, clickupTeamId },
+    update: { clickupApiKey, clickupTeamId, crmType, crmApiKeyOrUrl },
+    create: { id: "singleton", clickupApiKey, clickupTeamId, crmType, crmApiKeyOrUrl },
   });
   revalidatePath("/settings");
 }

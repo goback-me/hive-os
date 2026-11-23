@@ -5,9 +5,8 @@ import { useSearchParams } from "next/navigation";
 
 // The open tab is kept in the URL (?tab=leads) alongside the report range, so
 // a refresh or a shared link lands on the same tab and period. A tab with
-// onOpen runs it when opened, and its badge (e.g. "New") clears. `hint` is
-// the one line under the tab bar saying what the tab is for.
-type Tab = { key: string; label: string; content: ReactNode; badge?: string; hint?: string; onOpen?: () => Promise<void> };
+// onOpen runs it when opened, and its badge (e.g. "New") clears.
+type Tab = { key: string; label: string; content: ReactNode; badge?: string; onOpen?: () => Promise<void> };
 export default function ClientTabsShell({ tabs }: { tabs: Tab[] }) {
   const fromUrl = useSearchParams().get("tab");
   const [active, setActiveState] = useState(tabs.some((t) => t.key === fromUrl) ? fromUrl! : tabs[0]?.key);
@@ -57,11 +56,6 @@ export default function ClientTabsShell({ tabs }: { tabs: Tab[] }) {
           </button>
         ))}
       </div>
-      {tabs.find((t) => t.key === active)?.hint && (
-        <p className="text-sm -mt-4 mb-6" style={{ color: "var(--text-secondary)" }}>
-          {tabs.find((t) => t.key === active)!.hint}
-        </p>
-      )}
       <div>{tabs.find((t) => t.key === active)?.content}</div>
     </div>
   );

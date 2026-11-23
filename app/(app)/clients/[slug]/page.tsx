@@ -203,10 +203,7 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
 
   const dashboardContent = (
     <div className="space-y-5">
-      {/* Leads waiting on the client come first, open — the one thing to do
-          here. With none waiting, the panel stays folded further down. */}
-      {clientSheet && awaitingUpdates > 0 && <ClientUpdatesPanel clientId={client.id} onUpdateStage={updateLeadStage} />}
-      {/* Then the client's monthly snapshot. */}
+      {/* The client's monthly snapshot comes first. */}
       {hold ? (
         <HoldNote />
       ) : (
@@ -219,7 +216,7 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
       <div className="grid grid-cols-3 gap-5">
         {/* Main column — the day-to-day, coaching-relevant activity */}
         <div className="col-span-2 space-y-5">
-          {clientSheet && !awaitingUpdates && <ClientUpdatesPanel clientId={client.id} onUpdateStage={updateLeadStage} collapsible />}
+          {clientSheet && <ClientUpdatesPanel clientId={client.id} onUpdateStage={updateLeadStage} collapsible />}
 
           <div className="card rounded-2xl p-5">
             <div className="flex justify-between items-center mb-4">
@@ -227,13 +224,7 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
               <span className="text-xs" style={{ color: "var(--text-muted)" }}>{recentLeads.length} recent</span>
             </div>
             {recentLeads.length === 0 ? (
-              <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
-                {viewer.role === "CLIENT"
-                  ? "No leads yet. New leads show up here as soon as we send them."
-                  : clientSheet
-                  ? "No leads yet. New rows in their sheet show up here within 5 minutes."
-                  : "No leads yet. Connect their lead sheet on the Leads page and leads show up here within 5 minutes."}
-              </p>
+              <p className="text-sm" style={{ color: "var(--text-secondary)" }}>No leads logged yet.</p>
             ) : (
               <div className="space-y-1">
                 {recentLeads.map((l) => {
@@ -553,7 +544,7 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
       )}
 
       <ClientTabsShell
-        tabs={addTabHints(viewer.role === "CLIENT", [
+        tabs={[
           // Once every step is ticked the header says "Onboarding completed" — the tab goes.
           ...(onboardingDone ? [] : [{ key: "onboarding", label: "Onboarding", content: onboardingContent }]),
           {
@@ -571,7 +562,7 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
           { key: "awards", label: "Awards", content: awardsContent },
           { key: "referrals", label: "Referrals", content: referralsContent },
           // A CLIENT login doesn't get the tabs the team switched off (Client view settings).
-        ].filter((t) => viewer.role !== "CLIENT" || !client.hiddenTabs.includes(t.key)))}
+        ].filter((t) => viewer.role !== "CLIENT" || !client.hiddenTabs.includes(t.key))}
       />
     </div>
   );
@@ -587,21 +578,4 @@ function DetailRow({ icon, label, value }: { icon: string; label: string; value:
       </div>
     </div>
   );
-}
-
-// What each tab is for, in one line under the tab bar — so someone new knows
-// what they're looking at and what to do there. [client wording, team wording].
-const TAB_HINTS: Record<string, [string, string]> = {
-  onboarding: ["Your getting-started steps. Tick each one off as it's done.", "The client's onboarding steps. This tab goes away once every step is ticked."],
-  dashboard: ["Your results at a glance. Start with any leads waiting on your update.", "How this client is doing. Start with leads waiting on their update, then the numbers."],
-  weekly: ["Notes and next steps from your weekly call with Hive.", "Weekly call notes, the client's next steps and the contact log."],
-  leads: ["Every lead we've sent you. Click a lead to tell us what happened. It updates your sheet too.", "Every lead from their sheet. Click one for its history or to change its status. Changes go back to the sheet."],
-  growth: ["Month by month: leads, bookings, jobs won and revenue.", "Month by month: leads, bookings, jobs won and revenue."],
-  playbooks: ["Guides and scripts to help you turn more leads into jobs.", "Guides and scripts shared with this client."],
-  ads: ["What your ads cost and what they brought in.", "Ad spend and results, and what each lead and job cost."],
-  awards: ["Milestones you've hit and what's next.", "Milestones the client has hit and what's next."],
-  referrals: ["Refer another business to Hive and earn a reward.", "This client's referral link and the referrals it brought in."],
-};
-function addTabHints<T extends { key: string }>(forClient: boolean, tabs: T[]) {
-  return tabs.map((t) => ({ ...t, hint: TAB_HINTS[t.key]?.[forClient ? 0 : 1] }));
 }

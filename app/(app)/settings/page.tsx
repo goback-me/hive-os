@@ -79,12 +79,28 @@ export default async function SettingsPage({ searchParams }: { searchParams: { s
             <Field label="ClickUp API key" name="clickupApiKey" defaultValue={integration?.clickupApiKey ?? ""} placeholder={process.env.CLICKUP_API_KEY ? "Using the server's CLICKUP_API_KEY" : "pk_..."} />
             <Field label="ClickUp Team ID" name="clickupTeamId" defaultValue={integration?.clickupTeamId ?? ""} placeholder={process.env.CLICKUP_TEAM_ID || "123456"} />
           </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="text-xs font-semibold block mb-1" style={{ color: "var(--text-secondary)" }}>CRM</label>
+              <select
+                name="crmType"
+                defaultValue={integration?.crmType ?? ""}
+                style={{ width: "100%", background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
+                className="px-3 py-2 rounded-lg outline-none text-sm"
+              >
+                <option value="">Not connected</option>
+                <option value="ghl">GoHighLevel</option>
+                <option value="spreadsheet">Google Sheet</option>
+              </select>
+            </div>
+            <Field label="API key or sheet URL" name="crmApiKeyOrUrl" defaultValue={integration?.crmApiKeyOrUrl ?? ""} placeholder="https://docs.google.com/..." />
+          </div>
           <button type="submit" className="px-4 py-2 rounded-lg text-sm font-bold btn-cta" style={{ background: "var(--secondary)", color: "#fff" }}>
             Save integrations
           </button>
         </form>
         <p className="text-xs mt-3" style={{ color: "var(--text-muted)" }}>
-          The ClickUp key + Team ID power the automatic tasks below — pick each client&apos;s list on their client page → Dashboard tab → Integrations.
+          The ClickUp key + Team ID power the automatic tasks below — pick each client&apos;s list in its Client Details → Integrations. The CRM fields aren&apos;t used yet.
         </p>
       </section>
 
@@ -180,7 +196,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: { s
               </span>
             </div>
           ))}
-          {awardTiers.length === 0 && <p className="text-sm" style={{ color: "var(--text-secondary)" }}>No award tiers yet.</p>}
+          {awardTiers.length === 0 && <p className="text-sm" style={{ color: "var(--text-secondary)" }}>No tiers yet — add via seed script or a future admin form.</p>}
         </div>
       </section>
     </div>
