@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { cookies } from "next/headers";
 import { cache } from "react";
 import { auth } from "@clerk/nextjs/server";
 import { getClerkAdminClient } from "@/lib/clerk-admin";
@@ -24,6 +25,17 @@ export type CurrentUser = {
   agentClientIds: string[];
   clientId: string | null;
   clientSlug: string | null;
+  // Set while an admin previews the app as someone else ("View as"): who.
+  viewingAs?: string;
+};
+
+// "View as" (admins only): the cookie holds "client:<Client.id>" (that
+// client's portal) or "user:<User.id>" (a team member). Only honoured when
+// the real signed-in account is an admin — anyone else's cookie is ignored.
+export const VIEW_AS_COOKIE = "hq_view_as";
+export const parseViewAs = (v: string | undefined) => {
+  const m = v?.match(/^(client|user):([A-Za-z0-9_-]{1,64})$/);
+  return m ? { kind: m[1] as "client" | "user", id: m[2] } : null;
 };
 
 // Adapted from Hive OS: role/clientId/clientSlug live in Clerk's
@@ -34,7 +46,7 @@ export type CurrentUser = {
 // middleware.ts is what actually redirects unauthenticated/unassigned
 // visitors away, this is the last-line guard for pages/actions it
 // doesn't cover. `cache()` dedupes this within a single request.
-export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
+export const getRealUser = cache(async (): Promise<CurrentUser | null> => {
   if (devAuthBypass()) return DEV_USER;
   const { userId, sessionClaims } = await auth();
   if (!userId) return null;
@@ -83,6 +95,39 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
     agentClientIds,
     clientId: metadata.clientId ?? null,
     clientSlug: metadata.clientSlug ?? null,
+  };
+});
+
+// Who the app treats as signed in: the real account, or — for an admin
+// using "View as" — the client or team member they're previewing, with that
+// person's exact access. Changes made meanwhile are named "<admin> as <who>".
+export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
+  const real = await getRealUser();
+  if (!real?.isAdmin) return real;
+  const v = parseViewAs(cookies().get(VIEW_AS_COOKIE)?.value);
+  if (!v) return real;
+  if (v.kind === "client") {
+    const c = await prisma.client.findUnique({ where: { id: v.id }, select: { id: true, slug: true, name: true } });
+    if (!c) return real;
+    return { ...real, name: `${real.name} as ${c.name}`, role: "CLIENT", isAdmin: false, isAgent: false, agentClientIds: [], clientId: c.id, clientSlug: c.slug, viewingAs: c.name };
+  }
+  const u = await prisma.user.findUnique({
+    where: { id: v.id },
+    select: { clerkId: true, email: true, name: true, role: true, callClients: { where: { archivedAt: null }, select: { id: true } } },
+  });
+  if (!u || u.role === "ADMIN" || u.role === "CLIENT") return real;
+  return {
+    id: u.clerkId,
+    clerkId: u.clerkId,
+    email: u.email,
+    name: `${real.name} as ${u.name}`,
+    role: "COACH",
+    isAdmin: false,
+    isAgent: u.role === "AGENT",
+    agentClientIds: u.role === "AGENT" ? u.callClients.map((c) => c.id) : [],
+    clientId: null,
+    clientSlug: null,
+    viewingAs: u.name,
   };
 });
 

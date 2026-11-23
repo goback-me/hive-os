@@ -55,7 +55,7 @@ export default async function AlertsPage({ searchParams }: { searchParams: { cli
       </form>
 
       <div className="card rounded-2xl px-5 py-2">
-        {alerts.length === 0 && <p className="text-sm py-8 text-center" style={{ color: "var(--text-secondary)" }}>Nothing here.</p>}
+        {alerts.length === 0 && <p className="text-sm py-8 text-center" style={{ color: "var(--text-secondary)" }}>No alerts match these filters. If you are viewing open alerts, every client&apos;s data checks out.</p>}
         {alerts.map((a) => (
           <div key={a.id}>
             <AlertRow

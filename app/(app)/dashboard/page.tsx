@@ -81,7 +81,7 @@ export default async function DashboardPage() {
         <h1 className="page-title font-heading" style={{ color: "var(--text-primary)" }}>
           {greeting()}, {user.name.split(" ")[0]}.
         </h1>
-        <p className="text-base mt-1" style={{ color: "var(--text-secondary)" }}>Here's how the agency is doing.</p>
+        <p className="text-base mt-1" style={{ color: "var(--text-secondary)" }}>Start here: what needs action, today's calls, then how every client is doing.</p>
       </div>
 
       <div className="grid grid-cols-3 gap-4">

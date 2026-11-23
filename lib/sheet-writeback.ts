@@ -339,6 +339,8 @@ async function writeClientJobs(clientId: string, jobs: Job[]) {
   }
   if (!ready.length) return out;
 
+  // Which cell each job went to — the audit trail when a write "doesn't stick".
+  console.log(`Write-back ${clientId}: ${ready.map((j, i) => `${j.leadId}→${data[i].range}=${j.value}`).join("; ")}`);
   const res = await batchUpdateValues(token, sheet.spreadsheetId, data);
   if (res.status === 429) {
     // Rate limited: back off 30s, 1m, 2m, 4m… then give up.

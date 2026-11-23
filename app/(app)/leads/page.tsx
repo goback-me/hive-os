@@ -57,7 +57,7 @@ export default async function LeadsPage({
         <div>
           <h1 className="font-heading text-3xl font-bold" style={{ color: "var(--text-primary)" }}>Leads</h1>
           <p className="text-sm mt-1" style={{ color: "var(--text-secondary)" }}>
-            Live lead data pulled from each client's assigned Google Sheet.
+            Connect each client's Google lead sheet, pick its tabs and status columns, and check it's syncing. To see or update leads, open the client and use their Leads tab.
           </p>
         </div>
         {user.role === "COACH" && (

@@ -5,15 +5,21 @@ import { usePathname, useSearchParams } from "next/navigation";
 import ThemeToggle from "./ThemeToggle";
 import AlertBell from "./AlertBell";
 import { SignOutButton } from "@clerk/nextjs";
+import { setViewAs, stopViewAs } from "@/lib/actions";
 
+// Admins only: preview the app as a client or a team member (lib/auth.ts).
+type ViewAs = { current: string; clients: { id: string; name: string }[]; team: { id: string; name: string; role: string }[] } | null;
+
+// Grouped so a new team member can see what each part is for; the hint is
+// the hover text.
 const COACH_NAV_ITEMS = [
-  { href: "/dashboard", label: "Dashboard", icon: "space_dashboard" },
-  { href: "/clients", label: "Clients", icon: "diversity_3" },
-  { href: "/leads", label: "Leads", icon: "person_search" },
-  { href: "/referrals", label: "Referrals", icon: "share" },
-  { href: "/alerts", label: "Data alerts", icon: "notifications" },
-  { href: "/account-management", label: "Account Management", icon: "manage_accounts" },
-  { href: "/settings", label: "Settings", icon: "settings" },
+  { href: "/dashboard", label: "Dashboard", icon: "space_dashboard", group: "Daily work", hint: "What needs doing today, across every client" },
+  { href: "/account-management", label: "Account Management", icon: "manage_accounts", group: "Daily work", hint: "Your client calls — log them after each call" },
+  { href: "/clients", label: "Clients", icon: "diversity_3", group: "Clients & leads", hint: "Every client — open one for their leads, results and setup" },
+  { href: "/leads", label: "Leads", icon: "person_search", group: "Clients & leads", hint: "Connect each client's Google lead sheet and check it syncs" },
+  { href: "/referrals", label: "Referrals", icon: "share", group: "Growth", hint: "Referrals from clients and their rewards" },
+  { href: "/alerts", label: "Data alerts", icon: "notifications", group: "Admin", hint: "Problems in client data to fix (sheets, duplicates, missing info)" },
+  { href: "/settings", label: "Settings", icon: "settings", group: "Admin", hint: "Users, integrations, automations and templates" },
 ];
 
 // callsToUpdate = the viewer's calls past their time and not logged yet
@@ -25,14 +31,14 @@ const clientNav = (slug: string) => [
   { href: `/clients/${slug}?tab=weekly`, label: "Weekly status", icon: "event_note", tab: "weekly" },
 ];
 
-export default function Sidebar({ user, callsToUpdate = 0, hiddenTabs = [] }: { user: { name: string; role: "COACH" | "CLIENT"; isAgent?: boolean; clientSlug?: string | null }; callsToUpdate?: number; hiddenTabs?: string[] }) {
+export default function Sidebar({ user, callsToUpdate = 0, hiddenTabs = [], viewAs = null }: { user: { name: string; role: "COACH" | "CLIENT"; isAgent?: boolean; clientSlug?: string | null }; callsToUpdate?: number; hiddenTabs?: string[]; viewAs?: ViewAs }) {
   const pathname = usePathname();
   const tab = useSearchParams().get("tab") ?? "dashboard";
   // A client login only ever has their own client page — no cross-client
   // nav items are rendered for them at all, not just hidden via CSS.
   // An agent gets their calls, their client list, Account Management (their
   // clients) and Leads only.
-  const navItems: { href: string; label: string; icon: string; tab?: string }[] =
+  const navItems: { href: string; label: string; icon: string; tab?: string; group?: string; hint?: string }[] =
     user.role !== "COACH" ? (user.clientSlug ? clientNav(user.clientSlug).filter((i) => !hiddenTabs.includes(i.tab)) : []) : user.isAgent ? COACH_NAV_ITEMS.filter((i) => ["/clients", "/leads", "/account-management"].includes(i.href)) : COACH_NAV_ITEMS;
 
   return (
@@ -49,12 +55,19 @@ export default function Sidebar({ user, callsToUpdate = 0, hiddenTabs = [] }: { 
       </div>
 
       <nav className="flex-1 space-y-1">
-        {navItems.map((item) => {
+        {navItems.map((item, i) => {
           const active = item.tab ? tab === item.tab : pathname === item.href || pathname?.startsWith(item.href + "/");
+          const heading = item.group && item.group !== navItems[i - 1]?.group ? item.group : null;
           return (
+            <div key={item.href}>
+            {heading && (
+              <div className={`px-3 pb-1 text-[11px] font-semibold uppercase tracking-wider ${i ? "pt-4" : ""}`} style={{ color: "var(--text-secondary)", opacity: 0.75 }}>
+                {heading}
+              </div>
+            )}
             <Link
-              key={item.href}
               href={item.href}
+              title={item.hint}
               className="flex items-center gap-3 px-3 py-2.5 rounded-lg font-medium transition-all"
               style={{
                 color: active ? "var(--primary)" : "var(--text-secondary)",
@@ -81,11 +94,35 @@ export default function Sidebar({ user, callsToUpdate = 0, hiddenTabs = [] }: { 
                 </span>
               )}
             </Link>
+            </div>
           );
         })}
       </nav>
 
       <div className="space-y-2 pt-4" style={{ borderTop: "1px solid var(--border)" }}>
+        {viewAs && (
+          <label className="block px-2 text-xs font-semibold" style={{ color: "var(--text-secondary)" }}>
+            View as
+            <select
+              value={viewAs.current}
+              onChange={(e) => (e.target.value ? setViewAs(e.target.value) : stopViewAs())}
+              className="mt-1 w-full px-2 py-1.5 rounded-lg text-sm font-normal"
+              style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
+            >
+              <option value="">Myself (admin)</option>
+              <optgroup label="A client's view">
+                {viewAs.clients.map((c) => (
+                  <option key={c.id} value={`client:${c.id}`}>{c.name}</option>
+                ))}
+              </optgroup>
+              <optgroup label="A team member's view">
+                {viewAs.team.map((u) => (
+                  <option key={u.id} value={`user:${u.id}`}>{u.name} · {u.role === "AGENT" ? "Account manager" : "Coach"}</option>
+                ))}
+              </optgroup>
+            </select>
+          </label>
+        )}
         <div className="flex items-center justify-between px-2">
           <div className="flex items-center gap-2 min-w-0">
             <div

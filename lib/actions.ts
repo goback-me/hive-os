@@ -4,8 +4,8 @@ import { Prisma, type CallFrequency, type ClientHealth, type ClientMood, type We
 import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { headers } from "next/headers";
-import { requireAdmin, requireCoach, requireClientAccess, requireUser } from "@/lib/auth";
+import { cookies, headers } from "next/headers";
+import { VIEW_AS_COOKIE, getRealUser, parseViewAs, requireAdmin, requireCoach, requireClientAccess, requireUser } from "@/lib/auth";
 import { getClerkAdminClient } from "@/lib/clerk-admin";
 import { syncLeadsFromSheet, type SyncSummary } from "@/lib/lead-sync";
 import { CLIENT_STAGES, HANDOVER_STAGES, isReturn, parseTarget, planStageEvents } from "@/lib/lead-status";
@@ -824,18 +824,32 @@ export async function toggleLessonComplete(clientId: string, lessonId: string, c
   revalidatePath(`/clients`);
 }
 
+// ── "View as" — an admin previews the app as a client or team member ─────
+// (lib/auth.ts getCurrentUser). Checked against the REAL account, so it
+// works while already previewing someone else.
+export async function setViewAs(value: string) {
+  const real = await getRealUser();
+  if (!real?.isAdmin) throw new Error("Only admins can view as someone else");
+  if (!parseViewAs(value)) throw new Error("Invalid view");
+  cookies().set(VIEW_AS_COOKIE, value, { httpOnly: true, sameSite: "lax", path: "/", secure: process.env.NODE_ENV === "production", maxAge: 8 * 3600 });
+  redirect("/");
+}
+
+export async function stopViewAs() {
+  cookies().delete(VIEW_AS_COOKIE);
+  redirect("/");
+}
+
 // ── Integration settings ─────────────────────────────────────────────────
 export async function saveIntegrationSettings(formData: FormData) {
   await requireCoach();
   const clickupApiKey = String(formData.get("clickupApiKey") || "").trim();
   const clickupTeamId = String(formData.get("clickupTeamId") || "").trim();
-  const crmType = String(formData.get("crmType") || "").trim();
-  const crmApiKeyOrUrl = String(formData.get("crmApiKeyOrUrl") || "").trim();
 
   await prisma.integrationSettings.upsert({
     where: { id: "singleton" },
-    update: { clickupApiKey, clickupTeamId, crmType, crmApiKeyOrUrl },
-    create: { id: "singleton", clickupApiKey, clickupTeamId, crmType, crmApiKeyOrUrl },
+    update: { clickupApiKey, clickupTeamId },
+    create: { id: "singleton", clickupApiKey, clickupTeamId },
   });
   revalidatePath("/settings");
 }
