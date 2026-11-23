@@ -3,6 +3,7 @@
 import { useState } from "react";
 import LeadLink from "@/components/LeadLink";
 import DuplicateRowsFix from "@/components/DuplicateRowsFix";
+import AlertLeadsFix, { LEAD_FIX_TYPES } from "@/components/AlertLeadsFix";
 
 export type AlertItem = {
   id: string;
@@ -31,8 +32,10 @@ export default function AlertRow({ alert, showClient, onHandled }: { alert: Aler
   const [error, setError] = useState<string | null>(null);
   const [fixing, setFixing] = useState(false);
   const danger = alert.severity === "DANGER";
-  // Sheet/HQ mismatch: Fix opens the duplicate rows right here, not the sheet page.
-  const inlineFix = alert.type === "RECONCILE_MISMATCH";
+  // Fix opens right here, not another page: the duplicate rows for a
+  // Sheet/HQ mismatch, or each affected lead with what to do for a lead alert.
+  const leadFix = !!alert.type && LEAD_FIX_TYPES.includes(alert.type);
+  const inlineFix = alert.type === "RECONCILE_MISMATCH" || leadFix;
 
   function handle() {
     if (!note.trim()) return;
@@ -114,7 +117,7 @@ export default function AlertRow({ alert, showClient, onHandled }: { alert: Aler
             {error && <span className="text-[11px]" style={{ color: "var(--danger)" }}>{error}</span>}
           </div>
         )}
-        {fixing && <DuplicateRowsFix alertId={alert.id} />}
+        {fixing && (leadFix ? <AlertLeadsFix alertId={alert.id} /> : <DuplicateRowsFix alertId={alert.id} />)}
       </div>
     </div>
   );

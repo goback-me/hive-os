@@ -114,7 +114,7 @@ export async function runHealthChecks(clientId: string, now = new Date()) {
     }
     const badOptIn = ((latest?.sheetCounts as { badOptInLeadIds?: string[] } | null)?.badOptInLeadIds ?? []).filter(Boolean);
     if (badOptIn.length) {
-      f.push({ type: "BAD_OPTIN_DATE", severity: "WARNING", title: `${plural(badOptIn.length, "lead")} with a missing or unreadable opt-in date`, detail: "They're dated by when they first synced instead. Dates must be day/month/year.", fixHint: "Fill in the Date Opt In cells as dd/mm/yyyy.", fixUrl: url.leads, count: badOptIn.length, affectedLeadIds: badOptIn.slice(0, 200) });
+      f.push({ type: "BAD_OPTIN_DATE", severity: "WARNING", title: `${plural(badOptIn.length, "lead")} with a missing or unreadable opt-in date`, detail: "They're dated by when they first synced instead. Dates must be day/month/year.", fixHint: "Press Fix, open each row in the sheet and type the date as dd/mm/yyyy.", fixUrl: url.leads, count: badOptIn.length, affectedLeadIds: badOptIn.slice(0, 200) });
     }
   }
 
@@ -127,14 +127,14 @@ export async function runHealthChecks(clientId: string, now = new Date()) {
     if (ids.length) f.push({ type, severity, title: title(ids.length), detail, fixHint, fixUrl, count: ids.length, affectedLeadIds: ids.slice(0, 200) });
   };
   const ids = (pred: (l: (typeof leads)[number]) => boolean) => leads.filter(pred).map((l) => l.id);
-  leadCheck("WON_NO_VALUE", "DANGER", ids((l) => l.stage === "WON" && l.value == null), (n) => `${plural(n, "won lead")} with no job value`, "Their revenue counts as $0.", "Leads tab → Needs fixing — add each job value.");
-  leadCheck("QUOTE_NO_VALUE", "WARNING", ids((l) => l.stage === "QUOTE_SENT" && l.value == null), (n) => `${plural(n, "quoted lead")} with no quote value`, "Quote value totals are understated.", "Leads tab → Needs fixing — add each quote value.");
-  leadCheck("DQ_NO_REASON", "WARNING", ids((l) => l.stage === "DISQUALIFIED" && (!l.dqReason || l.dqReason === "UNKNOWN")), (n) => `${plural(n, "disqualified lead")} with no reason`, "The DQ-by-reason breakdown can't explain them.", "Leads tab → Needs fixing — pick a reason for each.");
-  leadCheck("LOST_NO_REASON", "WARNING", ids((l) => l.stage === "LOST" && (!l.lostReason || l.lostReason === "UNKNOWN")), (n) => `${plural(n, "lost lead")} with no reason`, "Lost-by-reason can't explain them.", "Leads tab → Needs fixing — pick a reason for each.");
-  leadCheck("LEAD_NO_CAMPAIGN", "WARNING", ids((l) => noCampaign(l.campaign)), (n) => `${plural(n, "lead")} with no campaign`, "They show as Unattributed, so campaign costs can't include them.", "Fill in the Campaign column in the sheet.", url.sheet);
+  leadCheck("WON_NO_VALUE", "DANGER", ids((l) => l.stage === "WON" && l.value == null), (n) => `${plural(n, "won lead")} with no job value`, "Their revenue counts as $0.", "Press Fix and type each job value.");
+  leadCheck("QUOTE_NO_VALUE", "WARNING", ids((l) => l.stage === "QUOTE_SENT" && l.value == null), (n) => `${plural(n, "quoted lead")} with no quote value`, "Quote value totals are understated.", "Press Fix and type each quote value.");
+  leadCheck("DQ_NO_REASON", "WARNING", ids((l) => l.stage === "DISQUALIFIED" && (!l.dqReason || l.dqReason === "UNKNOWN")), (n) => `${plural(n, "disqualified lead")} with no reason`, "The DQ-by-reason breakdown can't explain them.", "Press Fix and pick a reason for each.");
+  leadCheck("LOST_NO_REASON", "WARNING", ids((l) => l.stage === "LOST" && (!l.lostReason || l.lostReason === "UNKNOWN")), (n) => `${plural(n, "lost lead")} with no reason`, "Lost-by-reason can't explain them.", "Press Fix and pick a reason for each.");
+  leadCheck("LEAD_NO_CAMPAIGN", "WARNING", ids((l) => noCampaign(l.campaign)), (n) => `${plural(n, "lead")} with no campaign`, "They show as Unattributed, so campaign costs can't include them.", "Press Fix, open each row in the sheet and fill in its Campaign.", url.sheet);
   const writeFails = leads.filter((l) => l.sheetWriteError);
-  leadCheck("WRITEBACK_FAILED", "WARNING", writeFails.map((l) => l.id), (n) => `${plural(n, "status change")} not written to the sheet`, writeFails[0]?.sheetWriteError ?? "", "Fix what the error says (often: reconnect Google or add the missing dropdown option), then change the status again.");
-  leadCheck("CLIENT_UPDATE_OVERDUE", "WARNING", (await overdueLeads(clientId, now)).map((l) => l.id), (n) => `${plural(n, "lead")} overdue for the client's update`, "Handed over 7+ days ago with no update, or sitting in a stage twice as long as this client usually takes.", "Chase the client to update them (Dashboard → Update your leads).", url.dashboard);
+  leadCheck("WRITEBACK_FAILED", "WARNING", writeFails.map((l) => l.id), (n) => `${plural(n, "status change")} not written to the sheet`, writeFails[0]?.sheetWriteError ?? "", "Press Fix, then Retry each lead. If it fails again, fix what the error says (often: reconnect Google or add the missing dropdown option).");
+  leadCheck("CLIENT_UPDATE_OVERDUE", "WARNING", (await overdueLeads(clientId, now)).map((l) => l.id), (n) => `${plural(n, "lead")} overdue for the client's update`, "Handed over 7+ days ago with no update, or sitting in a stage twice as long as this client usually takes.", "Press Fix to see them: chase the client, or open a lead and set what happened yourself.", url.dashboard);
 
   if (scope.source === "meta") {
     const known = new Set(scope.campaigns.map((c) => c.name.toLowerCase().trim()));

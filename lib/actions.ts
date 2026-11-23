@@ -325,6 +325,18 @@ export async function updateLeadStage(leadId: string, target: string, value?: nu
   revalidatePath(`/clients`);
 }
 
+// A status change that didn't reach the sheet: clear the error and write the
+// lead's current status again (the alert's Retry).
+export async function retryWriteBack(leadId: string) {
+  const lead = await prisma.lead.findUnique({ where: { id: leadId }, select: { clientId: true } });
+  if (!lead) throw new Error("Lead not found");
+  await requireClientAccess(lead.clientId);
+  await prisma.lead.update({ where: { id: leadId }, data: { sheetWriteError: null } });
+  await queueLeadChange(leadId);
+  kickWriteBacks();
+  revalidatePath(`/clients`);
+}
+
 // A coach or the lead's own client can leave a follow-up note — same
 // access rule as ProgressNote, just scoped to one lead instead of the client.
 export async function addLeadNote(leadId: string, formData: FormData) {
