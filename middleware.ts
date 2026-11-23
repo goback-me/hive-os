@@ -10,6 +10,7 @@ const isPublicRoute = createRouteMatcher([
   "/api/webhooks/clerk",
   // Cron sync — authenticated by its x-cron-secret header, not a session.
   "/api/cron/sync",
+  "/api/cron/leads",
   // Local-dev auto-login only — the route itself also refuses to run
   // outside dev, this just lets an unauthenticated request reach it at all.
   ...(process.env.NODE_ENV !== "production" && process.env.ADMIN_EMAIL ? ["/api/dev-login"] : []),

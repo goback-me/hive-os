@@ -1,7 +1,6 @@
-import { timingSafeEqual } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { syncLeadsFromSheet } from "@/lib/lead-sync";
+import { cronAuthorized } from "@/lib/cron-auth";
 import { freezeDueMonths } from "@/lib/kpi";
 import { processWriteBacks } from "@/lib/sheet-writeback";
 import { raiseReminders } from "@/lib/reminders";
@@ -13,40 +12,14 @@ import { ACTIVE_CLIENT, runCallJobs } from "@/lib/am-calls";
 import { archiveMetaInsights } from "@/lib/meta-archive";
 
 // Called by the VPS crontab every 5 min (see DEPLOYMENT.md). Public in middleware.ts —
-// the x-cron-secret header is the only auth. Clients sync one at a time
-// (gentle on the Sheets API quota); one client's failure never stops the rest
-// and is recorded on its ClientSheet.lastSyncError by syncLeadsFromSheet.
+// the x-cron-secret header is the only auth. Lead sheets sync on their own
+// every-minute cron (app/api/cron/leads) — only the ones that changed; this
+// runs everything else.
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-function authorized(req: NextRequest) {
-  const expected = process.env.CRON_SECRET;
-  const given = req.headers.get("x-cron-secret");
-  if (!expected || !given) return false;
-  const a = Buffer.from(given);
-  const b = Buffer.from(expected);
-  return a.length === b.length && timingSafeEqual(a, b);
-}
-
 export async function GET(req: NextRequest) {
-  if (!authorized(req)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-  const sheets = await prisma.clientSheet.findMany({
-    // Not Active / archived clients aren't synced (they're back on reactivating).
-    where: { client: ACTIVE_CLIENT },
-    select: { clientId: true, client: { select: { slug: true } } },
-  });
-
-  const results = [];
-  for (const s of sheets) {
-    const started = Date.now();
-    try {
-      const summary = await syncLeadsFromSheet(s.clientId);
-      results.push({ client: s.client.slug, ok: true, ms: Date.now() - started, ...summary });
-    } catch (err) {
-      results.push({ client: s.client.slug, ok: false, ms: Date.now() - started, error: err instanceof Error ? err.message : String(err) });
-    }
-  }
+  if (!cronAuthorized(req)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   // Month-end freeze: from the 1st, last month's Snapshot KPIs are stored in
   // MonthlyKpi as FROZEN and never recomputed. Only the last couple of
@@ -102,5 +75,5 @@ export async function GET(req: NextRequest) {
   const daily = await runDailyJobs().catch((err) => ({ error: err instanceof Error ? err.message : String(err) }));
   const slack = await deliverSlackPosts().catch((err) => ({ error: err instanceof Error ? err.message : String(err) }));
 
-  return NextResponse.json({ synced: results.filter((r) => r.ok).length, failed: results.filter((r) => !r.ok).length, results, frozen, metaArchive, writeBack, cycles, reminders, meetings, daily, slack });
+  return NextResponse.json({ frozen, metaArchive, writeBack, cycles, reminders, meetings, daily, slack });
 }

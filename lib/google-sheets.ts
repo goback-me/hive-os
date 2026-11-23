@@ -146,6 +146,17 @@ export async function listSpreadsheets(accessToken: string) {
   return (data.files ?? []) as { id: string; name: string; modifiedTime: string }[];
 }
 
+// ── Drive: when a spreadsheet was last edited ───────────────────────
+// One cheap call on Drive's quota (not Sheets'), so the every-minute sync can
+// skip sheets nobody has touched (lib/lead-sync.ts sheetNeedsSync).
+export async function getSpreadsheetModifiedTime(accessToken: string, spreadsheetId: string): Promise<Date> {
+  const res = await googleFetch(accessToken, `https://www.googleapis.com/drive/v3/files/${spreadsheetId}?fields=modifiedTime&supportsAllDrives=true`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!res.ok) throw new Error(`Drive modifiedTime failed (${res.status})`);
+  return new Date((await res.json()).modifiedTime);
+}
+
 // ── Sheets: list tab names within a spreadsheet ──────────────────────
 export async function listSheetTabs(accessToken: string, spreadsheetId: string) {
   const res = await googleFetch(accessToken,

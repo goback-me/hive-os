@@ -75,7 +75,34 @@ export async function clearClientLeads(clientId: string) {
 // other field refreshes from the sheet. Then the status automation's missing
 // cells are queued for write-back. The outcome (time or error) is recorded on
 // ClientSheet so the Leads tab can show it.
-export async function syncLeadsFromSheet(clientId: string): Promise<SyncSummary> {
+// One sync per client at a time: a second call (the minute cron, the 5-min
+// cron, "Sync now") while one runs gets the same result instead of a second
+// run fighting over the same leads. ponytail: in-process — fine while HQ is
+// one Node server; a DB lock if it ever runs as several.
+const inFlight = new Map<string, Promise<SyncSummary>>();
+export function syncLeadsFromSheet(clientId: string): Promise<SyncSummary> {
+  const running = inFlight.get(clientId);
+  if (running) return running;
+  const run = syncClient(clientId).finally(() => inFlight.delete(clientId));
+  inFlight.set(clientId, run);
+  return run;
+}
+
+// The every-minute cron (app/api/cron/leads) syncs a sheet only when:
+// it hasn't synced in FULL_SYNC_MINUTES (keeps time-based checks fresh);
+// Drive says it changed since the last sync; or Drive can't say and the
+// last sync is 5+ minutes old (the old cadence). A sync that failed is
+// retried at most every 5 minutes. Pure: lib/lead-sync.check.ts.
+export const FULL_SYNC_MINUTES = 15;
+export function sheetNeedsSync(s: { modified: Date | null; seen: Date | null; lastSyncedAt: Date | null; failedAt: Date | null; now: Date }): boolean {
+  const ago = (d: Date | null) => (d ? (s.now.getTime() - d.getTime()) / 60_000 : Infinity);
+  if (ago(s.failedAt) < 5) return false;
+  if (ago(s.lastSyncedAt) >= FULL_SYNC_MINUTES) return true;
+  if (!s.modified) return ago(s.lastSyncedAt) >= 5;
+  return !s.seen || s.modified.getTime() !== s.seen.getTime();
+}
+
+async function syncClient(clientId: string): Promise<SyncSummary> {
   let sheet = await prisma.clientSheet.findUnique({ where: { clientId } });
   if (!sheet) throw new Error("No Google Sheet assigned to this client yet — connect one on the Leads page first.");
 

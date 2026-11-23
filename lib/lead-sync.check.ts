@@ -1,6 +1,6 @@
 // Run: npx tsx lib/lead-sync.check.ts — throws on the first failure.
 import assert from "node:assert/strict";
-import { latestRowPerPerson, leadMatcher } from "./lead-sync";
+import { latestRowPerPerson, leadMatcher, sheetNeedsSync } from "./lead-sync";
 import { normalizeEmail, normalizeName, normalizePhone } from "./sheet-parse";
 
 const P = normalizePhone("0411330629");
@@ -55,6 +55,24 @@ for (const leads of [
   assert.deepEqual(latestRowPerPerson([{ e: "m@x.com", p: "", at: d(9) }, { e: "m@x.com", p: "", at: d(2) }]), [0, 0]);
   // A missing date anywhere in the group → the row furthest down wins.
   assert.deepEqual(latestRowPerPerson([{ e: "m@x.com", p: "", at: d(9) }, { e: "m@x.com", p: "", at: null }]), [1, 1]);
+}
+
+// The minute sync: only changed sheets, a full sync every 15 min, failures
+// retried every 5.
+{
+  const now = new Date(Date.UTC(2026, 10, 23, 9, 0));
+  const min = (m: number) => new Date(now.getTime() - m * 60_000);
+  const edit = min(30);
+  const base = { modified: edit, seen: edit, lastSyncedAt: min(2), failedAt: null, now };
+  assert.equal(sheetNeedsSync(base), false); // unchanged, synced 2 min ago → skip
+  assert.equal(sheetNeedsSync({ ...base, modified: min(1) }), true); // edited since → sync
+  assert.equal(sheetNeedsSync({ ...base, seen: null }), true); // never recorded → sync
+  assert.equal(sheetNeedsSync({ ...base, lastSyncedAt: min(15) }), true); // 15 min → full sync anyway
+  assert.equal(sheetNeedsSync({ ...base, lastSyncedAt: null }), true); // never synced
+  assert.equal(sheetNeedsSync({ ...base, modified: null }), false); // Drive can't say, synced 2 min ago → wait
+  assert.equal(sheetNeedsSync({ ...base, modified: null, lastSyncedAt: min(5) }), true); // …until 5 min
+  assert.equal(sheetNeedsSync({ ...base, modified: min(1), failedAt: min(2) }), false); // failed 2 min ago → back off
+  assert.equal(sheetNeedsSync({ ...base, modified: min(1), failedAt: min(6) }), true);
 }
 
 console.log("lead-sync: all checks passed");

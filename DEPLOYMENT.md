@@ -89,12 +89,18 @@ Also double check in the **Clerk dashboard** → User & Authentication →
 Restrictions: **"Allow sign-ups" must be OFF** — accounts are only ever
 created from Settings → Users & logins inside the app.
 
-## The cron (VPS crontab, every 5 minutes)
+## The crons (VPS crontab: every minute + every 5 minutes)
 
-`GET /api/cron/sync` runs all the background work, in order:
+`GET /api/cron/leads` (every minute) syncs the lead sheets that changed:
+one Drive call per sheet says whether it was edited since its last sync, and
+only those are read — so an edit shows in HQ within about a minute while a
+quiet minute costs almost nothing. Every sheet still gets a full sync at
+least every 15 minutes. Each sync also reconciles sheet vs HQ and re-runs the
+data health checks.
 
-1. syncs every non-archived client's Google Sheet (one at a time) — each
-   sync also reconciles sheet vs HQ and re-runs the data health checks;
+`GET /api/cron/sync` (every 5 minutes) runs everything else, in order:
+
+1. (lead sheets — moved to /api/cron/leads)
 2. freezes last month's Snapshot KPIs from the 1st;
 3. writes queued status changes back to the sheets (max 50 cells/min);
 4. raises 7-day client-update reminders (+ email);
@@ -108,6 +114,7 @@ It's public at the routing level — the `x-cron-secret` header (must equal
 On the VPS, `crontab -e` and add (adjust the path to the repo):
 
 ```cron
+* * * * * flock -n /tmp/hive-leads.lock curl -fsS --max-time 110 -H "x-cron-secret: $(grep '^CRON_SECRET=' /opt/hive-os/.env | cut -d= -f2-)" https://hq.hivesocial.agency/api/cron/leads >> /var/log/hive-cron-leads.log 2>&1
 */5 * * * * curl -fsS --max-time 290 -H "x-cron-secret: $(grep '^CRON_SECRET=' /opt/hive-os/.env | cut -d= -f2-)" https://hq.hivesocial.agency/api/cron/sync >> /var/log/hive-cron.log 2>&1
 ```
 
