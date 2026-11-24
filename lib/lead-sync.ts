@@ -506,7 +506,14 @@ async function runSync(
     // quiet lead's fresh sheet edit used to be dated weeks back and lose to
     // any HQ change made since.
     const sheetTime = !existing || !rawKnown ? new Date(0) : sheetChanged ? sheet.lastSyncedAt ?? existing.lastSyncedAt ?? new Date(0) : existing.sheetStatusUpdatedAt;
-    const hqWins = !!existing?.hqStatusUpdatedAt && (!sheetTime || existing.hqStatusUpdatedAt > sheetTime);
+    // The person enquired again: a new latest row, with more earlier rows
+    // than last sync. It's a fresh lead — its row's status stands, not the
+    // HQ status of the old enquiry.
+    const reEnquiry =
+      !!existing &&
+      (earlierOf.get(rowIdx)?.length ?? 0) > existing.earlierEnquiries.length &&
+      (existing.sheetRow !== rowNumbers[rowIdx] || existing.sheetTab !== rowTabs[rowIdx]);
+    const hqWins = !reEnquiry && !!existing?.hqStatusUpdatedAt && (!sheetTime || existing.hqStatusUpdatedAt > sheetTime);
 
     // Status automation: fill in what's missing in the two status cells.
     automation.set(existing?.id ?? externalKey, automationWrites({ raw: rawStatus, stage: statusTarget?.stage ?? null }, rawResultStatus, sheet));
@@ -628,7 +635,7 @@ async function runSync(
       }
       const dq = applyDqSource(reasons, { final, hive: statusTarget, prospect: resultTarget, existing, notes: cellNotes, cellChanged: !!noteJob });
       // Handed back to Chase Up: logged and counted, history kept.
-      const returned = isReturn(existing.stage, final.stage);
+      const returned = !reEnquiry && isReturn(existing.stage, final.stage);
       // Slack events (lib/slack.ts): a sale (Won, or a Won lead getting its
       // value) and a live transfer the sync just saw happen.
       if (final.stage === "WON" && value != null && (existing.stage !== "WON" || existing.value == null)) slackEvents.push({ leadId: existing.id, kind: "sale" });

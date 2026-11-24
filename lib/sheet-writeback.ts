@@ -257,7 +257,7 @@ function indexTab(tab: string, headers: string[], rows: string[][], sheet: { sta
     const m = new Map<string, number>();
     if (idx !== -1) rows.forEach((r, i) => {
       const k = norm(r[idx] ?? "");
-      if (k && !m.has(k)) m.set(k, i);
+      if (k) m.set(k, i); // last match: with duplicate rows, the latest enquiry is the lead
     });
     return m;
   };
@@ -270,10 +270,9 @@ function indexTab(tab: string, headers: string[], rows: string[][], sheet: { sta
 }
 
 // The lead's row: the exact row the sync last read it from (Lead.sheetTab +
-// sheetRow) while that row still holds this lead — with duplicate rows, the
-// first match by email could be a different row from the one HQ reads. Else
-// (rows moved) its own tab first, then the others, each by email → phone →
-// name. Exported for lib/sheet-tabs.check.ts.
+// sheetRow) while that row still holds this lead. Else (rows moved) its own
+// tab first, then the others, each by email → phone → name — the last match,
+// as a person's latest row is their lead (lib/lead-sync.ts). Exported for lib/sheet-tabs.check.ts.
 export function findLeadRow(tabs: TabIndex[], lead: Job["lead"]): { t: TabIndex; row: number } | null {
   const e = normalizeEmail(lead.email);
   const p = normalizePhone(lead.phone);

@@ -43,6 +43,7 @@ type LeadRow = {
   dqReasonSource: "STATUS" | "NOTES" | "AI" | "MANUAL" | null;
   dqReasonEvidence: string | null;
   returnedCount: number; // times the client sent it back to Chase Up
+  earlierEnquiries: number; // same person's earlier rows in the sheet — this is their latest enquiry
   lostReason: LostReasonValue | null;
   callAttempts: number | null;
   hqNewer: boolean; // changed in HQ since the sheet last changed — the sheet catches up via write-back
@@ -534,6 +535,7 @@ export default function LeadsPanel({
                           {sheetAhead(lead) && <SheetSaysBadge stage={sheetAhead(lead)!} />}
                           {lead.sheetWriteError && <NotSyncedBadge reason={lead.sheetWriteError} />}
                           {lead.returnedCount > 0 && <ReturnedBadge n={lead.returnedCount} />}
+                          {lead.earlierEnquiries > 0 && <RepeatBadge n={lead.earlierEnquiries} />}
                         </td>
                         <td className="py-2 pr-4 whitespace-nowrap" style={{ color: "var(--text-primary)" }}>
                           {lead.value != null ? `$${lead.value.toLocaleString()}` : "—"}
@@ -666,6 +668,14 @@ function ReturnedBadge({ n }: { n: number }) {
   return (
     <span className="ml-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold whitespace-nowrap" style={{ background: "var(--tag-amber-bg)", color: "var(--tag-amber-fg)" }} title="Sent back to Chase Up by the client">
       Returned ×{n}
+    </span>
+  );
+}
+
+function RepeatBadge({ n }: { n: number }) {
+  return (
+    <span className="ml-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold whitespace-nowrap" style={{ background: "var(--tag-amber-bg)", color: "var(--tag-amber-fg)" }} title={`Already in the sheet ${n} time${n === 1 ? "" : "s"} before — this is a new enquiry (their latest row)`}>
+      Repeat enquiry
     </span>
   );
 }

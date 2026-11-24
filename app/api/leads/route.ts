@@ -143,6 +143,7 @@ export async function GET(req: NextRequest) {
       dqReasonSource: l.dqReasonSource,
       dqReasonEvidence: l.dqReasonEvidence,
       returnedCount: l.returnedCount,
+      earlierEnquiries: l.earlierEnquiries.length,
       lostReason: l.lostReason,
       callAttempts: l.callAttempts,
       hqNewer: !!l.hqStatusUpdatedAt && (!l.sheetStatusUpdatedAt || l.hqStatusUpdatedAt > l.sheetStatusUpdatedAt),
