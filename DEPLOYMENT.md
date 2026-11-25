@@ -115,7 +115,7 @@ On the VPS, `crontab -e` and add (adjust the path to the repo):
 
 ```cron
 * * * * * flock -n /tmp/hive-leads.lock curl -fsS --max-time 110 -H "x-cron-secret: $(grep '^CRON_SECRET=' /opt/hive-os/.env | cut -d= -f2-)" https://hq.hivesocial.agency/api/cron/leads >> /var/log/hive-cron-leads.log 2>&1
-*/5 * * * * curl -fsS --max-time 290 -H "x-cron-secret: $(grep '^CRON_SECRET=' /opt/hive-os/.env | cut -d= -f2-)" https://hq.hivesocial.agency/api/cron/sync >> /var/log/hive-cron.log 2>&1
+*/5 * * * * flock -n /tmp/hive-cron.lock curl -fsS --max-time 290 -H "x-cron-secret: $(grep '^CRON_SECRET=' /opt/hive-os/.env | cut -d= -f2-)" https://hq.hivesocial.agency/api/cron/sync >> /var/log/hive-cron.log 2>&1
 ```
 
 The VPS clock's timezone doesn't matter — the app checks Sydney time itself

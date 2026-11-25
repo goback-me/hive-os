@@ -144,6 +144,10 @@ export async function runDailyJobs(now = new Date()) {
   }
 
   // ── Weekly ClickUp tasks ──
+  // Needs every client's KPIs (portfolio + needs-action) — far too heavy for
+  // every 5-minute run, and the tasks are weekly (deduped). First run of each
+  // hour only.
+  if (now.getUTCMinutes() >= 5) return out;
   const friday = startOfDay(addDaysKey(weekKey, 4));
   const fridayFive = new Date(friday.getTime() + 17 * 3_600_000);
   const needs = await getNeedsAction();
