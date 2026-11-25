@@ -55,7 +55,7 @@ git pull
 chmod +x deploy.sh
 
 echo "→ Building app image..."
-docker compose build --no-cache app
+docker compose build app
 
 echo "→ Starting Postgres..."
 docker compose up -d postgres
