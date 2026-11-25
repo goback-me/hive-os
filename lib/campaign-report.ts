@@ -1,7 +1,8 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import { liveAtSql, milestoneSql, quoteAtSql, wonAtSql } from "./milestones";
 import { getMetaAllCampaigns } from "./meta-ads";
-import { archivedCampaignSpend, archivedThrough, clampRange, getReportingScope, type Range, type ScopeCampaign } from "./reporting-scope";
+import { archivedCampaignSpend, archivedThrough, clampRange, counted, getReportingScope, type Range, type ScopeCampaign } from "./reporting-scope";
 import type { ReportVisibility } from "./report-visibility";
 import type { ClientTypeValue } from "./client-terms";
 
@@ -38,6 +39,8 @@ export type AdsReport = {
   archivedThrough: string | null;
   spendAllTime: boolean; // manual campaigns: their spend has no dates
   startDate: string | null;
+  tabs: string[]; // the client's sheet tabs when there's more than one
+  tab: string | null; // the tab this report is narrowed to
   cards: { spend: number | null; leads: number; costPerLead: number | null; quotes: number; sales: number };
   rows: CampaignRow[];
   totals: CampaignRow;
@@ -68,8 +71,8 @@ function row(name: string, status: string | null, spend: number | null, a?: Omit
   };
 }
 
-export async function getAdsReport(clientId: string, requested: Range, viewer: { role: "COACH" | "CLIENT" }, visibility: ReportVisibility, now = new Date()): Promise<AdsReport> {
-  const scope = await getReportingScope(clientId);
+export async function getAdsReport(clientId: string, requested: Range, viewer: { role: "COACH" | "CLIENT" }, visibility: ReportVisibility, now = new Date(), tab: string | null = null): Promise<AdsReport> {
+  const scope = await getReportingScope(clientId, { tab });
   const range = clampRange(requested, scope.startDate);
   const since = scope.startDate ?? new Date(0);
   const from = range.from ?? since;
@@ -83,6 +86,7 @@ export async function getAdsReport(clientId: string, requested: Range, viewer: {
         SELECT id, "createdAt", stage, value, "hiveStatusRaw", "prospectStatusRaw",
           CASE WHEN TRIM(COALESCE(campaign, '')) IN ('', '-') OR campaign LIKE '{{%' THEN ${UNATTRIBUTED} ELSE TRIM(campaign) END AS campaign
         FROM "Lead" WHERE "clientId" = ${clientId} AND "deletedAt" IS NULL AND "createdAt" >= ${since}
+          ${scope.tab ? Prisma.sql`AND "sheetTab" = ${scope.tab}` : Prisma.empty}
       ), m AS (
         SELECT l.campaign, l."createdAt" AS opt_in, l.value,
           ${liveAtSql()} AS live,
@@ -142,10 +146,12 @@ export async function getAdsReport(clientId: string, requested: Range, viewer: {
       },
     ])
   );
-  const known = new Set(campaigns.map((c) => key(c.name)));
+  // Narrowed to a tab, a campaign of another tab with leads on this one shows
+  // as a row without spend (its spend belongs to its own tab).
+  const known = new Set(campaigns.filter((c) => !scope.tab || c.tab === scope.tab || !c.included).map((c) => key(c.name)));
 
   const rows: CampaignRow[] = [];
-  for (const c of campaigns.filter((x) => x.included)) {
+  for (const c of campaigns.filter((x) => counted(scope, x))) {
     const a = byName.get(key(c.name));
     if (!c.spend && !a) continue; // nothing in this period
     rows.push(row(c.name, source === "meta" ? statusLabel(c.status) : null, c.spend, a));
@@ -159,7 +165,7 @@ export async function getAdsReport(clientId: string, requested: Range, viewer: {
 
   const sum = (k: keyof Pick<CampaignRow, "leads" | "liveTransfers" | "bookings" | "quotes" | "sales" | "revenue">) => rows.reduce((s, r) => s + r[k], 0);
   const spendRows = rows.filter((r) => r.spend != null);
-  const totalSpend = spendRows.length || campaigns.some((c) => c.included) ? spendRows.reduce((s, r) => s + (r.spend ?? 0), 0) : null;
+  const totalSpend = spendRows.length || campaigns.some((c) => counted(scope, c)) ? spendRows.reduce((s, r) => s + (r.spend ?? 0), 0) : null;
   const totals = row("All campaigns", null, totalSpend, {
     leads: sum("leads"),
     liveTransfers: sum("liveTransfers"),
@@ -180,6 +186,8 @@ export async function getAdsReport(clientId: string, requested: Range, viewer: {
     archivedThrough: archived ? await archivedThrough(clientId) : null,
     spendAllTime: source === "manual",
     startDate: scope.startDate?.toISOString() ?? null,
+    tabs: scope.tabs,
+    tab: scope.tab,
     cards: {
       spend: costHidden ? null : totals.spend,
       leads: totals.leads,

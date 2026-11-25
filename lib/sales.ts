@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import { sydneyDay } from "./sheet-parse";
 import { milestoneSql, wonAtSql } from "./milestones";
@@ -54,15 +55,17 @@ export async function getSales(
   viewer: { role: "COACH" | "CLIENT" },
   visibility: ReportVisibility,
   prev: { from: Date; to: Date; label: string } | null,
-  now = new Date()
+  now = new Date(),
+  tab: string | null = null
 ): Promise<SalesResponse> {
-  const scope = await getReportingScope(clientId);
+  const scope = await getReportingScope(clientId, { tab });
   const since = scope.startDate ?? new Date(0);
 
   const rows = await prisma.$queryRaw<{ id: string; name: string | null; campaign: string | null; value: unknown; createdAt: Date; won_at: Date; quote_at: Date | null }[]>`
     SELECT l.id, l.name, l.campaign, l.value, l."createdAt", ${wonAtSql()} AS won_at, ${milestoneSql("QUOTE_SENT")} AS quote_at
     FROM "Lead" l
     WHERE l."clientId" = ${clientId} AND l."deletedAt" IS NULL AND l.stage = 'WON' AND l."createdAt" >= ${since}
+      ${scope.tab ? Prisma.sql`AND l."sheetTab" = ${scope.tab}` : Prisma.empty}
   `;
   const all = rows.filter((r) => r.won_at >= since).sort((a, b) => a.won_at.getTime() - b.won_at.getTime() || a.id.localeCompare(b.id));
 

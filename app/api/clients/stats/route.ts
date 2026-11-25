@@ -18,6 +18,6 @@ export async function GET(req: NextRequest) {
   if (hold) return hold;
 
   const { range, allTime } = rangeFromParams(req.nextUrl.searchParams);
-  const [stats, visibility] = await Promise.all([getClientStats(clientId, range, allTime), getReportVisibility(clientId)]);
+  const [stats, visibility] = await Promise.all([getClientStats(clientId, range, allTime, req.nextUrl.searchParams.get("tab")), getReportVisibility(clientId)]);
   return NextResponse.json(statsForViewer(stats, user.role, visibility));
 }

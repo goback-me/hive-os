@@ -195,6 +195,10 @@ model AdCampaign {
   // started on/after Client.startDate. A Meta campaign gets a row here (keyed
   // by metaCampaignId) only once a coach overrides it.
   includedInReporting Boolean?
+  // Coach override for which sheet tab this campaign's leads/spend belong to
+  // (Ads tab's tab picker). null = the default: the tab most of its leads
+  // are on (lib/reporting-scope.ts).
+  sheetTab            String?
 
   @@unique([clientId, metaCampaignId])
   @@index([clientId])

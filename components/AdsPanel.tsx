@@ -12,6 +12,7 @@ import type { AdsReport, CampaignRow } from "@/lib/campaign-report";
 import { terms } from "@/lib/client-terms";
 
 type SetReporting = (clientId: string, campaign: { id: string; name: string; source: "meta" | "manual" }, included: boolean | null) => Promise<void>;
+type SetTab = (clientId: string, campaign: { id: string; name: string; source: "meta" | "manual" }, tab: string | null) => Promise<void>;
 type Campaign = NonNullable<AdsReport["campaigns"]>[number];
 
 const money = (v: number | null) => (v == null ? "—" : `$${v.toLocaleString("en-US", { maximumFractionDigits: v < 100 ? 2 : 0 })}`);
@@ -20,10 +21,12 @@ const sydDate = (iso: string) => new Date(iso).toLocaleDateString("en-AU", { tim
 // Ads tab: campaign performance for the tab's date range. Leads and their
 // outcomes are credited to the campaign that generated the lead and counted
 // when they happened (lib/campaign-report.ts). Spend / cost columns arrive as
-// null for a client who isn't shown cost metrics.
-export default function AdsPanel({ clientId, isCoach, onSetReporting, maxFrom }: { clientId: string; isCoach: boolean; onSetReporting: SetReporting; maxFrom: string | null }) {
+// null for a client who isn't shown cost metrics. Several sheet tabs: a tab
+// picker narrows the whole tab — leads on that tab, spend from its campaigns.
+export default function AdsPanel({ clientId, isCoach, onSetReporting, onSetTab, maxFrom }: { clientId: string; isCoach: boolean; onSetReporting: SetReporting; onSetTab: SetTab; maxFrom: string | null }) {
   const [range, setRange] = useReportRange();
-  const rangeQuery = reportRangeQuery(range);
+  const [tab, setTab] = useState<string | null>(null);
+  const rangeQuery = reportRangeQuery(range) + (tab ? `&tab=${encodeURIComponent(tab)}` : "");
   const rangeLabel = reportRangeLabel(range);
   const [data, setData] = useState<AdsReport | null>(null);
   const [loading, setLoading] = useState(false);
@@ -46,6 +49,19 @@ export default function AdsPanel({ clientId, isCoach, onSetReporting, maxFrom }:
       .finally(() => id === req.current && setLoading(false));
   }
   useEffect(load, [clientId, rangeQuery]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Picking the default tab clears the override rather than pinning it.
+  function moveToTab(c: Campaign, next: string) {
+    if (!data?.campaigns) return;
+    const override = next === c.defaultTab ? null : next;
+    setData({ ...data, campaigns: data.campaigns.map((x) => (x.id === c.id ? { ...x, tab: next, tabOverride: override } : x)) });
+    onSetTab(clientId, { id: c.id, name: c.name, source: data.source }, override)
+      .then(load)
+      .catch((e) => {
+        setError(e instanceof Error ? e.message : "Couldn't save");
+        load();
+      });
+  }
 
   // Ticking back to the default clears the override rather than pinning it.
   function toggle(c: Campaign) {
@@ -88,6 +104,22 @@ export default function AdsPanel({ clientId, isCoach, onSetReporting, maxFrom }:
         </div>
       </div>
       {isCoach && data && !data.startDate && <StartDateWarning />}
+
+      {data && data.tabs.length > 1 && (
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <span className="text-[10px] font-bold tracking-wide mr-1" style={{ color: "var(--text-muted)" }}>SHEET TAB</span>
+          {[null, ...data.tabs].map((t) => (
+            <button
+              key={t ?? ""}
+              onClick={() => setTab(t)}
+              className="px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap"
+              style={tab === t ? { background: "var(--primary)", color: "#fff" } : { background: "var(--surface-hover)", color: "var(--text-secondary)" }}
+            >
+              {t ?? "All tabs"}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Campaign performance — revenue, spend, profit, ROI (moved here from the Leads tab). */}
       <ProfitRoiPanel clientId={clientId} rangeQuery={rangeQuery} rangeLabel={rangeLabel} isCoach={isCoach} />
@@ -150,7 +182,8 @@ export default function AdsPanel({ clientId, isCoach, onSetReporting, maxFrom }:
                 <span>
                   <span className="text-sm font-semibold block" style={{ color: "var(--text-primary)" }}>Campaigns in reports</span>
                   <span className="text-[11px]" style={{ color: "var(--text-muted)" }}>
-                    {data.campaigns.filter((c) => c.included).length} of {data.campaigns.length} counted · default: started on/after the client&apos;s start date · coach only
+                    {data.campaigns.filter((c) => c.included).length} of {data.campaigns.length} counted · default: started on/after the client&apos;s start date
+                    {data.tabs.length > 1 ? " · each campaign's sheet tab: where most of its leads are, unless picked" : ""} · coach only
                   </span>
                 </span>
                 <span className="material-symbols-outlined text-[18px]" style={{ color: "var(--text-muted)" }}>{showTicks ? "expand_less" : "expand_more"}</span>
@@ -160,7 +193,21 @@ export default function AdsPanel({ clientId, isCoach, onSetReporting, maxFrom }:
                   {data.campaigns.map((c) => (
                     <label key={c.id} className="flex items-center gap-3 py-1.5 cursor-pointer" style={{ borderBottom: "1px solid var(--border)" }}>
                       <input type="checkbox" checked={c.included} onChange={() => toggle(c)} className="w-4 h-4 accent-[var(--primary)]" />
-                      <span className="text-sm flex-1 truncate" style={{ color: "var(--text-primary)" }}>{c.name}</span>
+                      <span className="text-sm flex-1 truncate" style={{ color: "var(--text-primary)", opacity: tab && c.tab !== tab ? 0.5 : 1 }}>{c.name}</span>
+                      {data.tabs.length > 1 && (
+                        <select
+                          value={c.tab ?? ""}
+                          onChange={(e) => moveToTab(c, e.target.value)}
+                          className="px-2 py-1 rounded-lg text-xs outline-none"
+                          style={{ background: "var(--surface-hover)", color: c.tabOverride ? "var(--primary)" : "var(--text-secondary)", border: "1px solid var(--border)" }}
+                          title={c.tabOverride ? `Picked by a coach — default: ${c.defaultTab ?? "none"}` : "Default: the tab most of its leads are on"}
+                        >
+                          {!c.tab && <option value="">No tab yet</option>}
+                          {data.tabs.map((t) => (
+                            <option key={t} value={t}>{t}</option>
+                          ))}
+                        </select>
+                      )}
                       <span className="text-xs whitespace-nowrap" style={{ color: "var(--text-secondary)" }}>
                         {c.override != null ? <span className="font-bold" style={{ color: "var(--primary)" }}>Override</span> : "Default"}
                         <span style={{ color: "var(--text-muted)" }}>

@@ -37,6 +37,7 @@ type LeadRow = {
   email: string | null;
   source: string | null;
   campaign: string | null;
+  sheetTab: string | null; // the sheet tab its row is on
   stage: LeadStageValue;
   dqReason: DqReasonValue | null;
   dqPhase: DqPhaseValue | null;
@@ -139,6 +140,11 @@ export default function LeadsPanel({
   const [statusFilter, setStatusFilter] = useState<LeadStageValue | "">("");
   const [sheetStatusFilter, setSheetStatusFilter] = useState<string | null>(null);
   const [sheetStatusCounts, setSheetStatusCounts] = useState<Record<string, number>>({});
+  // Clients with several sheet tabs: filter and label leads by tab.
+  const [tabFilter, setTabFilter] = useState<string | null>(null);
+  const [tabCounts, setTabCounts] = useState<Record<string, number>>({});
+  const tabs = Object.keys(tabCounts).sort();
+  const multiTab = tabs.length > 1;
   // Coach data cleanup: DQ/lost with no reason, won with no job value.
   const [needsFixing, setNeedsFixing] = useState(false);
   const [needsFixingCount, setNeedsFixingCount] = useState<number | null>(null);
@@ -184,6 +190,7 @@ export default function LeadsPanel({
     const params = new URLSearchParams(`clientId=${clientId}&page=${page}&pageSize=${pageSize}&${rangeQuery}`);
     if (statusFilter) params.set("stage", statusFilter);
     if (sheetStatusFilter) params.set("sheetStatus", sheetStatusFilter);
+    if (tabFilter) params.set("tab", tabFilter);
     if (needsFixing) params.set("needsFixing", "1");
     if (awaitingFilter) params.set("awaiting", "1");
     if (search) params.set("q", search);
@@ -196,6 +203,7 @@ export default function LeadsPanel({
         setTotal(data.total);
         if (data.stageCounts) setStageCounts(data.stageCounts);
         if (data.sheetStatusCounts) setSheetStatusCounts(data.sheetStatusCounts);
+        if (data.tabCounts) setTabCounts(data.tabCounts);
         setNeedsFixingCount(data.needsFixingCount ?? null);
         setAwaitingCount(data.awaitingCount ?? 0);
         setLeadsLoaded(true);
@@ -233,7 +241,7 @@ export default function LeadsPanel({
   useEffect(() => {
     loadLeads();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, pageSize, statusFilter, sheetStatusFilter, needsFixing, awaitingFilter, search, hasSheet, rangeQuery, reloadKey]);
+  }, [page, pageSize, statusFilter, sheetStatusFilter, tabFilter, needsFixing, awaitingFilter, search, hasSheet, rangeQuery, reloadKey]);
 
   useEffect(() => {
     const q = searchInput.trim();
@@ -422,6 +430,18 @@ export default function LeadsPanel({
             </div>
           )}
 
+          {leadsLoaded && multiTab && (
+            <div className="mb-4 fade-in">
+              <p className="text-[10px] font-bold tracking-wide mb-1.5" style={{ color: "var(--text-muted)" }}>SHEET TAB</p>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <TabButton active={tabFilter === null} label="All tabs" count={tabs.reduce((n, t) => n + tabCounts[t], 0)} onClick={() => { setTabFilter(null); setPage(1); }} />
+                {tabs.map((t) => (
+                  <TabButton key={t} active={tabFilter === t} label={t} count={tabCounts[t]} onClick={() => { setTabFilter(tabFilter === t ? null : t); setPage(1); }} />
+                ))}
+              </div>
+            </div>
+          )}
+
           {leadsLoaded && sheetStatusValues.length > 0 && (
             <div className="mb-4 fade-in">
               <p className="text-[10px] font-bold tracking-wide mb-1.5" style={{ color: "var(--text-muted)" }}>SHEET STATUS</p>
@@ -499,7 +519,7 @@ export default function LeadsPanel({
               <table className="w-full text-left text-sm min-w-[760px] fade-in transition-opacity" style={{ opacity: loadingLeads ? 0.5 : 1 }}>
                 <thead>
                   <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                    {["Name", "Phone", "Email", "Source", "Campaign", "Status", "Value", ...(needsFixing ? ["Needs fixing"] : []), ""].map((h, i) => (
+                    {["Name", "Phone", "Email", ...(multiTab ? ["Tab"] : []), "Source", "Campaign", "Status", "Value", ...(needsFixing ? ["Needs fixing"] : []), ""].map((h, i) => (
                       <th key={i} className="py-2 pr-4 text-xs font-bold whitespace-nowrap" style={{ color: "var(--text-secondary)" }}>{h}</th>
                     ))}
                   </tr>
@@ -512,6 +532,7 @@ export default function LeadsPanel({
                         <td className="py-2 pr-4 font-medium whitespace-nowrap" style={{ color: "var(--text-primary)" }}>{lead.name || "—"}</td>
                         <td className="py-2 pr-4 whitespace-nowrap" style={{ color: "var(--text-secondary)" }}>{lead.phone || "—"}</td>
                         <td className="py-2 pr-4 whitespace-nowrap" style={{ color: "var(--text-secondary)" }}>{lead.email || "—"}</td>
+                        {multiTab && <td className="py-2 pr-4 whitespace-nowrap" style={{ color: "var(--text-secondary)" }}>{lead.sheetTab || "—"}</td>}
                         <td className="py-2 pr-4 whitespace-nowrap" style={{ color: "var(--text-secondary)" }}>{lead.source || "—"}</td>
                         <td className="py-2 pr-4 whitespace-nowrap" style={{ color: "var(--text-secondary)" }}>{lead.campaign ? displayCampaignName(lead.campaign) : "—"}</td>
                         <td className="py-2 pr-4" onClick={(e) => e.stopPropagation()}>

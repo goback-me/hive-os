@@ -17,5 +17,5 @@ export async function GET(req: NextRequest) {
   if (hold) return hold;
 
   const { range, report } = rangeFromParams(req.nextUrl.searchParams);
-  return NextResponse.json(await getQuotes(clientId, range, previousReportRange(report)));
+  return NextResponse.json(await getQuotes(clientId, range, previousReportRange(report), new Date(), req.nextUrl.searchParams.get("tab")));
 }

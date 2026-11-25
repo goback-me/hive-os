@@ -423,6 +423,21 @@ export async function setCampaignReporting(
   ]);
 }
 
+// Coach-only: which sheet tab a campaign belongs to (the Ads tab's tab
+// picker). `tab` null = back to the default: the tab most of its leads are on.
+export async function setCampaignTab(clientId: string, campaign: { id: string; name: string; source: "meta" | "manual" }, tab: string | null) {
+  await requireCoach();
+  if (campaign.source === "meta") {
+    await prisma.adCampaign.upsert({
+      where: { clientId_metaCampaignId: { clientId, metaCampaignId: campaign.id } },
+      create: { clientId, metaCampaignId: campaign.id, name: campaign.name, sheetTab: tab },
+      update: { name: campaign.name, sheetTab: tab },
+    });
+  } else {
+    await prisma.adCampaign.update({ where: { id: campaign.id, clientId }, data: { sheetTab: tab } });
+  }
+}
+
 // Coach-only: recompute Snapshot history for every closed month that isn't
 // frozen (lib/kpi.ts rebuildHistory).
 export async function rebuildKpiHistory(clientId: string) {

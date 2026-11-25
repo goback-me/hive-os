@@ -15,6 +15,7 @@ import {
   saveReportVisibility,
   saveClientStartDate,
   setCampaignReporting,
+  setCampaignTab,
   rebuildKpiHistory,
   saveClientType,
   recheckClientHealth,
@@ -429,7 +430,7 @@ export default async function ClientDetailPage({ params }: { params: { slug: str
     <div className="space-y-6">
       {/* Campaigns + spend load client-side (/api/ads) — Meta's live list once
           connected, else the manually tracked AdCampaign rows. */}
-      {hold ? <HoldNote /> : <AdsPanel clientId={client.id} isCoach={isCoach} onSetReporting={setCampaignReporting} maxFrom={maxFrom} />}
+      {hold ? <HoldNote /> : <AdsPanel clientId={client.id} isCoach={isCoach} onSetReporting={setCampaignReporting} onSetTab={setCampaignTab} maxFrom={maxFrom} />}
       {/* Hive OS — Meta Marketing API connection for this client, merged in
           alongside the original coaching app's own manually-tracked AdCampaign rows above. */}
       <MetaAdsCard clientId={client.id} connected={Boolean(client.metaAdAccountId)} adAccountId={client.metaAdAccountId} />

@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import { liveAtSql, milestoneSql, quoteAtSql, wonAtSql } from "./milestones";
 import { toneFor, type Tone } from "./kpi";
@@ -85,8 +86,8 @@ export function ageBucket(daysOut: number) {
   return AGE_BUCKETS.find((b) => daysOut <= b.max)!.label;
 }
 
-export async function getQuotes(clientId: string, range: Range, prev: { from: Date; to: Date; label: string } | null, now = new Date()): Promise<QuotesResponse> {
-  const scope = await getReportingScope(clientId);
+export async function getQuotes(clientId: string, range: Range, prev: { from: Date; to: Date; label: string } | null, now = new Date(), tab: string | null = null): Promise<QuotesResponse> {
+  const scope = await getReportingScope(clientId, { tab });
   const since = scope.startDate ?? new Date(0);
 
   const rows = await prisma.$queryRaw<
@@ -117,6 +118,7 @@ export async function getQuotes(clientId: string, range: Range, prev: { from: Da
         CASE WHEN l.stage IN ('LOST', 'DISQUALIFIED') THEN ${milestoneSql(["LOST", "DISQUALIFIED"])} END AS closed_at
       FROM "Lead" l
       WHERE l."clientId" = ${clientId} AND l."deletedAt" IS NULL AND l."createdAt" >= ${since}
+        ${scope.tab ? Prisma.sql`AND l."sheetTab" = ${scope.tab}` : Prisma.empty}
     ) q
     WHERE q.quote_at IS NOT NULL OR q.live_at IS NOT NULL
   `;

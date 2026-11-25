@@ -20,21 +20,23 @@ export type RevenueEntry = { clientId: string; at: Date; amount: number };
 
 // Scoped to each client's reporting start date (lib/reporting-scope.ts):
 // nothing from before it counts anywhere — not a won lead that came in or
-// closed before it, nor a manual month before its month.
-export async function getRevenueEntries(clientIds?: string[]): Promise<RevenueEntry[]> {
+// closed before it, nor a manual month before its month. `tab`: only won leads
+// on that sheet tab — manual months aren't per tab, so they're left out.
+export async function getRevenueEntries(clientIds?: string[], tab: string | null = null): Promise<RevenueEntry[]> {
   if (clientIds && !clientIds.length) return [];
   const clientFilter = clientIds ? { clientId: { in: clientIds } } : { client: { archivedAt: null } };
   const clientSql = clientIds
     ? Prisma.sql`l."clientId" IN (${Prisma.join(clientIds)})`
     : Prisma.sql`l."clientId" IN (SELECT id FROM "Client" WHERE "archivedAt" IS NULL)`;
   const [manualRows, won, starts] = await Promise.all([
-    prisma.revenueMonthly.findMany({ where: clientFilter, select: { clientId: true, month: true, amount: true } }),
+    tab ? Promise.resolve([]) : prisma.revenueMonthly.findMany({ where: clientFilter, select: { clientId: true, month: true, amount: true } }),
     prisma.$queryRaw<{ clientId: string; value: unknown; at: Date }[]>`
       SELECT * FROM (
         SELECT l."clientId", l.value, ${wonAtSql()} AS at, c."startDate"
         FROM "Lead" l JOIN "Client" c ON c.id = l."clientId"
         WHERE ${clientSql} AND l."deletedAt" IS NULL AND l.stage = 'WON' AND l.value IS NOT NULL
           AND (c."startDate" IS NULL OR l."createdAt" >= c."startDate")
+          ${tab ? Prisma.sql`AND l."sheetTab" = ${tab}` : Prisma.empty}
       ) w
       WHERE w."startDate" IS NULL OR w.at >= w."startDate"
     `,

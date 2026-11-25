@@ -21,5 +21,5 @@ export async function GET(req: NextRequest) {
   if (hold) return hold;
 
   const visibility = await getReportVisibility(clientId);
-  return NextResponse.json(await getAdsReport(clientId, rangeFromParams(req.nextUrl.searchParams).range, user, visibility));
+  return NextResponse.json(await getAdsReport(clientId, rangeFromParams(req.nextUrl.searchParams).range, user, visibility, new Date(), req.nextUrl.searchParams.get("tab")));
 }

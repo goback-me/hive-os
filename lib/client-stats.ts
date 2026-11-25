@@ -46,11 +46,11 @@ export async function getReportVisibility(clientId: string): Promise<ReportVisib
 // render and by /api/clients/stats when the range changes, so both agree.
 // Scoped to the client's reporting start date and included campaigns
 // (lib/reporting-scope.ts): "Maximum" = start date → today.
-export async function getClientStats(clientId: string, requested: { from?: Date; to?: Date }, allTime: boolean): Promise<ClientStats> {
-  const scope = await getReportingScope(clientId);
+export async function getClientStats(clientId: string, requested: { from?: Date; to?: Date }, allTime: boolean, tab: string | null = null): Promise<ClientStats> {
+  const scope = await getReportingScope(clientId, { tab });
   const range = clampRange(requested, scope.startDate);
   const [entries, scoped] = await Promise.all([
-    getRevenueEntries([clientId]),
+    getRevenueEntries([clientId], scope.tab),
     scopedSpend(scope, range),
   ]);
 

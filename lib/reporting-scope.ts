@@ -1,5 +1,6 @@
 import { prisma } from "./prisma";
 import { sydneyDay } from "./sheet-parse";
+import { sheetTabs } from "./sheet-tabs";
 import { getCachedCampaignInsights, getCachedMetaCampaignList, getMetaCampaignInsights, getMetaCampaignList, metaDays, type MetaCampaignInfo } from "./meta-ads";
 
 // What counts in a client's reports: only leads, sales and spend on/after
@@ -21,10 +22,18 @@ export type ScopeCampaign = {
   defaultIncluded: boolean;
   override: boolean | null;
   included: boolean;
+  // Clients with several sheet tabs: the tab this campaign belongs to — a
+  // coach's pick (tabOverride), else the tab most of its leads are on.
+  defaultTab: string | null;
+  tabOverride: string | null;
+  tab: string | null;
 };
 
 export type ReportingScope = {
   clientId: string;
+  tabs: string[]; // the client's sheet tabs when there's more than one, else []
+  // Narrowed to one sheet tab: only its leads, and spend from its campaigns.
+  tab: string | null;
   startDate: Date | null;
   source: "meta" | "manual"; // where `campaigns` came from
   // Meta campaigns from the saved history (lib/meta-archive.ts) — Meta is
@@ -39,19 +48,25 @@ export type ReportingScope = {
 
 type Opts = { cached?: boolean }; // false outside Next (scripts) — unstable_cache needs Next
 
+// A campaign counts towards spend: included, and on the scope's tab if any.
+export const counted = (scope: Pick<ReportingScope, "tab">, c: ScopeCampaign) => c.included && (!scope.tab || c.tab === scope.tab);
+
 function entry(id: string, name: string, status: string, startedAt: Date | string | null, override: boolean | null, startDate: Date | null): ScopeCampaign {
   const started = startedAt ? new Date(startedAt) : null;
   // Compared as Sydney days; an unknown start date counts as ours.
   const defaultIncluded = !startDate || !started || sydneyDay(started) >= sydneyDay(startDate);
-  return { id, name, status, startedAt: started?.toISOString() ?? null, defaultIncluded, override, included: override ?? defaultIncluded };
+  return { id, name, status, startedAt: started?.toISOString() ?? null, defaultIncluded, override, included: override ?? defaultIncluded, defaultTab: null, tabOverride: null, tab: null };
 }
 
-export async function getReportingScope(clientId: string, { cached = true }: Opts = {}): Promise<ReportingScope> {
-  const [client, rows] = await Promise.all([
+export async function getReportingScope(clientId: string, { cached = true, tab = null }: Opts & { tab?: string | null } = {}): Promise<ReportingScope> {
+  const [client, rows, sheet] = await Promise.all([
     prisma.client.findUnique({ where: { id: clientId }, select: { startDate: true, metaAdAccountId: true, metaAccessToken: true } }),
     prisma.adCampaign.findMany({ where: { clientId } }),
+    prisma.clientSheet.findUnique({ where: { clientId }, select: { sheetName: true, sheetNames: true } }),
   ]);
   const startDate = client?.startDate ?? null;
+  const allTabs = sheet ? sheetTabs(sheet) : [];
+  const tabs = allTabs.length > 1 ? allTabs : [];
 
   const manualRows = rows.filter((r) => !r.metaCampaignId);
   const manual = manualRows.map((r) => entry(r.id, r.name, r.status, r.createdAt, r.includedInReporting, startDate));
@@ -79,13 +94,39 @@ export async function getReportingScope(clientId: string, { cached = true }: Opt
     }
   }
 
+  // Each campaign's tab: the coach's pick, else where most of its leads are.
+  if (tabs.length) {
+    const key = (n: string | null) => (n ?? "").toLowerCase().trim();
+    const counts = await prisma.lead.groupBy({ by: ["campaign", "sheetTab"], where: { clientId, deletedAt: null, sheetTab: { in: tabs } }, _count: true });
+    const perTab = new Map<string, Map<string, number>>(); // campaign → tab → leads
+    for (const g of counts) {
+      const m = perTab.get(key(g.campaign)) ?? new Map<string, number>();
+      m.set(g.sheetTab!, (m.get(g.sheetTab!) ?? 0) + g._count);
+      perTab.set(key(g.campaign), m);
+    }
+    const topTab = (name: string) => Array.from(perTab.get(key(name)) ?? []).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+    // No leads yet: the tab named in the campaign's name ("HS-Leads-Door
+    // Fixing-4/4" → "Door Fixing LEADS"), ignoring the word "leads".
+    const words = (s: string) => ` ${s.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\bleads?\b/g, " ").replace(/\s+/g, " ").trim()} `;
+    const namedTab = (name: string) => tabs.find((t) => words(t).trim() && words(name).includes(words(t))) ?? null;
+    const picked = new Map(rows.map((r) => [r.metaCampaignId ?? r.id, r.sheetTab]));
+    for (const c of [...(campaigns ?? []), ...manual]) {
+      c.defaultTab = topTab(c.name) ?? namedTab(c.name);
+      c.tabOverride = picked.get(c.id) ?? null;
+      c.tab = c.tabOverride ?? c.defaultTab;
+    }
+  }
+
   const list = campaigns ?? manual;
+  const scopeTab = tabs.includes(tab ?? "") ? tab : null;
   return {
     clientId,
+    tabs,
+    tab: scopeTab,
     startDate,
     source: campaigns ? "meta" : "manual",
     archived,
-    includedCampaignIds: list.filter((c) => c.included).map((c) => c.id),
+    includedCampaignIds: list.filter((c) => counted({ tab: scopeTab }, c)).map((c) => c.id),
     campaigns: list,
     manual,
     manualSpend,
@@ -195,9 +236,10 @@ export async function scopedSpend(scope: ReportingScope, range: Range, { cached 
     _count: true,
     where: { clientId: scope.clientId, date: { ...(r.from ? { gte: r.from } : {}), ...(r.to ? { lt: r.to } : {}) } },
   });
-  if (daily._count) return { source: "daily", total: Number(daily._sum.spend ?? 0), byName: null };
+  // Daily totals aren't per campaign, so they can't be split by sheet tab.
+  if (daily._count && !scope.tab) return { source: "daily", total: Number(daily._sum.spend ?? 0), byName: null };
 
-  const manual = scope.manual.filter((c) => c.included);
+  const manual = scope.manual.filter((c) => counted(scope, c));
   if (!scope.manual.length) return { source: null, total: null, byName: null };
   const byName = new Map<string, number>();
   for (const c of manual) byName.set(c.name.toLowerCase().trim(), (byName.get(c.name.toLowerCase().trim()) ?? 0) + (scope.manualSpend.get(c.id) ?? 0));
@@ -241,7 +283,7 @@ export async function dailySpend(scope: ReportingScope, range: Range, { cached =
     where: { clientId: scope.clientId, date: { ...(r.from ? { gte: r.from } : {}), ...(r.to ? { lt: r.to } : {}) } },
     select: { date: true, spend: true },
   });
-  if (rows.length) {
+  if (rows.length && !scope.tab) {
     for (const row of rows) add(sydneyDay(row.date), Number(row.spend));
     return { source: "daily", days };
   }
@@ -249,7 +291,7 @@ export async function dailySpend(scope: ReportingScope, range: Range, { cached =
   // ponytail: manual campaigns have one all-time total, so it's prorated
   // evenly by day; add per-day spend rows if these clients need exact numbers.
   const today = sydneyDay(r.to ?? new Date());
-  for (const c of scope.manual.filter((m) => m.included)) {
+  for (const c of scope.manual.filter((m) => counted(scope, m))) {
     const spend = scope.manualSpend.get(c.id) ?? 0;
     if (!spend) continue;
     const start = sydneyDay(scope.startDate ?? (c.startedAt ? new Date(c.startedAt) : new Date()));
