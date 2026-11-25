@@ -1,3 +1,4 @@
+import { revalidateTag, unstable_cache } from "next/cache";
 import { prisma } from "./prisma";
 import { SHEET_TZ, sydneyLocalToDate } from "./sheet-parse";
 import { getReportingScope, scopedSpend, type ReportingScope } from "./reporting-scope";
@@ -99,6 +100,31 @@ export function isFreezable(k: MonthKey, now = new Date()) {
 
 // ── Computing ──────────────────────────────────────────────────────────────
 
+// ── Cache ──────────────────────────────────────────────────────────────────
+// KPI counts and cohort rates are the heaviest queries in the app — every
+// dashboard, snapshot and portfolio load runs them per client per window.
+// Each result is cached 5 minutes under its client's tag; a sync that changed
+// leads or an HQ stage change drops that client's entries (leadsChanged).
+// Outside Next (scripts) there's no cache, so they just run.
+const leadsTag = (clientId: string) => `kpi-leads:${clientId}`;
+export function leadsChanged(clientId: string) {
+  try {
+    revalidateTag(leadsTag(clientId));
+  } catch {
+    // outside Next: nothing was cached
+  }
+}
+function perClientCache<A extends unknown[], R>(name: string, fn: (clientId: string, ...a: A) => Promise<R>) {
+  return async (clientId: string, ...a: A): Promise<R> => {
+    try {
+      return await unstable_cache(() => fn(clientId, ...a), [name, clientId, JSON.stringify(a)], { revalidate: 300, tags: [leadsTag(clientId)] })();
+    } catch (e) {
+      if (e instanceof Error && /incrementalCache missing/.test(e.message)) return fn(clientId, ...a);
+      throw e;
+    }
+  };
+}
+
 async function countKpis(clientId: string, w: Window, startDate: Date | null) {
   const since = startDate ?? new Date(0);
   const [row] = await prisma.$queryRaw<{ leads: bigint; contacted: bigint; live: bigint; booked: bigint; quotes: bigint; booked_or_quoted: bigint; sales: bigint; revenue: unknown }[]>`
@@ -153,9 +179,11 @@ function withCosts(c: Omit<KpiValues, "costPerBooking" | "costPerQuote" | "costP
   return { ...c, costPerBooking: per(c.consultsBooked), costPerQuote: per(c.quotes), costPerSale: per(c.sales) };
 }
 
+const cachedCountKpis = perClientCache("kpi-counts", countKpis);
+
 async function computeWindow(scope: ReportingScope, w: Window, opts: { cached: boolean; strictSpend: boolean }): Promise<KpiValues> {
   const [counts, spend] = await Promise.all([
-    countKpis(scope.clientId, w, scope.startDate),
+    (opts.cached ? cachedCountKpis : countKpis)(scope.clientId, w, scope.startDate), // a month-end freeze reads fresh
     spendFor(scope, w, opts.cached).catch((e) => {
       if (opts.strictSpend) throw e;
       return { spend: null, spendSource: null } as const; // expired token etc. — cost cards just drop out
@@ -317,7 +345,8 @@ type CardKind = "count" | "cost" | "rate";
 // Leads-tab funnel maths (lib/funnel.ts): contacted / leads, qualified
 // (contacted, not DQ) / contacted, live transfers / qualified. Cohort rates
 // mature as leads move on, so they're always computed live — never frozen.
-async function cohortRates(clientId: string, w: Pick<Window, "from" | "to">, startDate: Date | null): Promise<Record<RateKey, number | null>> {
+const cohortRates = perClientCache("kpi-rates", liveCohortRates);
+async function liveCohortRates(clientId: string, w: Pick<Window, "from" | "to">, startDate: Date | null): Promise<Record<RateKey, number | null>> {
   const leads = await prisma.lead.findMany({
     where: { clientId, deletedAt: null, createdAt: { gte: startDate && startDate > w.from ? startDate : w.from, lt: w.to } },
     select: { stage: true, dqPhase: true, dqReason: true, lostReason: true, hiveStatusRaw: true, prospectStatusRaw: true, stageEvents: { select: { stage: true } } },

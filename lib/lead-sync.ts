@@ -1,3 +1,4 @@
+import { leadsChanged } from "./kpi";
 import { createHash, randomUUID } from "crypto";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
@@ -124,6 +125,7 @@ async function syncClient(clientId: string): Promise<SyncSummary> {
     const readAt = new Date();
     const { summary, unmapped, automation, recon, slackEvents } = await runSync(clientId, sheet);
     await refreshHandoverAt({ clientId });
+    if (summary.created || summary.updated || summary.removed || summary.restored) leadsChanged(clientId); // cached KPIs (lib/kpi.ts)
     await prisma.clientSheet.update({
       where: { clientId },
       data: { lastSyncedAt: readAt, lastSyncError: null, unmappedStatuses: unmapped },

@@ -126,4 +126,8 @@ assert.equal(awaitingClientUpdate({ stage: "CONSULT_BOOKED", hive: live, prospec
 assert.equal(awaitingClientUpdate({ stage: "CHASE_UP", hive: CHASE, prospect: blank, prospectPending: true }), true);
 assert.equal(awaitingClientUpdate({ stage: "DISQUALIFIED", hive: live, prospect: blank, prospectPending: true }), false);
 
+// A bare "wrong number" / "Spam/ DND" is a DQ (reason: spam), not unrecognised.
+assert.deepEqual(classifyProspect("wrong number"), { stage: "DISQUALIFIED", dqReason: "SPAM" });
+assert.deepEqual(classifyHive("Spam/ DND"), { stage: "DISQUALIFIED", dqReason: "SPAM" });
+
 console.log("status-classifier: all checks passed");

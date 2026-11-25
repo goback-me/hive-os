@@ -44,6 +44,11 @@ assert.equal(parseSheetDate("07/15/2026"), null); // mm/dd rejected
 assert.equal(iso(parseSheetDate("2026-01-10")), "2026-01-09T13:00:00.000Z");
 assert.equal(iso(parseSheetDate("2026-01-10T05:00:00Z")), "2026-01-10T05:00:00.000Z");
 assert.equal(iso(serialToDate(46000)), iso(parseSheetDate("09/12/2025"))); // serial 46000 = 9 Dec 2025
+// Month names, as a form tool writes them (trailing newline included).
+assert.equal(iso(parseSheetDate("25 Sept 2026, 12:02 pm")), "2026-09-25T02:02:00.000Z"); // AEST (+10)
+assert.equal(iso(parseSheetDate("27 Sept 2026, 10:01 pm\n")), "2026-09-27T12:01:00.000Z");
+assert.equal(iso(parseSheetDate("3 March 2026")), "2026-03-02T13:00:00.000Z"); // AEDT (+11)
+assert.equal(parseSheetDate("25 Smarch 2026"), null);
 assert.equal(iso(parseSheetDate(46000.5)), iso(parseSheetDate("09/12/2025 12:00")));
 assert.equal(parseSheetDate("31/02/2026"), null);
 

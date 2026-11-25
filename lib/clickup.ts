@@ -235,10 +235,14 @@ export async function syncAlertTasks(clientId: string) {
     const log = await prisma.clickUpTaskLog.findFirst({ where: { taskId: a.clickupTaskId, closedAt: null } });
     try {
       await closeTask(c.key, a.clickupTaskId!);
-      if (log) await prisma.clickUpTaskLog.update({ where: { id: log.id }, data: { closedAt: new Date() } });
-      await prisma.dataAlert.update({ where: { id: a.id }, data: { clickupTaskId: null } }); // done with it
     } catch (e) {
-      if (log) await prisma.clickUpTaskLog.update({ where: { id: log.id }, data: { status: "FAILED", error: `Close failed: ${e instanceof Error ? e.message : e}`.slice(0, 300) } });
+      // Deleted in ClickUp = nothing left to close; anything else retries next run.
+      if (!/not found|deleted/i.test(String(e instanceof Error ? e.message : e))) {
+        if (log) await prisma.clickUpTaskLog.update({ where: { id: log.id }, data: { status: "FAILED", error: `Close failed: ${e instanceof Error ? e.message : e}`.slice(0, 300) } });
+        continue;
+      }
     }
+    if (log) await prisma.clickUpTaskLog.update({ where: { id: log.id }, data: { closedAt: new Date(), status: "SENT", error: null } });
+    await prisma.dataAlert.update({ where: { id: a.id }, data: { clickupTaskId: null } }); // done with it
   }
 }

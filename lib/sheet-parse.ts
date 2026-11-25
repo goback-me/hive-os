@@ -146,6 +146,8 @@ export function serialToDate(serial: number): Date | null {
 // Opt-in date cell → Date. Numbers are Sheets serials; strings are read as
 // dd/mm/yyyy (optional time, optional am/pm), then ISO. Never mm/dd — an
 // ambiguous "03/04/2026" is always 3 April.
+const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+
 export function parseSheetDate(v: unknown): Date | null {
   if (typeof v === "number") return serialToDate(v);
   if (typeof v !== "string") return null;
@@ -164,6 +166,19 @@ export function parseSheetDate(v: unknown): Date | null {
       h = (h % 12) + (pm ? 12 : 0);
     }
     return sydneyLocalToDate(y, Number(mo), Number(d), h, Number(mi ?? 0), Number(sec ?? 0));
+  }
+
+  // "25 Sept 2026, 12:02 pm" / "3 March 2026" — day, month name, year.
+  const named = s.match(/^(\d{1,2})\s+([a-z]+)\.?,?\s+(\d{4})(?:[ T,]+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([ap]\.?m\.?)?)?$/i);
+  const month = named ? MONTHS.indexOf(named[2].slice(0, 3).toLowerCase()) + 1 : 0;
+  if (named && month) {
+    const [, d, , y, hRaw, mi, sec, ampm] = named;
+    let h = Number(hRaw ?? 0);
+    if (ampm) {
+      if (h < 1 || h > 12) return null;
+      h = (h % 12) + (ampm.toLowerCase().startsWith("p") ? 12 : 0);
+    }
+    return sydneyLocalToDate(Number(y), month, Number(d), h, Number(mi ?? 0), Number(sec ?? 0));
   }
 
   const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?$/);

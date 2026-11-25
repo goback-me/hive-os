@@ -45,7 +45,7 @@ function dqReason(s: string): DqReasonValue {
 
 // The shared rules, on already-normalized text. First match wins; undefined
 // = not recognised (reported back as unmapped, never guessed).
-const DQ_WORDS = /\bdisqualified\b|\bnot suitable\b|\bprice shopper\b|\btoo far\b/;
+const DQ_WORDS = /\bdisqualified\b|\bnot suitable\b|\bprice shopper\b|\btoo far\b|\bwrong number\b|\bspam\b/;
 
 function classify(s: string): ClassifiedStatus | undefined {
   if (has(s, /\bwon\b|\bsold\b/)) return { stage: "WON" };

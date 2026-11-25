@@ -148,7 +148,7 @@ export async function runHealthChecks(clientId: string, now = new Date()) {
   // ── Integrations (failures never block anything — they show up here) ──
   const [slackFails, clickupFails] = await Promise.all([
     prisma.slackPostLog.findMany({ where: { clientId, status: "FAILED", createdAt: { gt: new Date(now.getTime() - DAY) } }, select: { error: true, kind: true } }),
-    prisma.clickUpTaskLog.findMany({ where: { clientId, status: "FAILED" }, select: { error: true, title: true } }),
+    prisma.clickUpTaskLog.findMany({ where: { clientId, status: "FAILED", closedAt: null }, select: { error: true, title: true } }), // closed since = sorted
   ]);
   if (slackFails.length) {
     f.push({ type: "SLACK_FAILED", severity: "WARNING", title: `${plural(slackFails.length, "Slack post")} failed`, detail: slackFails[0].error ?? "", fixHint: 'Check the channel ID in Client Details → Integrations, invite the Hive bot to the channel, and "Send test message".', fixUrl: url.dashboard, count: slackFails.length });

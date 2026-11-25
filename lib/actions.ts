@@ -13,7 +13,7 @@ import { refreshHandoverAt } from "@/lib/reminders";
 import { parseCycleOverrides, recalculateCycle, type CycleStep } from "@/lib/buying-cycle";
 import { CLIENT_TABS, parseVisibility, type ReportVisibility } from "@/lib/report-visibility";
 import { kickWriteBacks, queueLeadChange } from "@/lib/sheet-writeback";
-import { getMonthToDateVsLast, rebuildHistory } from "@/lib/kpi";
+import { getMonthToDateVsLast, leadsChanged, rebuildHistory } from "@/lib/kpi";
 import { reportsOnHold } from "@/lib/report-hold";
 import { sendActionEmail } from "@/lib/email";
 import { runHealthChecks } from "@/lib/data-health";
@@ -315,6 +315,7 @@ export async function updateLeadStage(leadId: string, target: string, value?: nu
     }),
   ]);
   await refreshHandoverAt({ leadId });
+  leadsChanged(lead.clientId);
   await queueLeadChange(leadId);
   kickWriteBacks();
   // Slack (queued, never blocking): a sale once it has its value, a live transfer.
