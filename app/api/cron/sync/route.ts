@@ -40,7 +40,7 @@ export async function GET(req: NextRequest) {
   // at most every 6 hours per account. Also catches a backfill that failed on
   // connect.
   const metaArchive: { client: string; rows?: number; error?: string }[] = [];
-  const metaClients = await prisma.client.findMany({ where: { metaAccessToken: { not: null } }, select: { id: true, slug: true } });
+  const metaClients = await prisma.client.findMany({ where: { metaAccessToken: { not: null }, archivedAt: null }, select: { id: true, slug: true } });
   for (const c of metaClients) {
     try {
       const r = await archiveMetaInsights(c.id, { minHours: 6 });
